@@ -277,8 +277,7 @@ struct RealModel {
   std::unique_ptr<Transformer> transformer;
 };
 
-std::optional<RealModel> open_real(DType kv, int32_t batch) {
-  const std::string path = engine::testing::smollm_model();
+std::optional<RealModel> open_real(DType kv, int32_t batch, std::string path = engine::testing::smollm_model()) {
   if (!engine::testing::exists(path)) return std::nullopt;
   RealModel r;
   auto m = load_model(path);
@@ -362,6 +361,40 @@ TEST(RuntimeGolden, ChunkedPrefillEqualsSinglePass) {
   float max_diff = 0;
   for (size_t i = 0; i < a.size(); ++i) max_diff = std::max(max_diff, std::abs(a[i] - b[i]));
   EXPECT_LT(max_diff, 1e-3f);
+}
+
+// Q8_0 execution vs the NumPy reference on the SAME dequantized Q8_0 weights
+// (gguf-py dequantization): must agree as tightly as the f16 path. Plus a
+// quality check against the f16 reference: quantization may change late
+// near-ties, but not the top-1 token or the logits beyond Q8 noise.
+TEST(RuntimeGolden, SmolLm2Q8_0MatchesReference) {
+  const RefData ref = load_ref(std::string(ENGINE_TEST_DATA_DIR) + "/ref_smollm2_q8_0.txt");
+  const RefData f16 = load_ref(std::string(ENGINE_TEST_DATA_DIR) + "/ref_smollm2.txt");
+  auto rm = open_real(DType::kF32, 64, engine::testing::smollm_q8_model());
+  if (!rm) GTEST_SKIP() << "Q8_0 test model not present";
+  ASSERT_EQ(rm->model->weights.get(TensorRole::kAttnQ, 0)->dtype(), DType::kQ8_0);
+  KvSequence seq(*rm->cache);
+  ASSERT_TRUE(seq.reserve(static_cast<int64_t>(ref.tokens.size())).ok());
+  std::vector<int32_t> pos(ref.tokens.size());
+  std::iota(pos.begin(), pos.end(), 0);
+  std::vector<float> logits(static_cast<size_t>(rm->model->config.vocab_size));
+  ASSERT_TRUE(rm->transformer->forward(ref.tokens, pos, *rm->cache, seq.block_table(), logits).ok());
+  float err_q8 = 0, err_f16 = 0;
+  for (const auto& [id, want] : ref.top) err_q8 = std::max(err_q8, std::abs(logits[static_cast<size_t>(id)] - want));
+  for (const auto& [id, want] : f16.top) err_f16 = std::max(err_f16, std::abs(logits[static_cast<size_t>(id)] - want));
+  EXPECT_LT(err_q8, 2e-3f) << "vs Q8_0 reference";
+  EXPECT_LT(err_f16, 0.5f) << "vs f16 reference (quantization noise)";
+  EXPECT_EQ(sample_greedy(logits), f16.top.front().first);
+  std::printf("[ q8_0 ] max top-32 logit error: vs q8 ref %.5f, vs f16 ref %.4f\n", err_q8, err_f16);
+  seq.release();
+
+  Generator gen(*rm->transformer, *rm->cache, *rm->model->tokenizer);
+  GenerateOptions opts;
+  opts.max_new_tokens = static_cast<int32_t>(ref.greedy.size());
+  opts.stop_at_eog = false;
+  std::vector<TokenId> out;
+  ASSERT_TRUE(gen.generate(ref.tokens, opts, [&](TokenId t) { out.push_back(t); return true; }).ok());
+  EXPECT_EQ(out, ref.greedy);
 }
 
 TEST(RuntimeGolden, RejectsInvalidInput) {

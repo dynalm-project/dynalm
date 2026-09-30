@@ -11,7 +11,7 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
 - [x] Phase 5 — Llama model
 - [x] Phase 6 — Basic CPU execution (single sequence, greedy, `engine run`)
 - [x] Phase 7 — Qwen / Mistral / Gemma / Phi / DeepSeek adapters
-- [ ] Phase 8 — Quantized GGUF execution
+- [x] Phase 8 — Quantized GGUF execution
 - [ ] Phase 9 — KV cache
 - [ ] Phase 10 — Paged KV
 - [ ] Phase 11 — Concurrent sequences

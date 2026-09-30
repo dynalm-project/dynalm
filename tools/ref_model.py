@@ -5,7 +5,8 @@ Generates golden logits for the C++ runtime tests. Written from the Hugging
 Face modeling code of each family (not from the C++ runtime), in fp32 with no
 KV cache (full recompute per step), so it is easy to audit.
 
-Supported: llama, qwen2, qwen3, gemma, gemma2, gemma3, phi3 (f16/f32 weights).
+Supported: llama, qwen2, qwen3, gemma, gemma2, gemma3, phi3. Weights may be
+f32/f16 or any GGML quantized type (dequantized with gguf-py's reference code).
 
     PYTHONUTF8=1 python tools/ref_model.py models/SmolLM2-135M-Instruct-f16.gguf \
         --tokens 1 2 3 --steps 8 --out tests/data/ref_smollm2.txt
@@ -18,6 +19,8 @@ Output file:
 """
 import argparse
 
+import gguf
+import gguf.quants
 import numpy as np
 from gguf import GGUFReader
 
@@ -31,10 +34,13 @@ def load(path):
             kv[f.name] = bytes(v).decode() if f.types[0].name == "STRING" else v.tolist()[0]
     w = Weights()
     for t in r.tensors:
+        shape = [int(x) for x in reversed(t.shape)]
         a = np.asarray(t.data)
-        if a.dtype not in (np.float32, np.float16):
-            raise SystemExit(f"{t.name}: only f32/f16 tensors supported by the reference")
-        w.raw[t.name] = a.reshape([int(x) for x in reversed(t.shape)])
+        if a.dtype in (np.float32, np.float16):
+            w.raw[t.name] = a.reshape(shape)
+        else:
+            # Quantized: dequantized lazily by gguf-py's reference implementation.
+            w.quant[t.name] = (a, t.tensor_type, shape)
     return kv, w
 
 
@@ -44,15 +50,23 @@ class Weights:
 
     def __init__(self):
         self.raw = {}
+        self.quant = {}
 
     def __contains__(self, name):
-        return name in self.raw
+        return name in self.raw or name in self.quant
 
     def __getitem__(self, name):
+        if name in self.quant:
+            data, qtype, shape = self.quant[name]
+            return gguf.quants.dequantize(data, qtype).astype(np.float32).reshape(shape)
         return self.raw[name].astype(np.float32)
 
-    def get(self, name, default=None):
-        return self[name] if name in self.raw else default
+    def rows(self, name, idx):
+        """Selected rows (embedding lookup) without dequantizing the whole table."""
+        if name in self.quant:
+            data, qtype, shape = self.quant[name]
+            return gguf.quants.dequantize(data[idx], qtype).astype(np.float32).reshape(len(idx), shape[-1])
+        return self.raw[name][idx].astype(np.float32)
 
 
 def rms_norm(x, g, eps):
@@ -107,7 +121,7 @@ def forward(kv, w, tokens):
 
     T = len(tokens)
     pos = np.arange(T)
-    x = w.raw["token_embd.weight"][tokens].astype(np.float32)
+    x = w.rows("token_embd.weight", tokens)
     if gemma:
         x = x * np.float32(np.sqrt(D))
     qi, ki = np.arange(T)[:, None], np.arange(T)[None, :]

@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Phase 8 — Quantized GGUF execution
+- `quant/quant_formats`: GGML block layouts + reference dequantization for Q4_0, Q4_1,
+  Q5_0, Q5_1, Q8_0, Q8_1, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, Q8_K. Wired into
+  `dequantize_row`, so matmul and embedding run every format.
+- Fixtures from gguf-py (`tools/make_quant_fixtures.py`): all 10 dequantizers match.
+- `tools/ref_model.py` accepts quantized weights (gguf-py dequantization).
+- Goldens: SmolLM2 Q8_0 (1e-5 vs the Q8_0 reference) and Qwen2.5-0.5B Q4_K_M (mixed
+  Q4_K/Q5_0/Q6_K/Q8_0) match their references. Gemma-3-270M f16 and Qwen2.5-0.5B f16
+  real goldens pass. Gemma-3 SPM tokenizer golden passes (262K vocab).
+- `bench_quant`; per-format end-to-end numbers in docs/benchmarks.md.
+
 ### Phase 7 — Qwen / Mistral / Gemma / Phi / DeepSeek adapters
 - Adapters: Qwen (`qwen2`, `qwen3`), Gemma (`gemma`, `gemma2`, `gemma3`), Phi (`phi3`).
   Mistral and dense DeepSeek run via the Llama/Qwen adapters (DD-021).

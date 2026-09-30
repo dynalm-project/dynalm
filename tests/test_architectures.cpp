@@ -104,8 +104,10 @@ struct RealCase {
 class RealArch : public ::testing::TestWithParam<int> {};
 
 TEST_P(RealArch, MatchesReference) {
-  const RealCase rc = GetParam() == 0 ? RealCase{engine::testing::qwen_f16_model(), "ref_qwen25.txt"}
-                                      : RealCase{engine::testing::gemma_model(), "ref_gemma3.txt"};
+  const RealCase cases[] = {{engine::testing::qwen_f16_model(), "ref_qwen25.txt"},
+                            {engine::testing::gemma_model(), "ref_gemma3.txt"},
+                            {engine::testing::qwen_q4_model(), "ref_qwen25_q4_k_m.txt"}};
+  const RealCase rc = cases[GetParam()];
   if (!engine::testing::exists(rc.model)) GTEST_SKIP() << rc.model << " not present";
   if (!std::filesystem::exists(data(rc.fixture))) GTEST_SKIP() << rc.fixture << " not generated";
   auto m = load_model(rc.model);
@@ -140,8 +142,12 @@ TEST_P(RealArch, MatchesReference) {
   EXPECT_EQ(out, ref.greedy);
 }
 
-INSTANTIATE_TEST_SUITE_P(Real, RealArch, ::testing::Values(0, 1),
-                         [](const ::testing::TestParamInfo<int>& p) { return p.param == 0 ? "Qwen25" : "Gemma3"; });
+std::string real_case_name(const ::testing::TestParamInfo<int>& p) {
+  static const char* kNames[] = {"Qwen25", "Gemma3", "Qwen25Q4KM"};
+  return kNames[p.param];
+}
+
+INSTANTIATE_TEST_SUITE_P(Real, RealArch, ::testing::Values(0, 1, 2), real_case_name);
 
 TEST(Architectures, ConfigureSetsFamilySemantics) {
   auto qwen2 = load_model(data("tiny_qwen2.gguf"));

@@ -27,6 +27,11 @@ Verified files: SmolLM2-135M-Instruct f16 (llama arch, 30 layers, 272 tensors).
 
 Chat templates: ChatML, Llama-3, Llama-2, Mistral, Gemma, Phi-3, DeepSeek-V2/3.
 
-Weight types that run today: f32, f16, bf16. Quantized types arrive in Phase 8.
+Weight types that run today: f32, f16, bf16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q2_K, Q3_K, Q4_K,
+Q5_K, Q6_K (so every common GGUF file type: Q8_0, Q6_K, Q5_K_M, Q4_K_M, Q3_K_*, Q2_K).
+IQ* / TQ* / MXFP4 are recognized but not executable yet.
+
+Verified real files: SmolLM2-135M f16 + Q8_0, Qwen2.5-0.5B f16 + Q4_K_M (golden),
+Qwen2.5-0.5B Q8_0 (runs), Gemma-3-270M f16 (golden).
 
 Not yet: YaRN / LongRoPE scaling (Qwen long-context configs, Phi-3-128k), Gemma-3 vision.

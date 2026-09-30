@@ -23,6 +23,10 @@ inline std::string qwen_f16_model() {
 }
 inline std::string gemma_model() { return model_path("ENGINE_TEST_MODEL_GEMMA", ENGINE_TEST_MODEL_GEMMA_PATH); }
 
+inline std::string smollm_q8_model() { return model_path("ENGINE_TEST_MODEL_Q8", ENGINE_TEST_MODEL_Q8_PATH); }
+
+inline std::string qwen_q4_model() { return model_path("ENGINE_TEST_MODEL_QWEN_Q4", ENGINE_TEST_MODEL_QWEN_Q4_PATH); }
+
 inline bool exists(const std::string& p) { return !p.empty() && std::filesystem::exists(p); }
 
 }  // namespace engine::testing

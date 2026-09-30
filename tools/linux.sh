@@ -28,6 +28,8 @@ MSYS_NO_PATHCONV=1 docker run --rm "${docker_opts[@]}" \
     cmake --preset $preset -DENGINE_TEST_MODEL=/src/models/SmolLM2-135M-Instruct-f16.gguf \
       -DENGINE_TEST_MODEL_QWEN=/src/models/qwen2.5-0.5b-instruct-q8_0.gguf \
       -DENGINE_TEST_MODEL_QWEN_F16=/src/models/qwen2.5-0.5b-instruct-fp16.gguf \
-      -DENGINE_TEST_MODEL_GEMMA=/src/models/gemma-3-270m-it-F16.gguf >/dev/null &&
+      -DENGINE_TEST_MODEL_GEMMA=/src/models/gemma-3-270m-it-F16.gguf \
+      -DENGINE_TEST_MODEL_Q8=/src/models/SmolLM2-135M-Instruct-Q8_0.gguf \
+      -DENGINE_TEST_MODEL_QWEN_Q4=/src/models/qwen2.5-0.5b-instruct-q4_k_m.gguf >/dev/null &&
     $run_prefix cmake --build --preset $preset 2>&1 | grep -E 'warning|error|FAILED' ;
     $run_prefix ctest --preset $preset --timeout 900 2>&1 | grep -E 'Failed|failed|passed|\*\*\*|ERROR|runtime error|Sanitizer'"

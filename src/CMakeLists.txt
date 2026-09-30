@@ -27,6 +27,7 @@ add_library(engine_core STATIC
   platform/cpu_info.cpp
   platform/isa.cpp
   quant/dequant.cpp
+  quant/quant_formats.cpp
   runtime/generator.cpp
   runtime/thread_pool.cpp
   sampling/sampler.cpp

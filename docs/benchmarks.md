@@ -91,3 +91,43 @@ Takeaways:
   matmul computes one scalar dot product per (row, output), with fp16 conversion and no
   tiling, so prefill is compute-bound. First targets for Phases 17/18: SIMD dot
   products with F16C, and a tiled GEMM for m > 1.
+
+## Phase 8 — quantized execution
+
+### Reference dequantization throughput (`bench_quant`, one 4096-element row, scalar)
+
+| type | p50 ns | p99 ns | ns/elem | GB/s of source |
+|---|---|---|---|---|
+| f16 | 3829 | 9297 | 0.935 | 2.14 |
+| bf16 | 259 | 333 | 0.063 | 31.67 |
+| q8_0 | 482 | 1349 | 0.118 | 9.03 |
+| q4_0 | 1559 | 3332 | 0.381 | 1.48 |
+| q5_0 | 3284 | 11019 | 0.802 | 0.86 |
+| q2_K | 1876 | 2486 | 0.458 | 0.72 |
+| q3_K | 2971 | 4471 | 0.725 | 0.59 |
+| q4_K | 576 | 674 | 0.141 | 4.00 |
+| q5_K | 763 | 883 | 0.186 | 3.69 |
+| q6_K | 3494 | 5250 | 0.853 | 0.96 |
+
+### End to end (`engine run ... -n 64 -t 10`, same prompt as Phase 6, Linux container)
+
+| model | weights | prefill tok/s | decode tok/s | ITL p50 / p90 / p99 ms |
+|---|---|---|---|---|
+| SmolLM2-135M | f16 | 23.0 | 18.5 | 45.7 / 69.4 / 140.3 |
+| SmolLM2-135M | Q8_0 | 29.3 | **42.3** | 21.9 / 34.6 / 45.0 |
+| Qwen2.5-0.5B | f16 | 11.1 | 5.8 | 164.8 / 190.8 / 259.9 |
+| Qwen2.5-0.5B | Q8_0 | 14.2 | **16.5** | 55.4 / 79.4 / 100.6 |
+| Qwen2.5-0.5B | Q4_K_M (mostly Q5_0) | 19.3 | 8.5 | 113.4 / 132.8 / 176.4 |
+
+Takeaways:
+- With the Phase 8 matmul (expand each weight row to fp32, then dot), decode is bound by
+  **conversion arithmetic, not memory**. Scalar fp16 conversion (0.94 ns/elem) is slower
+  than Q8_0 (0.12), so Q8_0 models decode 2–3× faster than their f16 originals.
+- Q4_K_M files are mostly Q5_0 and Q6_K here, and their bit unpacking is the slowest,
+  so smaller files aren't faster yet.
+- Phase 17 priorities follow directly: F16C conversion, then fused integer quantized dot
+  products that never materialize fp32 weights.
+- Measurement noise: SmolLM2 f16 decode measured 27.0 tok/s in Phase 6 and 18.5 here with
+  identical code paths for f16. On this laptop, thermal state and background load move
+  results by up to ~30%. Phase 21's benchmark framework will pin runs and report
+  repeated-run variance.

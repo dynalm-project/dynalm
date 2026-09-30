@@ -265,3 +265,17 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
 - **Gaps:** The DeepSeek-LLM and DeepSeek-V3 pre-tokenizers aren't implemented yet, so
   those files fail with a clear error. Mistral v0.1's sliding window isn't in its GGUF
   metadata; llama.cpp ignores it too.
+
+## DD-022: Quantized models are verified against a reference on the same weights
+
+- **Decision:** For quantized checkpoints, the golden reference runs the NumPy forward
+  pass on weights dequantized by gguf-py's independent implementation. Engine output
+  must match that reference as tightly as in the f16 case. A separate quality check
+  against the f16 reference asserts the same top-1 token and bounded logit error.
+- **Reason:** A quantized model is a different model. Demanding identical greedy output
+  versus f16 fails on legitimate late near-ties (SmolLM2 Q8_0 picks a different token
+  than f16 after "Paris."), while a loose tolerance would hide real kernel bugs.
+- **Evidence:** SmolLM2 Q8_0: max top-32 logit error 1e-5 vs the Q8_0 reference, 0.43 vs
+  f16 (quantization noise). Qwen2.5-0.5B Q4_K_M (real Q4_K, Q5_0, Q6_K and Q8_0 tensors)
+  matches its reference including the 8-token greedy continuation. Per-format
+  dequantization matches gguf-py on fixtures for all 10 block types.
