@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Phase 13 — Prefill/decode scheduler
+- `SchedulerConfig`: `decode_token_budget`, `prefill_token_budget`, `max_running`.
+- Decode rows scheduled first with least-recently-served rotation; prefill chunks by
+  priority, then admission order.
+- `Request::priority` (higher first, FCFS within a level) and `Request::timeout_ms`
+  (kDeadlineExceeded for queued or running requests; KV released).
+- Stats: prefill/decode rows per step, queue latency (total/max), timeouts.
+- Tests: budget bounds, decode continuity during large prefill, fairness, priority order,
+  deadlines, queue latency; outputs identical to isolated runs.
+- Budget sweep: ITL p99 up to 2.5× lower (DD-027).
+
 ### Phase 12 — Continuous batching
 - `scheduler/Scheduler`: iteration-level continuous batching. Thread-safe submit/cancel
   via a per-step handoff; admission control on KV; decode-first batch building within a

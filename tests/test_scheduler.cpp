@@ -7,6 +7,7 @@
 
 #include <map>
 #include <random>
+#include <chrono>
 #include <thread>
 
 #include "backends/cpu/cpu_backend.h"
@@ -83,7 +84,7 @@ class SchedulerTest : public ::testing::Test {
 };
 
 TEST_F(SchedulerTest, StaggeredArrivalsMatchSoloRuns) {
-  Scheduler sched(*tf, *pool, *model->tokenizer, SchedulerConfig{64, 16});
+  Scheduler sched(*tf, *pool, *model->tokenizer, SchedulerConfig{.decode_token_budget = 32, .prefill_token_budget = 32, .max_running = 16});
   Collected out;
   std::vector<std::pair<uint64_t, std::vector<TokenId>>> want;
   // Requests arrive while others are mid-generation (join/leave freely).
@@ -105,7 +106,7 @@ TEST_F(SchedulerTest, StaggeredArrivalsMatchSoloRuns) {
 }
 
 TEST_F(SchedulerTest, BatchesManySequencesPerStep) {
-  Scheduler sched(*tf, *pool, *model->tokenizer, SchedulerConfig{64, 16});
+  Scheduler sched(*tf, *pool, *model->tokenizer, SchedulerConfig{.decode_token_budget = 32, .prefill_token_budget = 32, .max_running = 16});
   Collected out;
   for (int i = 0; i < 8; ++i) sched.submit(make_request(prompt(4, 100 + i), 20, out));
   sched.step();  // all 8 prompts (32 tokens) prefilled in one batch
@@ -119,7 +120,7 @@ TEST_F(SchedulerTest, BatchesManySequencesPerStep) {
 }
 
 TEST_F(SchedulerTest, TokenBudgetSplitsLongPrompts) {
-  Scheduler sched(*tf, *pool, *model->tokenizer, SchedulerConfig{16, 16});
+  Scheduler sched(*tf, *pool, *model->tokenizer, SchedulerConfig{.decode_token_budget = 16, .prefill_token_budget = 16, .max_running = 16});
   Collected out;
   const auto p = prompt(50, 7);
   const uint64_t id = sched.submit(make_request(p, 5, out));
@@ -130,7 +131,7 @@ TEST_F(SchedulerTest, TokenBudgetSplitsLongPrompts) {
 }
 
 TEST_F(SchedulerTest, CancellationReleasesKvAndOthersContinue) {
-  Scheduler sched(*tf, *pool, *model->tokenizer, SchedulerConfig{64, 16});
+  Scheduler sched(*tf, *pool, *model->tokenizer, SchedulerConfig{.decode_token_budget = 32, .prefill_token_budget = 32, .max_running = 16});
   Collected out;
   const auto pa = prompt(10, 1), pb = prompt(10, 2);
   const uint64_t a = sched.submit(make_request(pa, 40, out));
@@ -145,7 +146,7 @@ TEST_F(SchedulerTest, CancellationReleasesKvAndOthersContinue) {
 }
 
 TEST_F(SchedulerTest, InvalidRequestsFailAlone) {
-  Scheduler sched(*tf, *pool, *model->tokenizer, SchedulerConfig{64, 16});
+  Scheduler sched(*tf, *pool, *model->tokenizer, SchedulerConfig{.decode_token_budget = 32, .prefill_token_budget = 32, .max_running = 16});
   Collected out;
   const uint64_t empty = sched.submit(make_request({}, 5, out));
   const uint64_t bad_tok = sched.submit(make_request({1, 99999, 3}, 5, out));
@@ -163,7 +164,7 @@ TEST_F(SchedulerTest, InvalidRequestsFailAlone) {
 
 TEST_F(SchedulerTest, PreemptionUnderKvPressureKeepsResultsExact) {
   make_pool(12);  // 48 tokens of KV for all requests together
-  Scheduler sched(*tf, *pool, *model->tokenizer, SchedulerConfig{64, 16});
+  Scheduler sched(*tf, *pool, *model->tokenizer, SchedulerConfig{.decode_token_budget = 32, .prefill_token_budget = 32, .max_running = 16});
   Collected out;
   std::vector<std::pair<uint64_t, std::vector<TokenId>>> want;
   for (int i = 0; i < 4; ++i) {
@@ -179,7 +180,7 @@ TEST_F(SchedulerTest, PreemptionUnderKvPressureKeepsResultsExact) {
 
 TEST_F(SchedulerTest, RequestLargerThanCacheFailsCleanly) {
   make_pool(4);  // 16 tokens total
-  Scheduler sched(*tf, *pool, *model->tokenizer, SchedulerConfig{64, 16});
+  Scheduler sched(*tf, *pool, *model->tokenizer, SchedulerConfig{.decode_token_budget = 32, .prefill_token_budget = 32, .max_running = 16});
   Collected out;
   const uint64_t id = sched.submit(make_request(prompt(30, 1), 5, out));
   sched.run_until_idle();
@@ -189,7 +190,7 @@ TEST_F(SchedulerTest, RequestLargerThanCacheFailsCleanly) {
 }
 
 TEST_F(SchedulerTest, ConcurrentSubmitters) {
-  Scheduler sched(*tf, *pool, *model->tokenizer, SchedulerConfig{64, 32});
+  Scheduler sched(*tf, *pool, *model->tokenizer, SchedulerConfig{.decode_token_budget = 32, .prefill_token_budget = 32, .max_running = 32});
   Collected out;
   std::mutex mu;  // callbacks run on this (scheduler) thread; map guarded for the submitters' reads
   std::atomic<int> submitted{0};
@@ -215,6 +216,105 @@ TEST_F(SchedulerTest, ConcurrentSubmitters) {
   std::lock_guard<std::mutex> lock(mu);
   EXPECT_EQ(out.final_event.size(), 20u);
   EXPECT_EQ(sched.stats().completed, 20u);
+}
+
+// --- Phase 13: prefill/decode budgets, priority, deadlines, fairness ---
+
+TEST_F(SchedulerTest, PrefillBudgetBoundsStallAndDecodeContinues) {
+  Scheduler sched(*tf, *pool, *model->tokenizer,
+                  SchedulerConfig{.decode_token_budget = 32, .prefill_token_budget = 8, .max_running = 16});
+  Collected out;
+  std::vector<std::pair<uint64_t, std::vector<TokenId>>> want;
+  for (int i = 0; i < 4; ++i) {
+    const auto p = prompt(3, 200 + static_cast<unsigned>(i));
+    want.emplace_back(sched.submit(make_request(p, 30, out)), solo(p, 30));
+  }
+  sched.step();  // 12 prompt tokens; budget 8
+  EXPECT_EQ(sched.stats().last_prefill_rows, 8);
+  sched.step();
+  sched.step();  // now decoding
+  const auto big = prompt(40, 9);
+  const uint64_t big_id = sched.submit(make_request(big, 3, out));
+  want.emplace_back(big_id, solo(big, 3));
+  // While the 40-token prompt is prefilled (5 steps of 8), every step still
+  // carries all 4 decode rows.
+  for (int s = 0; s < 5; ++s) {
+    sched.step();
+    EXPECT_LE(sched.stats().last_prefill_rows, 8);
+    EXPECT_EQ(sched.stats().last_decode_rows, 4);
+  }
+  sched.run_until_idle();
+  for (const auto& [id, tokens] : want) EXPECT_EQ(out.tokens[id], tokens) << "request " << id;
+}
+
+TEST_F(SchedulerTest, SmallDecodeBudgetRotatesFairly) {
+  Scheduler sched(*tf, *pool, *model->tokenizer,
+                  SchedulerConfig{.decode_token_budget = 2, .prefill_token_budget = 32, .max_running = 16});
+  Collected out;
+  std::vector<uint64_t> ids;
+  for (int i = 0; i < 4; ++i) ids.push_back(sched.submit(make_request(prompt(2, 300 + i), 50, out)));
+  sched.step();  // prefill all 4 (and each gets its first token)
+  for (int s = 0; s < 20; ++s) {
+    sched.step();
+    EXPECT_EQ(sched.stats().last_decode_rows, 2);
+  }
+  // 1 + 20 * 2 / 4 = 11 tokens each: no sequence starves.
+  for (uint64_t id : ids) EXPECT_EQ(out.tokens[id].size(), 11u) << id;
+}
+
+TEST_F(SchedulerTest, HigherPriorityAdmittedFirst) {
+  Scheduler sched(*tf, *pool, *model->tokenizer,
+                  SchedulerConfig{.decode_token_budget = 8, .prefill_token_budget = 32, .max_running = 1});
+  Collected out;
+  std::vector<uint64_t> finish_order;
+  auto req = [&](int32_t prio, unsigned seed) {
+    Request r = make_request(prompt(3, seed), 2, out);
+    r.priority = prio;
+    auto inner = r.on_event;
+    r.on_event = [&, inner](const RequestEvent& ev) {
+      inner(ev);
+      if (ev.finished) finish_order.push_back(ev.request_id);
+    };
+    return sched.submit(std::move(r));
+  };
+  const uint64_t low = req(0, 1);
+  const uint64_t mid = req(5, 2);
+  const uint64_t high = req(9, 3);
+  const uint64_t mid2 = req(5, 4);
+  sched.run_until_idle();
+  EXPECT_EQ(finish_order, (std::vector<uint64_t>{high, mid, mid2, low}));
+}
+
+TEST_F(SchedulerTest, DeadlineExpiresQueuedAndRunningRequests) {
+  Scheduler sched(*tf, *pool, *model->tokenizer,
+                  SchedulerConfig{.decode_token_budget = 8, .prefill_token_budget = 32, .max_running = 1});
+  Collected out;
+  Request a = make_request(prompt(4, 1), 60, out);
+  a.timeout_ms = 1;  // expires while running
+  const uint64_t ra = sched.submit(std::move(a));
+  Request b = make_request(prompt(4, 2), 5, out);
+  b.timeout_ms = 1;  // expires while queued behind a (max_running = 1)
+  const uint64_t rb = sched.submit(std::move(b));
+  const auto pc = prompt(4, 3);
+  const uint64_t rc = sched.submit(make_request(pc, 5, out));
+  sched.step();
+  std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  sched.run_until_idle();
+  EXPECT_EQ(out.final_event[ra].error.code(), StatusCode::kDeadlineExceeded);
+  EXPECT_EQ(out.final_event[rb].error.code(), StatusCode::kDeadlineExceeded);
+  EXPECT_EQ(out.tokens[rc], solo(pc, 5));
+  EXPECT_EQ(sched.stats().timed_out, 2u);
+  EXPECT_EQ(pool->free_blocks(), pool->num_blocks());
+}
+
+TEST_F(SchedulerTest, QueueLatencyIsTracked) {
+  Scheduler sched(*tf, *pool, *model->tokenizer,
+                  SchedulerConfig{.decode_token_budget = 8, .prefill_token_budget = 32, .max_running = 1});
+  Collected out;
+  for (int i = 0; i < 3; ++i) sched.submit(make_request(prompt(3, 10 + i), 3, out));
+  sched.run_until_idle();
+  EXPECT_EQ(sched.stats().admitted, 3u);
+  EXPECT_GT(sched.stats().queue_ms_max, 0.0);  // later requests waited for the first
 }
 
 }  // namespace

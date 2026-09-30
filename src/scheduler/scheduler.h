@@ -6,8 +6,9 @@
 // Each step():
 //   1. takes newly submitted requests from the handoff queue,
 //   2. admits waiting sequences while KV capacity allows,
-//   3. builds one batch from the pending tokens of running sequences (decode
-//      tokens first, then prefill, within a token budget),
+//   3. builds one batch: decode rows first (within decode_token_budget,
+//      rotating fairly), then prefill chunks by priority (within
+//      prefill_token_budget),
 //   4. runs a single batched forward pass,
 //   5. samples for sequences whose tokens are all computed, invokes callbacks,
 //      and retires finished / cancelled / failed sequences.
@@ -53,13 +54,18 @@ struct Request {
   std::vector<TokenId> prompt;
   StopParams stop;
   RequestCallback on_event;
+  int32_t priority = 0;    // higher is admitted first; FCFS within a level
+  int64_t timeout_ms = 0;  // 0 = none; counted from submission, fails with kDeadlineExceeded
 };
 
+// Per-step work limits. Decode rows (one per generating sequence) are cheap
+// and latency-critical; prefill rows are expensive. Capping prefill rows per
+// step bounds how long any step can stall decoding sequences (ITL), at the
+// cost of spreading a prompt over more steps (TTFT). See DD-027.
 struct SchedulerConfig {
-  // Max tokens (rows) per forward pass; must not exceed the Transformer's.
-  int32_t max_batch_tokens = 256;
-  // Max sequences admitted at once.
-  int32_t max_running = 64;
+  int32_t decode_token_budget = 64;   // max decode rows per step
+  int32_t prefill_token_budget = 64;  // max prefill rows per step (chunked prefill)
+  int32_t max_running = 64;           // max admitted sequences
 };
 
 struct SchedulerStats {
@@ -72,8 +78,15 @@ struct SchedulerStats {
   uint64_t failed = 0;
   int32_t running = 0;
   int32_t waiting = 0;
+  uint64_t timed_out = 0;
   int32_t last_batch_rows = 0;
   int32_t last_batch_seqs = 0;
+  int32_t last_prefill_rows = 0;
+  int32_t last_decode_rows = 0;
+  // Queue latency (submission -> admission), accumulated.
+  double queue_ms_total = 0;
+  double queue_ms_max = 0;
+  uint64_t admitted = 0;
 };
 
 class Scheduler {
@@ -102,10 +115,15 @@ class Scheduler {
     RequestCallback on_event;
     std::shared_ptr<std::atomic<bool>> cancel_flag;
     uint64_t admit_order = 0;
+    int32_t priority = 0;
+    int64_t arrival_ns = 0;
+    int64_t deadline_ns = 0;  // 0 = none
+    uint64_t last_step = 0;   // last step this sequence got decode rows (fairness)
   };
 
   void drain_incoming();
-  void admit();
+  void expire_deadlines(int64_t now);
+  void admit(int64_t now);
   bool preempt_one(const Entry* keep);
   void retire(Entry& e);
   void emit_final(Entry& e);

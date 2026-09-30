@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <string>
 
+#include "common/timer.h"
 #include "logging/log.h"
 #include "sampling/sampler.h"
 
@@ -10,7 +11,10 @@ namespace engine {
 
 Scheduler::Scheduler(Transformer& model, KvBlockPool& kv, const Tokenizer& tokenizer, SchedulerConfig config)
     : model_(model), kv_(kv), tokenizer_(tokenizer), config_(config) {
-  config_.max_batch_tokens = std::min(config_.max_batch_tokens, model_.max_batch_tokens());
+  // Both budgets together must fit one forward pass.
+  const int32_t cap = model_.max_batch_tokens();
+  config_.decode_token_budget = std::clamp(config_.decode_token_budget, 1, cap - 1);
+  config_.prefill_token_budget = std::clamp(config_.prefill_token_budget, 1, cap - config_.decode_token_budget);
   batch_.reserve(static_cast<size_t>(config_.max_running));
   batch_owner_.reserve(static_cast<size_t>(config_.max_running));
 }
@@ -26,6 +30,9 @@ uint64_t Scheduler::submit(Request request) {
   // The KvBlockTable inside SequenceState only records the pool; no blocks
   // are taken until admission.
   e.seq = std::make_unique<SequenceState>(id, request.prompt, request.stop, kv_);
+  e.priority = request.priority;
+  e.arrival_ns = now_ns();
+  e.deadline_ns = request.timeout_ms > 0 ? e.arrival_ns + request.timeout_ms * 1000000 : 0;
   std::lock_guard<std::mutex> lock(in_mu_);
   incoming_.push_back(std::move(e));
   incoming_count_.fetch_add(1, std::memory_order_release);
@@ -56,7 +63,10 @@ void Scheduler::retire(Entry& e) {
   switch (e.seq->status()) {
     case SequenceStatus::kFinished: ++stats_.completed; break;
     case SequenceStatus::kCancelled: ++stats_.cancelled; break;
-    default: ++stats_.failed; break;
+    default:
+      ++stats_.failed;
+      if (e.seq->error().code() == StatusCode::kDeadlineExceeded) ++stats_.timed_out;
+      break;
   }
   emit_final(e);
 }
@@ -97,6 +107,11 @@ void Scheduler::drain_incoming() {
     }
     waiting_.push_back(std::move(e));
   }
+  // Priority first, then arrival (FCFS). Preempted sequences keep their
+  // original arrival time, so they return ahead of later arrivals.
+  std::stable_sort(waiting_.begin(), waiting_.end(), [](const Entry& x, const Entry& y) {
+    return x.priority != y.priority ? x.priority > y.priority : x.arrival_ns < y.arrival_ns;
+  });
   for (uint64_t id : cancels) {
     for (Entry& e : running_) {
       if (e.id == id) e.cancel_flag->store(true, std::memory_order_relaxed);
@@ -107,7 +122,25 @@ void Scheduler::drain_incoming() {
   }
 }
 
-void Scheduler::admit() {
+void Scheduler::expire_deadlines(int64_t now) {
+  auto expired = [now](const Entry& e) { return e.deadline_ns != 0 && now > e.deadline_ns; };
+  for (Entry& e : running_) {
+    if (!is_terminal(e.seq->status()) && expired(e)) {
+      e.seq->fail(Status(StatusCode::kDeadlineExceeded, "request timed out"));
+    }
+  }
+  for (auto it = waiting_.begin(); it != waiting_.end();) {
+    if (expired(*it)) {
+      it->seq->fail(Status(StatusCode::kDeadlineExceeded, "request timed out while queued"));
+      retire(*it);
+      it = waiting_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
+void Scheduler::admit(int64_t now) {
   const int32_t bs = kv_.geometry().block_size;
   while (!waiting_.empty() && static_cast<int32_t>(running_.size()) < config_.max_running) {
     Entry& e = waiting_.front();
@@ -116,6 +149,12 @@ void Scheduler::admit() {
     const int64_t need_blocks = (e.seq->pending() + bs - 1) / bs + 1;
     if (kv_.free_blocks() < need_blocks && !running_.empty()) break;
     e.admit_order = ++admit_counter_;
+    if (e.seq->preemptions() == 0) {
+      const double q = static_cast<double>(now - e.arrival_ns) * 1e-6;
+      stats_.queue_ms_total += q;
+      stats_.queue_ms_max = std::max(stats_.queue_ms_max, q);
+      ++stats_.admitted;
+    }
     running_.push_back(std::move(e));
     waiting_.pop_front();
   }
@@ -140,6 +179,8 @@ bool Scheduler::preempt_one(const Entry* keep) {
 
 bool Scheduler::step() {
   drain_incoming();
+  const int64_t now = now_ns();
+  expire_deadlines(now);
 
   // Apply cancellations and drop terminal sequences.
   for (auto it = running_.begin(); it != running_.end();) {
@@ -161,91 +202,103 @@ bool Scheduler::step() {
     }
   }
 
-  admit();
+  admit(now);
   stats_.running = static_cast<int32_t>(running_.size());
   stats_.waiting = static_cast<int32_t>(waiting_.size());
   if (running_.empty()) return !waiting_.empty() || incoming_count_.load() != 0;
 
-  // Build the batch. Decode rows (1 pending token) first so ongoing
-  // generations are never starved by large prompts; then prefill chunks in
-  // admission order, each capped by the remaining token budget.
-  std::stable_sort(running_.begin(), running_.end(), [](const Entry& a, const Entry& b) {
-    const bool ad = a.seq->status() == SequenceStatus::kDecode, bd = b.seq->status() == SequenceStatus::kDecode;
-    return ad != bd ? ad : a.admit_order < b.admit_order;
-  });
-  batch_.clear();
-  batch_owner_.clear();
-  int32_t budget = config_.max_batch_tokens;
-  for (size_t i = 0; i < running_.size() && budget > 0;) {
-    Entry& e = running_[i];
-    const int32_t n = std::min(e.seq->pending(), budget);
-    if (n <= 0) {
-      ++i;
-      continue;
-    }
-    Status st = e.seq->reserve_kv(n);
-    if (st.code() == StatusCode::kResourceExhausted) {
-      // Make room by preempting the newest other sequence and retry. Batch
-      // entries already built only reference running_ by index, so rebuild.
-      if (preempt_one(&e)) {
-        batch_.clear();
-        batch_owner_.clear();
-        budget = config_.max_batch_tokens;
-        i = 0;
+  // Plan the step: decode rows first (one per generating sequence, least
+  // recently served first so a small decode budget still rotates fairly),
+  // then prefill chunks by priority and admission order, each budget capped
+  // separately. KV is reserved as the plan is built; if the pool runs dry,
+  // the newest other sequence is preempted and planning restarts.
+  const uint64_t step_no = stats_.steps + 1;
+  auto is_decode_row = [](const Entry& e) {
+    return e.seq->status() == SequenceStatus::kDecode && e.seq->pending() == 1;
+  };
+  std::vector<Entry*> order;
+  for (int attempt = 0;; ++attempt) {
+    batch_.clear();
+    batch_owner_.clear();
+    int32_t decode_rows = 0, prefill_rows = 0;
+    bool restart = false;
+
+    order.clear();
+    for (Entry& e : running_) order.push_back(&e);
+    std::stable_sort(order.begin(), order.end(), [&](const Entry* a, const Entry* b) {
+      const bool ad = is_decode_row(*a), bd = is_decode_row(*b);
+      if (ad != bd) return ad;
+      if (ad) return a->last_step != b->last_step ? a->last_step < b->last_step : a->admit_order < b->admit_order;
+      return a->priority != b->priority ? a->priority > b->priority : a->admit_order < b->admit_order;
+    });
+
+    for (Entry* e : order) {
+      if (is_terminal(e->seq->status()) || e->seq->pending() == 0) continue;
+      const bool decode = is_decode_row(*e);
+      int32_t& used = decode ? decode_rows : prefill_rows;
+      const int32_t budget = decode ? config_.decode_token_budget : config_.prefill_token_budget;
+      const int32_t n = std::min(e->seq->pending(), budget - used);
+      if (n <= 0) continue;
+      const Status st = e->seq->reserve_kv(n);
+      if (st.code() == StatusCode::kResourceExhausted) {
+        if (attempt < 64 && preempt_one(e)) {
+          restart = true;  // running_ changed; rebuild the plan
+          break;
+        }
+        e->seq->fail(ResourceExhausted("request needs more KV than the cache holds"));
         continue;
       }
-      // Alone and still out of KV: this request cannot fit at all.
-      st = ResourceExhausted("request needs more KV than the cache holds");
+      if (!st.ok()) {
+        e->seq->fail(st);
+        continue;
+      }
+      const int32_t start = e->seq->num_computed();
+      // Logits only when this chunk completes the sequence's pending work.
+      batch_.push_back({e->seq->tokens().subspan(static_cast<size_t>(start), static_cast<size_t>(n)), start,
+                        e->seq->block_table(), n == e->seq->pending()});
+      batch_owner_.push_back(e);
+      used += n;
     }
-    if (!st.ok()) {
-      e.seq->fail(st);
-      ++i;
-      continue;
-    }
-    const int32_t start = e.seq->num_computed();
-    // The last pending token needs logits only if it completes the sequence's
-    // pending work (otherwise more chunks follow).
-    const bool completes = n == e.seq->pending();
-    batch_.push_back({e.seq->tokens().subspan(static_cast<size_t>(start), static_cast<size_t>(n)), start,
-                      e.seq->block_table(), completes});
-    batch_owner_.push_back(&e);
-    budget -= n;
-    ++i;
+    if (restart) continue;
+    stats_.last_decode_rows = decode_rows;
+    stats_.last_prefill_rows = prefill_rows;
+    break;
   }
 
-  if (!batch_.empty()) {
-    size_t n_logits = 0;
-    for (const SeqBatch& b : batch_) n_logits += b.want_logits ? 1 : 0;
-    const auto vocab = static_cast<size_t>(model_.config().vocab_size);
-    logits_.resize(n_logits * vocab);
-    const Status st = model_.forward_batch(batch_, kv_, logits_);
-    ++stats_.steps;
-    stats_.last_batch_seqs = static_cast<int32_t>(batch_.size());
-    stats_.last_batch_rows = config_.max_batch_tokens - budget;
-    stats_.tokens_computed += static_cast<uint64_t>(stats_.last_batch_rows);
+  if (batch_.empty()) return true;
+  size_t n_logits = 0;
+  for (const SeqBatch& b : batch_) n_logits += b.want_logits ? 1 : 0;
+  const auto vocab = static_cast<size_t>(model_.config().vocab_size);
+  logits_.resize(n_logits * vocab);
+  const Status st = model_.forward_batch(batch_, kv_, logits_);
+  ++stats_.steps;
+  stats_.last_batch_seqs = static_cast<int32_t>(batch_.size());
+  stats_.last_batch_rows = stats_.last_decode_rows + stats_.last_prefill_rows;
+  stats_.tokens_computed += static_cast<uint64_t>(stats_.last_batch_rows);
 
-    size_t li = 0;
-    for (size_t b = 0; b < batch_.size(); ++b) {
-      Entry& e = *batch_owner_[b];
-      if (!st.ok()) {
-        e.seq->fail(st);  // a model error fails this batch's sequences only
-        continue;
-      }
-      e.seq->mark_computed(static_cast<int32_t>(batch_[b].tokens.size()));
-      if (!batch_[b].want_logits) continue;
-      const std::span<const float> row(logits_.data() + li * vocab, vocab);
-      ++li;
-      if (e.seq->pending() != 0 || e.seq->status() != SequenceStatus::kDecode) continue;
-      const TokenId next = sample_greedy(row);
-      e.seq->append_token(next, tokenizer_);
-      ++stats_.tokens_generated;
-      if (e.on_event) {
-        RequestEvent ev;
-        ev.request_id = e.id;
-        ev.token = next;
-        ev.status = e.seq->status();
-        e.on_event(ev);
-      }
+  size_t li = 0;
+  for (size_t b = 0; b < batch_.size(); ++b) {
+    Entry& e = *batch_owner_[b];
+    if (!st.ok()) {
+      e.seq->fail(st);  // a model error fails this batch's sequences only
+      continue;
+    }
+    const bool was_decode = is_decode_row(e);
+    e.seq->mark_computed(static_cast<int32_t>(batch_[b].tokens.size()));
+    if (was_decode) e.last_step = step_no;
+    if (!batch_[b].want_logits) continue;
+    const std::span<const float> row(logits_.data() + li * vocab, vocab);
+    ++li;
+    if (e.seq->pending() != 0 || e.seq->status() != SequenceStatus::kDecode) continue;
+    const TokenId next = sample_greedy(row);
+    e.seq->append_token(next, tokenizer_);
+    ++stats_.tokens_generated;
+    if (e.on_event) {
+      RequestEvent ev;
+      ev.request_id = e.id;
+      ev.token = next;
+      ev.status = e.seq->status();
+      e.on_event(ev);
     }
   }
   return true;

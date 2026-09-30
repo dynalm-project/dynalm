@@ -356,3 +356,20 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   staggered arrivals, budget-split prompts, cancellation, forced preemption (4 × 22
   tokens into 48 tokens of KV) and 4 concurrent submitters. Invalid requests fail
   individually while others complete. bench_scheduler: 3.2× aggregate throughput.
+
+## DD-027: Separate decode and prefill token budgets (default 64 / 64)
+
+- **Decision:** Each step carries up to `decode_token_budget` decode rows (one per generating
+  sequence, rotated least-recently-served-first) and up to `prefill_token_budget` prefill rows
+  (priority, then admission order; prompts are chunked to fit). Waiting requests are ordered
+  by priority, then arrival. Requests can carry a deadline, and expired ones fail with
+  `kDeadlineExceeded` whether queued or running.
+- **Reason:** Phase 12 measured prefill/decode interference as the dominant tail-latency
+  cause (ITL p99 1.2 s). A prefill cap bounds how long any step can stall decoders.
+- **Evidence:** Budget sweep in docs/benchmarks.md: 192 → 32 cuts ITL p99 2.5× for about 5%
+  throughput and higher TTFT. 64 halves ITL p99 with moderate TTFT cost. Tests verify
+  the budgets are respected, decoders keep running while a 40-token prompt is chunked,
+  fair rotation under a small decode budget (each of 4 sequences gets exactly 11 tokens),
+  strict priority order and deadline handling. Outputs match isolated runs throughout.
+- **Tradeoffs:** Fixed budgets aren't optimal for every load. SLO-driven adaptive
+  budgets are an AutoTuner item.

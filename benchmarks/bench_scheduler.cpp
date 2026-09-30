@@ -4,7 +4,7 @@
 // once; the scheduler runs until idle. Reports aggregate throughput and the
 // per-request TTFT / ITL distributions (P50/P90/P99).
 //
-// Usage: bench_scheduler <model.gguf> [threads]
+// Usage: bench_scheduler <model.gguf> [threads] [prefill_token_budget]
 
 #include <cstdio>
 #include <cstdlib>
@@ -19,10 +19,11 @@
 int main(int argc, char** argv) {
   using namespace engine;
   if (argc < 2) {
-    std::fprintf(stderr, "usage: bench_scheduler <model.gguf> [threads]\n");
+    std::fprintf(stderr, "usage: bench_scheduler <model.gguf> [threads] [prefill_token_budget]\n");
     return 1;
   }
   const int threads = argc > 2 ? std::atoi(argv[2]) : cpu_info().physical_cores;
+  const int prefill_budget = argc > 3 ? std::atoi(argv[3]) : 64;
   auto m = load_model(argv[1]);
   if (!m.ok()) return std::fprintf(stderr, "%s\n", m.status().to_string().c_str()), 1;
   const ModelConfig& c = (*m)->config;
@@ -33,11 +34,13 @@ int main(int argc, char** argv) {
   auto tf = Transformer::create(c, (*m)->weights, be, 256);
   if (!kv.ok() || !tf.ok()) return 1;
 
-  std::printf("model: %s  threads %d  prompt %d  gen %d\n\n", argv[1], threads, kPrompt, kGen);
+  std::printf("model: %s  threads %d  prompt %d  gen %d  prefill budget %d\n\n", argv[1], threads, kPrompt, kGen,
+              prefill_budget);
   std::printf("%5s %9s %9s | %8s %8s %8s | %8s %8s %8s\n", "reqs", "wall s", "tok/s", "TTFT p50", "p90", "p99",
               "ITL p50", "p90", "p99");
   for (int n : {1, 4, 8, 16, 32}) {
-    Scheduler sched(**tf, **kv, *(*m)->tokenizer, SchedulerConfig{256, 64});
+    Scheduler sched(**tf, **kv, *(*m)->tokenizer,
+                    SchedulerConfig{.decode_token_budget = 64, .prefill_token_budget = prefill_budget, .max_running = 64});
     std::map<uint64_t, int64_t> last_ns;
     std::vector<double> ttft, itl;
     const int64_t t0 = now_ns();

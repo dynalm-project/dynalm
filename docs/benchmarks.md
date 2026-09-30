@@ -224,3 +224,24 @@ Takeaways:
   address the absolute numbers.
 - The 1-request row reports the first prefill including cold page faults of the mmapped
   weights (TTFT 1.2 s for 64 tokens).
+
+## Phase 13 — prefill/decode budgets (`bench_scheduler <model> 10 <prefill_budget>`, SmolLM2-135M Q8_0)
+
+Decode budget 64 rows; 64-token prompts, 64 generated tokens.
+
+| prefill budget | reqs | tok/s | TTFT p50 ms | TTFT p99 | ITL p50 ms | ITL p90 | ITL p99 |
+|---|---|---|---|---|---|---|---|
+| 192 | 8 | 85.5 | 1600 | 2203 | 58.4 | 70.5 | 603.2 |
+| 192 | 16 | 78.6 | 2486 | 4645 | 129.6 | 189.5 | 890.5 |
+| 192 | 32 | 76.3 | 6729 | 12370 | 244.1 | 323.0 | 1226.2 |
+| **64** | 8 | 68.4 | 1373 | 2850 | 69.5 | 126.1 | 376.0 |
+| **64** | 16 | 73.0 | 2893 | 6238 | 130.1 | 383.7 | 441.0 |
+| **64** | 32 | 75.6 | 6252 | 14747 | 244.5 | 489.3 | 760.6 |
+| 32 | 8 | 70.8 | 1455 | 3222 | 68.8 | 187.8 | 245.0 |
+| 32 | 16 | 68.8 | 3230 | 7554 | 126.2 | 273.3 | 328.3 |
+| 32 | 32 | 72.9 | 7608 | 18971 | 264.8 | 389.0 | 481.1 |
+
+A smaller prefill budget trades TTFT for ITL tail latency: ITL p99 drops up to 2.5×
+(1226 → 481 ms at 32 requests), while TTFT p99 rises about 50% and throughput dips about 5%.
+Default: 64 (see DD-027). Both budgets are configuration, and the AutoTuner (Phase 22) can pick
+them per model and workload.
