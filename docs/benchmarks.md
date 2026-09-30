@@ -35,3 +35,16 @@ Takeaways:
 - 1 MiB allocations cost about 7 µs, with a long tail. This confirms that per-token or
   per-step buffers must come from preallocated arenas and pools, never `host_alloc`.
 - Building a view costs 77 ns. That's fine at graph-build time; kernels index directly.
+
+## Phase 2 — GGUF loader (`bench_loader models/SmolLM2-135M-Instruct-f16.gguf`)
+
+Model: SmolLM2-135M-Instruct f16, 258 MiB, 272 tensors, 33 KV (49,152 tokens, 48,900 merges).
+
+| benchmark | mean | p50 | p90 | p95 | p99 |
+|---|---|---|---|---|---|
+| `GgufFile::open` (warm page cache) | 768.6 µs | 748.6 µs | 855.6 µs | 1020.5 µs | 1108.0 µs |
+| decode `tokenizer.ggml.tokens` (49k strings) | 113.6 µs | 112.6 µs | 124.3 µs | 132.5 µs | 212.9 µs |
+| `load_tensor` × 272 (zero-copy) | 40.2 µs | 38.5 µs | 39.4 µs | 47.6 µs | 93.9 µs |
+
+Most of the open time is validating the vocab and merges string arrays. Weights are not
+touched at load time.

@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Phase 2 — GGUF loader
+- `loader/mapped_file`: read-only mmap (Win32 / POSIX) with prefetch hint.
+- `loader/gguf`: GGUF v2/v3 parser; zero-copy metadata, arrays and tensors; hardened
+  against malformed input; maps GGML type IDs to engine DTypes (IQ*/TQ*/MXFP4 are
+  recognized but unsupported).
+- `engine inspect <model> [--metadata] [--tensors]`.
+- 12 new tests (synthetic GGUF builder, truncation at every byte, random corruption,
+  optional real-model test via `ENGINE_TEST_MODEL`). `bench_loader`.
+- `tools/fetch_models.sh`: resumable download of the dev test models.
+
 ### Phase 1 — Tensor + dtype system
 - `dtype/`: engine-owned `DType` with GGML-compatible block geometry; exact fp16/bf16 conversion.
 - `memory/`: aligned host allocation with global stats and an OOM test hook; owned or borrowed `Storage`.

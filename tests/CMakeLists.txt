@@ -29,3 +29,6 @@ engine_add_test(test_foundation
 engine_add_test(test_tensor
   test_dtype.cpp
   test_tensor.cpp)
+
+engine_add_test(test_loader
+  test_gguf.cpp)

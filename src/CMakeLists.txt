@@ -8,6 +8,8 @@ add_library(engine_core STATIC
   logging/log.cpp
   memory/host_memory.cpp
   memory/storage.cpp
+  loader/gguf/gguf.cpp
+  loader/mapped_file.cpp
   platform/cpu_info.cpp
   platform/isa.cpp
   tensor/tensor.cpp
@@ -22,5 +24,5 @@ target_compile_definitions(engine_core PUBLIC
   ENGINE_HAS_AVX512=$<BOOL:${ENABLE_AVX512}>
   ENGINE_HAS_AMX=$<BOOL:${ENABLE_AMX}>)
 
-add_executable(engine cli/main.cpp)
+add_executable(engine cli/main.cpp cli/inspect.cpp)
 target_link_libraries(engine PRIVATE engine_core)

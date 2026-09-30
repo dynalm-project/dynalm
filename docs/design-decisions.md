@@ -97,3 +97,28 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   checked, so the file is validated, and they're reported as unsupported.
 - **Reason:** Keeps the core free of GGUF (spec §5). A SafeTensors loader maps its own
   dtype strings the same way.
+
+## DD-009: Memory-map GGUF weights; zero-copy tensors
+
+- **Decision:** `MappedFile` maps the whole file read-only. Every weight `Tensor` is a
+  borrowed `Storage` over the mapping, holding the mapping as its keep-alive.
+- **Reason:** Load time scales with metadata only (0.75 ms for a 258 MiB model, warm).
+  Weights sit in the OS page cache, are shared between processes, and are never copied.
+  That matters on a machine with about 1.7 GiB free.
+- **Alternatives:** read the file into engine-allocated buffers; repack weights at load
+  time into kernel-preferred layouts.
+- **Tradeoffs:** The first inference touches cold pages (page-fault latency), and
+  `MappedFile::prefetch` can warm them. If Phase 17/18 kernels want repacked layouts
+  (e.g. interleaved rows for Q4_K GEMM), repacking will copy into owned memory, as a
+  per-tensor opt-in with a measured benefit.
+- **Evidence:** `bench_loader`: open 0.75 ms p50, `load_tensor` × 272 = 38 µs.
+
+## DD-010: The GGUF parser treats every file as untrusted
+
+- **Decision:** A bounds-checked reader; count sanity limits before reserving memory;
+  checks for duplicate keys and tensors, alignment, and data extent; array nesting
+  limited to depth 2.
+- **Reason:** Model files come from the internet. A malformed file must produce
+  `kCorrupt`, not undefined behavior.
+- **Evidence:** A test truncates the file at every byte offset, and 300 random-corruption
+  runs pass without crashes.

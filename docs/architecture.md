@@ -40,7 +40,7 @@ Arrows point downward only. A lower layer never includes a higher one.
 | Backends | model families, requests |
 | API/server | kernels, SIMD, KV layout |
 
-## Model loading path (planned)
+## Model loading path (GGUF parsing ✅, IR next)
 
 ```
 GGUF file ──► GGUF loader ─┐

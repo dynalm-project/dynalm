@@ -5,6 +5,7 @@
 #include <string_view>
 #include <vector>
 
+#include "cli/commands.h"
 #include "common/version.h"
 #include "logging/log.h"
 #include "platform/cpu_info.h"
@@ -135,7 +136,7 @@ int main(int argc, char** argv) {
   const std::string_view cmd = args[i];
   if (cmd == "version") return cmd_version();
   if (cmd == "info") return cmd_info();
-  if (cmd == "inspect") return not_implemented(cmd, 2);
+  if (cmd == "inspect") return engine::cli::cmd_inspect(std::span(args).subspan(i + 1));
   if (cmd == "run") return not_implemented(cmd, 6);
   if (cmd == "serve") return not_implemented(cmd, 20);
   if (cmd == "benchmark") return not_implemented(cmd, 21);
