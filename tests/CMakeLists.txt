@@ -68,3 +68,6 @@ engine_add_test(test_architectures
 
 engine_add_test(test_quant
   test_quant.cpp)
+
+engine_add_test(test_sequence
+  test_sequence.cpp)

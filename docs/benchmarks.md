@@ -131,3 +131,26 @@ Takeaways:
   identical code paths for f16. On this laptop, thermal state and background load move
   results by up to ~30%. Phase 21's benchmark framework will pin runs and report
   repeated-run variance.
+
+## Phase 9 — decode latency vs context (`bench_decode_context`, SmolLM2-135M Q8_0, 10 threads, f16 KV)
+
+| context | p50 ms | p90 ms | p99 ms | tok/s |
+|---|---|---|---|---|
+| 64 | 14.81 | 17.33 | 18.40 | 67.5 |
+| 256 | 17.63 | 22.07 | 22.78 | 56.7 |
+| 1024 | 39.65 | 45.47 | 47.30 | 25.2 |
+| 2048 | 59.28 | 66.51 | 77.82 | 16.9 |
+| 4096 | 93.20 | 106.39 | 126.91 | 10.7 |
+
+Latency grows linearly, about 19 µs per context token. KV is appended in place (one row
+per step, never copied), so the growth comes from attention reads. The analysis
+explains why it's this steep:
+- Decode attention is parallelized only over query heads (9 jobs on 10 threads). Each
+  job walks its head's entire context serially.
+- K/V are fp16 and converted element by element in scalar code (~0.9 ns/elem), for
+  30 layers × 4096 tokens × 128 dims per head.
+
+That's about 2.5 ms per layer at 4K, which matches the measured +78 ms.
+Phase 17/18 plan: split-K ("flash-decoding") attention that parallelizes over KV
+blocks and merges partial softmaxes, plus F16C conversion. The target is a nearly flat
+curve up to several thousand tokens.

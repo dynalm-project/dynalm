@@ -279,3 +279,18 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   f16 (quantization noise). Qwen2.5-0.5B Q4_K_M (real Q4_K, Q5_0, Q6_K and Q8_0 tensors)
   matches its reference including the 8-token greedy continuation. Per-format
   dequantization matches gguf-py on fixtures for all 10 block types.
+
+## DD-023: SequenceState with an explicit status machine
+
+- **Decision:** Each generation stream is a `SequenceState`: tokens, prompt length,
+  number of computed tokens, KV block table, stop parameters, and a status
+  (waiting → prefill → decode → finished | cancelled | error). The loop computes
+  `pending()` tokens when there are any, otherwise it samples. Every terminal
+  transition releases KV blocks.
+- **Reason:** The scheduler (Phases 11–14) needs exactly this: whether a sequence needs
+  prefill or decode work, how much, and where its KV lives. It never needs to know
+  the model. Making prefill/decode an explicit state (spec §22) instead of two loops
+  lets chunked prefill and decode interleave later without new logic.
+- **Evidence:** Unit tests cover every transition, including KV release on finish,
+  cancel and error, and KV exhaustion. All goldens pass unchanged through the
+  rewritten generator.

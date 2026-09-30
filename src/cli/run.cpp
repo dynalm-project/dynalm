@@ -13,6 +13,7 @@
 #include "model/transformer.h"
 #include "platform/cpu_info.h"
 #include "runtime/generator.h"
+#include "runtime/sequence.h"
 #include "runtime/thread_pool.h"
 
 namespace engine::cli {
@@ -94,14 +95,7 @@ int cmd_run(std::span<const std::string_view> args) {
   ThreadPool pool(threads);
   CpuBackend backend(pool, isa);
 
-  KvGeometry geom;
-  geom.num_layers = cfg.num_layers;
-  geom.num_kv_heads = cfg.num_kv_heads;
-  geom.head_dim = cfg.head_dim;
-  geom.head_dim_v = cfg.head_dim_v;
-  geom.block_size = 16;
-  geom.num_blocks = (ctx + geom.block_size - 1) / geom.block_size;
-  geom.dtype = kv_dtype;
+  const KvGeometry geom = kv_geometry_for(cfg, kv_dtype, /*block_size=*/16, ctx);
   auto cache = KvCache::create(geom, backend);
   if (!cache.ok()) {
     std::fprintf(stderr, "run: %s\n", cache.status().to_string().c_str());

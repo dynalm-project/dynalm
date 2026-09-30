@@ -1,7 +1,7 @@
 #pragma once
 
-// Single-sequence generation loop (Phase 6): chunked prefill, then greedy
-// decode until EOG, a stop condition, or max_new_tokens.
+// Single-sequence generation loop: drives one SequenceState through chunked
+// prefill and greedy decode until EOG, the length limit, or cancellation.
 //
 // The multi-sequence scheduler (continuous batching) replaces this loop in
 // later phases; Transformer::forward and the KV cache are shared.
@@ -13,6 +13,7 @@
 #include "common/status.h"
 #include "kv_cache/kv_cache.h"
 #include "model/transformer.h"
+#include "runtime/sequence.h"
 #include "tokenizer/tokenizer.h"
 
 namespace engine {
@@ -24,6 +25,7 @@ struct GenerationStats {
   double ttft_ms = 0;        // start -> first generated token available
   double decode_ms = 0;      // all decode steps after the first token
   std::vector<double> itl_ms;  // inter-token latency per decode step
+  FinishReason finish_reason = FinishReason::kNone;
 
   double prefill_tok_per_s() const { return prefill_ms > 0 ? prompt_tokens / (prefill_ms / 1e3) : 0; }
   double decode_tok_per_s() const {
@@ -50,6 +52,7 @@ class Generator {
   Transformer& model_;
   KvCache& cache_;
   const Tokenizer& tokenizer_;
+  uint64_t next_id_ = 1;
 };
 
 }  // namespace engine

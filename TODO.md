@@ -12,7 +12,7 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
 - [x] Phase 6 — Basic CPU execution (single sequence, greedy, `engine run`)
 - [x] Phase 7 — Qwen / Mistral / Gemma / Phi / DeepSeek adapters
 - [x] Phase 8 — Quantized GGUF execution
-- [ ] Phase 9 — KV cache
+- [x] Phase 9 — KV cache
 - [ ] Phase 10 — Paged KV
 - [ ] Phase 11 — Concurrent sequences
 - [ ] Phase 12 — Continuous batching
@@ -34,6 +34,8 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
 - [ ] Phase 28 — GPU backend architecture
 
 ## Open items
+
+- Split-K (flash-decoding) decode attention + F16C KV conversion: decode is ~19 µs per context token today (Phase 17/18, top priority for long context).
 
 - Jinja subset interpreter for chat templates that no family matches (DD-013).
 - Pre-tokenizers for DeepSeek-LLM/V3 and Tekken (Mistral Nemo).

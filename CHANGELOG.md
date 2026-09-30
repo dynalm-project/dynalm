@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Phase 9 — KV cache v1
+- `runtime/sequence`: `SequenceState` (id, tokens, computed position, block table, stop
+  params, status machine prefill/decode/finished/cancelled/error, finish reason, KV bytes).
+  KV is released on every terminal transition.
+- Generator rewritten around `SequenceState` (compute pending → sample), reporting the finish reason.
+- KV sizing helpers: `kv_geometry_for(config, dtype, block, tokens)`, `kv_tokens_for_budget`.
+- `bench_decode_context`: decode latency vs context 64–4096 (attention-bound; see benchmarks.md).
+
 ### Phase 8 — Quantized GGUF execution
 - `quant/quant_formats`: GGML block layouts + reference dequantization for Q4_0, Q4_1,
   Q5_0, Q5_1, Q8_0, Q8_1, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, Q8_K. Wired into
