@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Phase 15 — Prefix hash cache
+- `prefix_cache/PrefixCache`: block-granular, chained verified hashes, LRU leaf-first eviction,
+  optional capacity, stats (lookups, hit/eligible tokens, hit rate, inserted/evicted/cached blocks).
+- Scheduler: lookup on admission (`SequenceState::adopt_prefix`), insert completed blocks
+  after each step, evict cache before preemption; `enable_prefix_cache`,
+  `prefix_cache_max_blocks`.
+- Tests: longest-prefix match, collision-proof verification, never freed while referenced,
+  LRU leaf-first eviction, capacity; scheduler reuse is exact with exact row accounting;
+  cache yields under KV pressure.
+- `bench_prefix`: 512-token shared system prompt → 11× wall, 23× TTFT p50, 94% hit rate.
+
 ### Phase 14 — Chunked prefill
 - `SchedulerConfig::max_prefill_chunk` (default 32): per-sequence cap on prefill rows per
   step, so prompts prefill side by side (no head-of-line blocking).

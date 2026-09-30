@@ -18,7 +18,7 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
 - [x] Phase 12 — Continuous batching
 - [x] Phase 13 — Prefill/decode scheduler
 - [x] Phase 14 — Chunked prefill
-- [ ] Phase 15 — Prefix hash cache
+- [x] Phase 15 — Prefix hash cache
 - [ ] Phase 16 — Radix cache
 - [ ] Phase 17 — CPU SIMD optimization
 - [ ] Phase 18 — Kernel optimization

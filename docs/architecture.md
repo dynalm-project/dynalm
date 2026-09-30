@@ -12,7 +12,7 @@ Request manager / queue     (runtime/)
       │
 Scheduler                   (scheduler/ ✅ continuous batching) — model-agnostic
       │
-KV engine                   (kv_cache/ ✅ paged pool + refcounted block tables, prefix_cache/, memory/)
+KV engine                   (kv_cache/ ✅ paged pool + refcounted block tables, prefix_cache/ ✅ hash, memory/)
       │
 Model runtime               (model/, model_ir/ ✅)   — consumes ModelConfig only
       │

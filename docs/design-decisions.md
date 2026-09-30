@@ -388,3 +388,23 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   120-token prompt. Chunking never changes outputs (tests compare against isolated runs).
 - **Tradeoffs:** Smaller chunks mean more steps (per-step overhead) and a longer TTFT for
   long prompts. The AutoTuner can size chunks from measured per-row cost.
+
+## DD-029: Block-granular prefix cache keyed by chained, verified hashes
+
+- **Decision:** Cache full KV blocks under h_i = H(h_{i-1}, block tokens) (SplitMix64-based).
+  Each entry stores its tokens and parent key, and lookups verify both, so a hash collision
+  can't return wrong KV. The cache holds a pool reference per block. Eviction is LRU over
+  leaf entries that only the cache references. The scheduler looks up on admission (always
+  computing at least one prompt token), inserts newly completed blocks after each step, and
+  evicts cached blocks before preempting live sequences.
+- **Reason:** Spec §24–25. Block granularity reuses the paged KV directly: a hit is a
+  refcount increment, never a copy. Full blocks are immutable once complete, so sharing
+  needs no locking or copy-on-write. Leaf-first eviction keeps cached chains reachable.
+- **Alternatives:** token-level radix tree (Phase 16); caching only prompt blocks (we also
+  cache generated blocks, which multi-turn chat reuses).
+- **Evidence:** Exact row accounting in tests (52 rows instead of 100 for 4 requests sharing
+  16 tokens). A shared-reference test shows blocks are never freed while referenced. Under KV
+  pressure there were 0 preemptions because the cache yielded. bench_prefix: 11× faster, 23×
+  lower TTFT for a 512-token shared system prompt.
+- **Tradeoffs:** Reuse granularity is 16 tokens. Same-step arrivals don't share in-flight
+  prefill.

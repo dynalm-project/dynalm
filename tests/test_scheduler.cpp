@@ -19,6 +19,9 @@ namespace {
 
 std::string data(const std::string& f) { return std::string(ENGINE_TEST_DATA_DIR) + "/" + f; }
 
+// Blocks legitimately held by the prefix cache after requests finish.
+int64_t cached_blocks(const Scheduler& s) { return s.prefix_cache() ? s.prefix_cache()->stats().cached_blocks : 0; }
+
 class SchedulerTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -102,7 +105,7 @@ TEST_F(SchedulerTest, StaggeredArrivalsMatchSoloRuns) {
     EXPECT_EQ(out.final_event[id].reason, FinishReason::kLength);
   }
   EXPECT_EQ(sched.stats().completed, shapes.size());
-  EXPECT_EQ(pool->free_blocks(), pool->num_blocks());  // no leaked KV
+  EXPECT_EQ(pool->free_blocks() + cached_blocks(sched), pool->num_blocks());  // no leaks  // no leaked KV
 }
 
 TEST_F(SchedulerTest, BatchesManySequencesPerStep) {
@@ -142,7 +145,7 @@ TEST_F(SchedulerTest, CancellationReleasesKvAndOthersContinue) {
   EXPECT_EQ(out.final_event[a].status, SequenceStatus::kCancelled);
   EXPECT_LT(out.tokens[a].size(), 40u);
   EXPECT_EQ(out.tokens[b], solo(pb, 10));
-  EXPECT_EQ(pool->free_blocks(), pool->num_blocks());
+  EXPECT_EQ(pool->free_blocks() + cached_blocks(sched), pool->num_blocks());  // no leaks
 }
 
 TEST_F(SchedulerTest, InvalidRequestsFailAlone) {
@@ -175,7 +178,7 @@ TEST_F(SchedulerTest, PreemptionUnderKvPressureKeepsResultsExact) {
   sched.run_until_idle();
   EXPECT_GT(sched.stats().preemptions, 0u);
   for (const auto& [id, tokens] : want) EXPECT_EQ(out.tokens[id], tokens) << "request " << id;
-  EXPECT_EQ(pool->free_blocks(), pool->num_blocks());
+  EXPECT_EQ(pool->free_blocks() + cached_blocks(sched), pool->num_blocks());  // no leaks
 }
 
 TEST_F(SchedulerTest, RequestLargerThanCacheFailsCleanly) {
@@ -186,7 +189,7 @@ TEST_F(SchedulerTest, RequestLargerThanCacheFailsCleanly) {
   sched.run_until_idle();
   EXPECT_EQ(out.final_event[id].status, SequenceStatus::kError);
   EXPECT_EQ(out.final_event[id].error.code(), StatusCode::kResourceExhausted);
-  EXPECT_EQ(pool->free_blocks(), pool->num_blocks());
+  EXPECT_EQ(pool->free_blocks() + cached_blocks(sched), pool->num_blocks());  // no leaks
 }
 
 TEST_F(SchedulerTest, ConcurrentSubmitters) {
@@ -304,7 +307,7 @@ TEST_F(SchedulerTest, DeadlineExpiresQueuedAndRunningRequests) {
   EXPECT_EQ(out.final_event[rb].error.code(), StatusCode::kDeadlineExceeded);
   EXPECT_EQ(out.tokens[rc], solo(pc, 5));
   EXPECT_EQ(sched.stats().timed_out, 2u);
-  EXPECT_EQ(pool->free_blocks(), pool->num_blocks());
+  EXPECT_EQ(pool->free_blocks() + cached_blocks(sched), pool->num_blocks());  // no leaks
 }
 
 // --- Phase 14: chunked prefill fairness ---

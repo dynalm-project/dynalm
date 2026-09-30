@@ -33,6 +33,7 @@
 #include "common/status.h"
 #include "kv_cache/kv_cache.h"
 #include "model/transformer.h"
+#include "prefix_cache/prefix_cache.h"
 #include "runtime/sequence.h"
 #include "tokenizer/tokenizer.h"
 
@@ -70,6 +71,9 @@ struct SchedulerConfig {
   // budget). Smaller values let several prompts prefill side by side, so a
   // short prompt is not stuck behind a long one (head-of-line blocking).
   int32_t max_prefill_chunk = 32;
+  // Reuse KV of shared prompt prefixes across requests (DD-029).
+  bool enable_prefix_cache = true;
+  int32_t prefix_cache_max_blocks = 0;  // 0 = bounded only by the KV pool
 };
 
 struct SchedulerStats {
@@ -111,6 +115,8 @@ class Scheduler {
 
   bool idle() const;
   const SchedulerStats& stats() const { return stats_; }
+  // nullptr when the prefix cache is disabled.
+  const PrefixCache* prefix_cache() const { return prefix_cache_.get(); }
 
  private:
   struct Entry {
@@ -123,6 +129,7 @@ class Scheduler {
     int64_t arrival_ns = 0;
     int64_t deadline_ns = 0;  // 0 = none
     uint64_t last_step = 0;   // last step this sequence got decode rows (fairness)
+    int32_t cached_blocks = 0;  // full blocks already offered to the prefix cache
   };
 
   void drain_incoming();
@@ -152,6 +159,7 @@ class Scheduler {
   std::vector<SeqBatch> batch_;
   std::vector<Entry*> batch_owner_;
   std::vector<float> logits_;
+  std::unique_ptr<PrefixCache> prefix_cache_;
 };
 
 }  // namespace engine

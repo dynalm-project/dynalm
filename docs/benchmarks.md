@@ -266,3 +266,18 @@ with scalar kernels (Phase 17/18).
 Head-of-line blocking (test `ChunkCapPreventsHeadOfLineBlocking`): with a per-sequence
 chunk cap of 16, a 4-token prompt submitted behind a 120-token prompt gets its first
 token in step 1 instead of step 4.
+
+## Phase 15 — prefix hash cache (`bench_prefix`, SmolLM2-135M Q8_0, 10 threads)
+
+A warm-up request with a 512-token system prompt, then 15 requests arriving together, each with
+the same system prompt + 16 unique tokens, 16 generated. Prefill budget 128, chunk 128.
+
+| prefix cache | wall s | rows computed | TTFT p50 ms | TTFT p90 | TTFT p99 | hit rate |
+|---|---|---|---|---|---|---|
+| off | 65.00 | 8145 | 33004 | 59819 | 64298 | 0% |
+| **on** | **5.78** | **465** | **1430** | **2840** | **2840** | 94% |
+
+17.5× fewer rows, 11× less wall time and 23× lower median TTFT. Outputs are bit-identical to
+uncached runs (tests). Limitation: requests arriving in the same step as the *first* request
+with a new prefix can't reuse it, because blocks are cached once computed. In-flight dedup is
+a candidate for the radix cache (Phase 16).

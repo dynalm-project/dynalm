@@ -80,3 +80,6 @@ engine_add_test(test_batching
 
 engine_add_test(test_scheduler
   test_scheduler.cpp)
+
+engine_add_test(test_prefix_cache
+  test_prefix_cache.cpp)

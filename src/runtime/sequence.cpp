@@ -61,6 +61,13 @@ void SequenceState::reset_for_recompute() {
   ++preemptions_;
 }
 
+void SequenceState::adopt_prefix(std::span<const int32_t> blocks, int32_t tokens) {
+  assert(num_computed_ == 0 && kv_.num_blocks() == 0 && tokens < static_cast<int32_t>(tokens_.size()));
+  for (int32_t b : blocks) kv_.append_shared(b);
+  num_computed_ = tokens;
+  if (tokens > 0) status_ = tokens < prompt_len_ ? SequenceStatus::kPrefill : SequenceStatus::kDecode;
+}
+
 void SequenceState::fail(Status error) {
   error_ = std::move(error);
   status_ = SequenceStatus::kError;

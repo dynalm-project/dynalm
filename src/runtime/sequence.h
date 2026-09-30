@@ -71,6 +71,10 @@ class SequenceState {
   // Preemption: drop all KV and go back to waiting. Generated tokens are kept
   // and will be recomputed as part of the prefill when re-admitted.
   void reset_for_recompute();
+  // Takes over already-computed KV blocks (a cached prefix of this sequence's
+  // tokens): `blocks` carry references owned by this sequence from now on.
+  // Only valid before any token was computed.
+  void adopt_prefix(std::span<const int32_t> blocks, int32_t tokens);
   int32_t preemptions() const { return preemptions_; }
 
   // Bytes of KV memory currently held.

@@ -17,6 +17,7 @@ Scheduler::Scheduler(Transformer& model, KvBlockPool& kv, const Tokenizer& token
   config_.prefill_token_budget = std::clamp(config_.prefill_token_budget, 1, cap - config_.decode_token_budget);
   batch_.reserve(static_cast<size_t>(config_.max_running));
   batch_owner_.reserve(static_cast<size_t>(config_.max_running));
+  if (config_.enable_prefix_cache) prefix_cache_ = std::make_unique<PrefixCache>(kv_, config_.prefix_cache_max_blocks);
 }
 
 Scheduler::~Scheduler() = default;
@@ -144,10 +145,28 @@ void Scheduler::admit(int64_t now) {
   const int32_t bs = kv_.geometry().block_size;
   while (!waiting_.empty() && static_cast<int32_t>(running_.size()) < config_.max_running) {
     Entry& e = waiting_.front();
-    // Admission control: the whole pending prefix plus one block of headroom
-    // must fit now, so admitted sequences rarely need preemption.
-    const int64_t need_blocks = (e.seq->pending() + bs - 1) / bs + 1;
-    if (kv_.free_blocks() < need_blocks && !running_.empty()) break;
+    // Reuse a cached prefix (always leaving >= 1 token to compute: the last
+    // prompt token's logits are needed).
+    PrefixCache::Match match;
+    if (prefix_cache_ && e.seq->num_computed() == 0) {
+      match = prefix_cache_->lookup(e.seq->tokens(), static_cast<int32_t>(e.seq->tokens().size()) - 1);
+    }
+    // Admission control: the remaining pending tokens plus one block of
+    // headroom must fit now, so admitted sequences rarely need preemption.
+    // Cached blocks can be evicted to make room.
+    const int64_t pending_after = e.seq->pending() - match.tokens;
+    const int64_t need_blocks = (pending_after + bs - 1) / bs + 1;
+    if (kv_.free_blocks() < need_blocks && prefix_cache_) {
+      prefix_cache_->evict(static_cast<int32_t>(need_blocks - kv_.free_blocks()));
+    }
+    if (kv_.free_blocks() < need_blocks && !running_.empty()) {
+      for (int32_t b : match.blocks) kv_.release(b);  // give the references back
+      break;
+    }
+    if (match.tokens > 0) {
+      e.seq->adopt_prefix(match.blocks, match.tokens);
+      e.cached_blocks = static_cast<int32_t>(match.blocks.size());
+    }
     e.admit_order = ++admit_counter_;
     if (e.seq->preemptions() == 0) {
       const double q = static_cast<double>(now - e.arrival_ns) * 1e-6;
@@ -170,6 +189,7 @@ bool Scheduler::preempt_one(const Entry* keep) {
   }
   if (!victim) return false;
   victim->seq->reset_for_recompute();
+  victim->cached_blocks = 0;
   ++stats_.preemptions;
   LOG_DEBUG("preempted request {} (KV pressure)", victim->id);
   waiting_.push_front(std::move(*victim));
@@ -242,6 +262,11 @@ bool Scheduler::step() {
       if (n <= 0) continue;
       const Status st = e->seq->reserve_kv(n);
       if (st.code() == StatusCode::kResourceExhausted) {
+        // Prefer dropping cached (unused) prefix blocks over preempting work.
+        if (attempt < 64 && prefix_cache_ && prefix_cache_->evict(4) > 0) {
+          restart = true;
+          break;
+        }
         if (attempt < 64 && preempt_one(e)) {
           restart = true;  // running_ changed; rebuild the plan
           break;
@@ -287,6 +312,14 @@ bool Scheduler::step() {
     const bool was_decode = is_decode_row(e);
     e.seq->mark_computed(static_cast<int32_t>(batch_[b].tokens.size()));
     if (was_decode) e.last_step = step_no;
+    if (prefix_cache_) {
+      // Offer newly completed (hence immutable) blocks for reuse.
+      const int32_t full = e.seq->num_computed() / kv_.geometry().block_size;
+      if (full > e.cached_blocks) {
+        prefix_cache_->insert(e.seq->tokens(), e.seq->block_table(), e.cached_blocks, full);
+        e.cached_blocks = full;
+      }
+    }
     if (!batch_[b].want_logits) continue;
     const std::span<const float> row(logits_.data() + li * vocab, vocab);
     ++li;
