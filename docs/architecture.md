@@ -23,6 +23,8 @@ Backend                     (backends/cpu/{generic,avx2,avx512,amx}, future GPU)
 Platform                    (platform/ ✅ CPU + memory detection, ISA selection)
 ```
 
+Data: `dtype/` ✅, `tensor/` ✅, `memory/` ✅ (host allocator + Storage; pools later).
+
 Cross-cutting: `common/` ✅ (Status/Result, platform macros, timer),
 `logging/` ✅, `metrics/`, `config/`.
 

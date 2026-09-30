@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Phase 1 — Tensor + dtype system
+- `dtype/`: engine-owned `DType` with GGML-compatible block geometry; exact fp16/bf16 conversion.
+- `memory/`: aligned host allocation with global stats and an OOM test hook; owned or borrowed `Storage`.
+- `tensor/`: `TensorShape`, `TensorLayout` (byte strides), non-owning `TensorView`
+  (reshape/slice/select/transpose without copies), owning `Tensor`.
+- 18 new tests (exhaustive fp16/bf16 round trips, slow-reference fp16 rounding, view semantics,
+  quantized restrictions, OOM propagation). `bench_tensor`.
+
 ### Phase 0 — Project foundation
 - CMake build with presets (MSVC release/debug/ASAN; Linux release/ASAN+UBSAN/TSAN).
 - Feature flags: `ENABLE_{CUDA,HIP,METAL,VULKAN}` (future phases; ON is an error),

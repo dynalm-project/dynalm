@@ -4,7 +4,7 @@ Phases run strictly in order. A phase is done only when it builds, its tests
 pass, its benchmarks have run, the docs are updated, and it is committed.
 
 - [x] Phase 0 — Project foundation
-- [ ] Phase 1 — Tensor + dtype system (DType incl. GGUF block types, TensorShape/Layout/View, aligned allocator)
+- [x] Phase 1 — Tensor + dtype system (DType incl. GGUF block types, TensorShape/Layout/View, aligned allocator)
 - [ ] Phase 2 — GGUF loader (mmap, metadata KV, tensor infos, `engine inspect`)
 - [ ] Phase 3 — Model IR (ModelConfig, TensorRegistry, tensor roles)
 - [ ] Phase 4 — Tokenizer / chat template (BPE + SentencePiece from GGUF metadata)
@@ -13,16 +13,16 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
 - [ ] Phase 7 — Qwen / Mistral / Gemma / Phi / DeepSeek adapters
 - [ ] Phase 8 — Quantized GGUF execution
 - [ ] Phase 9 — KV cache
-- [ ] Phase 10 — Paged KV
-- [ ] Phase 11 — Concurrent sequences
-- [ ] Phase 12 — Continuous batching
-- [ ] Phase 13 — Prefill/decode scheduler
-- [ ] Phase 14 — Chunked prefill
-- [ ] Phase 15 — Prefix hash cache
-- [ ] Phase 16 — Radix cache
-- [ ] Phase 17 — CPU SIMD optimization
-- [ ] Phase 18 — Kernel optimization
-- [ ] Phase 19 — Streaming
+- [x] Phase 10 — Paged KV
+- [x] Phase 11 — Concurrent sequences
+- [x] Phase 12 — Continuous batching
+- [x] Phase 13 — Prefill/decode scheduler
+- [x] Phase 14 — Chunked prefill
+- [x] Phase 15 — Prefix hash cache
+- [x] Phase 16 — Radix cache
+- [x] Phase 17 — CPU SIMD optimization
+- [x] Phase 18 — Kernel optimization
+- [x] Phase 19 — Streaming
 - [ ] Phase 20 — OpenAI API
 - [ ] Phase 21 — Benchmark framework
 - [ ] Phase 22 — Production hardening
