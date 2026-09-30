@@ -25,6 +25,8 @@ void SequenceState::mark_computed(int32_t n) {
   num_computed_ += n;
   // Prefill ends when every prompt token has K/V; afterwards each step
   // computes exactly the one newly sampled token.
+  // (After a preemption, generated tokens are recomputed too; the sequence is
+  // back in decode once the whole prompt is covered again.)
   status_ = num_computed_ < prompt_len_ ? SequenceStatus::kPrefill : SequenceStatus::kDecode;
 }
 
@@ -49,6 +51,14 @@ void SequenceState::cancel() {
   finish_ = FinishReason::kStopped;
   status_ = SequenceStatus::kCancelled;
   kv_.release();
+}
+
+void SequenceState::reset_for_recompute() {
+  assert(!is_terminal(status_));
+  kv_.release();
+  num_computed_ = 0;
+  status_ = SequenceStatus::kWaiting;
+  ++preemptions_;
 }
 
 void SequenceState::fail(Status error) {

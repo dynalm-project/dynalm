@@ -200,3 +200,27 @@ Takeaways:
   (Phase 18), aggregate throughput should keep scaling well past 8 sequences.
 - Per-sequence ITL grows with batch size (14.6 → 52.9 ms at 8). The Phase 13 scheduler
   must balance throughput against ITL (decode token budget).
+
+## Phase 12 — continuous batching (`bench_scheduler`, SmolLM2-135M Q8_0, 10 threads)
+
+N requests submitted at once; 64-token prompts, 64 generated tokens each; token budget
+256 per step, FCFS admission, decode rows scheduled before prefill.
+
+| requests | wall s | aggregate tok/s | TTFT p50 ms | p90 | p99 | ITL p50 ms | p90 | p99 |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 2.14 | 29.9 | 1232 | 1232 | 1232 | 13.2 | 18.1 | 33.2 |
+| 4 | 4.39 | 58.3 | 955 | 956 | 956 | 49.6 | 91.7 | 155.6 |
+| 8 | 5.35 | **95.7** | 968 | 2042 | 2042 | 52.0 | 58.4 | 116.4 |
+| 16 | 12.07 | 84.9 | 2990 | 3995 | 4202 | 117.8 | 191.8 | **1003.4** |
+| 32 | 23.96 | 85.5 | 6037 | 9941 | 10614 | 222.2 | 279.1 | **1455.5** |
+
+Takeaways:
+- Continuous batching raises aggregate throughput 3.2× at 8 concurrent requests.
+- **Prefill/decode interference is the dominant latency problem.** With 16+ requests, a
+  step that admits new prompts carries up to 256 prefill rows, which take about 1 s with
+  the generic kernels, and every decoding sequence waits (ITL p99 1.0–1.5 s). Phase 13
+  (separate prefill and decode budgets) and Phase 14 (chunked prefill) target this directly.
+- TTFT is dominated by slow prefill (≈30 prompt tok/s generic). Phase 17/18 kernels
+  address the absolute numbers.
+- The 1-request row reports the first prefill including cold page faults of the mmapped
+  weights (TTFT 1.2 s for 64 tokens).

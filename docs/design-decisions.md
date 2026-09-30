@@ -335,3 +335,24 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   are bit-identical to running each sequence alone, for Llama, Gemma-3 (sliding
   windows, local RoPE) and Phi-3 (fused projections). bench_batch_decode shows up to
   2.4× aggregate throughput.
+
+## DD-026: Iteration-level continuous batching with recompute preemption
+
+- **Decision:** `Scheduler::step()` runs one iteration: drain submissions and
+  cancellations, admit waiting requests while KV allows (the whole pending prompt plus
+  one block of headroom), build one batch within the token budget (decode rows first,
+  then prefill in admission order), run `forward_batch`, sample, and fire callbacks.
+  Under KV exhaustion, the newest running sequence is preempted: its KV is released and
+  it's requeued at the front to recompute prompt + generated tokens.
+  Submission and cancellation use a mutex-guarded handoff swapped once per step. The
+  iteration itself holds no lock.
+- **Reason:** Sequences join and leave at any iteration (spec §21). Preemption by
+  recompute keeps requests alive under memory pressure without swap space. On CPU,
+  recomputing a short prefix is cheap next to failing a request. The per-step handoff
+  avoids a global scheduler mutex (spec §49).
+- **Alternatives:** swap-out preemption (copy KV to a secondary store; unnecessary while
+  KV and weights share host RAM); fail on exhaustion (poor UX); static batching.
+- **Evidence:** Tests require every request's tokens to equal an isolated greedy run under
+  staggered arrivals, budget-split prompts, cancellation, forced preemption (4 × 22
+  tokens into 48 tokens of KV) and 4 concurrent submitters. Invalid requests fail
+  individually while others complete. bench_scheduler: 3.2× aggregate throughput.

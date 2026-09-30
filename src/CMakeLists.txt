@@ -32,6 +32,7 @@ add_library(engine_core STATIC
   runtime/sequence.cpp
   runtime/thread_pool.cpp
   sampling/sampler.cpp
+  scheduler/scheduler.cpp
   tensor/tensor.cpp
   tokenizer/pretokenizer.cpp
   tokenizer/tokenizer.cpp

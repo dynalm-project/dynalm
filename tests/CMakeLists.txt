@@ -77,3 +77,6 @@ engine_add_test(test_kv_cache
 
 engine_add_test(test_batching
   test_batching.cpp)
+
+engine_add_test(test_scheduler
+  test_scheduler.cpp)

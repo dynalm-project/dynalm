@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Phase 12 — Continuous batching
+- `scheduler/Scheduler`: iteration-level continuous batching. Thread-safe submit/cancel
+  via a per-step handoff; admission control on KV; decode-first batch building within a
+  token budget; recompute preemption under KV pressure; per-request callbacks
+  (token events + a final event with status, reason and error).
+- `SequenceState::reset_for_recompute` (preemption).
+- Errors isolated per request (validation up front; model errors fail only that batch).
+- Tests: outputs identical to isolated runs under staggered arrivals, token-budget
+  chunking, cancellation, preemption and concurrent submitters; no KV leaks.
+- `bench_scheduler`: 3.2× aggregate throughput at 8 requests; prefill/decode
+  interference quantified (ITL p99 > 1 s at 16+ requests) for Phase 13/14.
+
 ### Phase 11 — Concurrent sequences
 - `Transformer::forward_batch(SeqBatch...)`: rows from many sequences in one pass; per-row
   positions and sequence index; logits only for requested rows.

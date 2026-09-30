@@ -15,7 +15,7 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
 - [x] Phase 9 — KV cache
 - [x] Phase 10 — Paged KV
 - [x] Phase 11 — Concurrent sequences
-- [ ] Phase 12 — Continuous batching
+- [x] Phase 12 — Continuous batching
 - [ ] Phase 13 — Prefill/decode scheduler
 - [ ] Phase 14 — Chunked prefill
 - [ ] Phase 15 — Prefix hash cache

@@ -10,7 +10,7 @@ CLI / API server            (cli/ ✅ skeleton, server/, api/)
       │
 Request manager / queue     (runtime/)
       │
-Scheduler                   (scheduler/, batching/)  — model-agnostic; today: runtime/generator ✅ (single sequence)
+Scheduler                   (scheduler/ ✅ continuous batching) — model-agnostic
       │
 KV engine                   (kv_cache/ ✅ paged pool + refcounted block tables, prefix_cache/, memory/)
       │

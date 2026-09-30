@@ -68,6 +68,10 @@ class SequenceState {
   void append_token(TokenId t, const Tokenizer& tokenizer);
   void cancel();
   void fail(Status error);
+  // Preemption: drop all KV and go back to waiting. Generated tokens are kept
+  // and will be recomputed as part of the prefill when re-admitted.
+  void reset_for_recompute();
+  int32_t preemptions() const { return preemptions_; }
 
   // Bytes of KV memory currently held.
   int64_t kv_bytes() const;
@@ -81,6 +85,7 @@ class SequenceState {
   int32_t num_computed_ = 0;
   StopParams stop_;
   SequenceStatus status_ = SequenceStatus::kWaiting;
+  int32_t preemptions_ = 0;
   FinishReason finish_ = FinishReason::kNone;
   Status error_;
   KvBlockPool* cache_;
