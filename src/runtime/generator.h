@@ -40,7 +40,7 @@ struct GenerateOptions {
 
 class Generator {
  public:
-  Generator(Transformer& model, KvCache& cache, const Tokenizer& tokenizer)
+  Generator(Transformer& model, KvBlockPool& cache, const Tokenizer& tokenizer)
       : model_(model), cache_(cache), tokenizer_(tokenizer) {}
 
   // Calls on_token(id) for each generated token; returning false stops.
@@ -50,7 +50,7 @@ class Generator {
 
  private:
   Transformer& model_;
-  KvCache& cache_;
+  KvBlockPool& cache_;
   const Tokenizer& tokenizer_;
   uint64_t next_id_ = 1;
 };

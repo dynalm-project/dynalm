@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Phase 10 — Paged KV
+- `KvBlockPool` (renamed from KvCache): atomic per-block refcounts, allocate/retain/release,
+  copy_block; thread-safe.
+- `KvBlockTable` (renamed from KvSequence): reserve, truncate (rollback), clone (fork),
+  append_shared (prefix cache), make_writable (copy-on-write); movable.
+- `SequenceState::reserve_kv` makes the target range writable (copy-on-write aware).
+- Tests: refcount lifecycle, clone sharing, copy-on-write isolation on real K/V contents,
+  exhaustion/recovery, a 4-thread stress test (TSAN).
+- `bench_kv`; block-size sweep → 16-token blocks (DD-024).
+
 ### Phase 9 — KV cache v1
 - `runtime/sequence`: `SequenceState` (id, tokens, computed position, block table, stop
   params, status machine prefill/decode/finished/cancelled/error, finish reason, KV bytes).

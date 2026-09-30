@@ -4,7 +4,7 @@
 // that context. With KV appended in place (never copied), per-token cost
 // should be flat apart from the attention reads, which grow linearly in N.
 //
-// Usage: bench_decode_context <model.gguf> [threads]
+// Usage: bench_decode_context <model.gguf> [threads] [block_size]
 
 #include <cstdio>
 #include <cstdlib>
@@ -19,10 +19,11 @@
 int main(int argc, char** argv) {
   using namespace engine;
   if (argc < 2) {
-    std::fprintf(stderr, "usage: bench_decode_context <model.gguf> [threads]\n");
+    std::fprintf(stderr, "usage: bench_decode_context <model.gguf> [threads] [block_size]\n");
     return 1;
   }
   const int threads = argc > 2 ? std::atoi(argv[2]) : cpu_info().physical_cores;
+  const int block_size = argc > 3 ? std::atoi(argv[3]) : 16;
   auto m = load_model(argv[1]);
   if (!m.ok()) return std::fprintf(stderr, "%s\n", m.status().to_string().c_str()), 1;
   const ModelConfig& c = (*m)->config;
@@ -30,15 +31,15 @@ int main(int argc, char** argv) {
   ThreadPool pool(threads);
   CpuBackend be(pool, select_best_isa(cpu_info().features));
   constexpr int kMaxCtx = 4096 + 64;
-  auto cache = KvCache::create(kv_geometry_for(c, DType::kF16, 16, kMaxCtx), be);
+  auto cache = KvBlockPool::create(kv_geometry_for(c, DType::kF16, block_size, kMaxCtx), be);
   auto t = Transformer::create(c, (*m)->weights, be, 256);
   if (!cache.ok() || !t.ok()) return 1;
 
-  std::printf("model: %s  threads %d  kv f16\n\n", argv[1], threads);
+  std::printf("model: %s  threads %d  kv f16  block %d\n\n", argv[1], threads, block_size);
   std::printf("%8s %10s %10s %10s %10s\n", "context", "p50 ms", "p90 ms", "p99 ms", "tok/s");
   std::vector<float> logits(static_cast<size_t>(c.vocab_size));
   for (int ctx : {64, 256, 1024, 2048, 4096}) {
-    KvSequence seq(**cache);
+    KvBlockTable seq(**cache);
     if (!seq.reserve(ctx + 32).ok()) return 1;
     // Fill positions [0, ctx) in chunks.
     std::vector<TokenId> toks(256, 100);

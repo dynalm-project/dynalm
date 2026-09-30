@@ -96,7 +96,7 @@ int cmd_run(std::span<const std::string_view> args) {
   CpuBackend backend(pool, isa);
 
   const KvGeometry geom = kv_geometry_for(cfg, kv_dtype, /*block_size=*/16, ctx);
-  auto cache = KvCache::create(geom, backend);
+  auto cache = KvBlockPool::create(geom, backend);
   if (!cache.ok()) {
     std::fprintf(stderr, "run: %s\n", cache.status().to_string().c_str());
     return 1;

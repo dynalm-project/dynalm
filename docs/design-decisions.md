@@ -294,3 +294,27 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
 - **Evidence:** Unit tests cover every transition, including KV release on finish,
   cancel and error, and KV exhaustion. All goldens pass unchanged through the
   rewritten generator.
+
+## DD-024: 16-token KV blocks; refcounted pool with a mutex-protected free list
+
+- **Decision:** Blocks hold 16 tokens. Per-block refcounts are atomic. The free list is a
+  LIFO vector under one short mutex. Block tables support clone (fork: shared blocks,
+  retained), truncate (rollback), append_shared (prefix cache) and make_writable
+  (copy-on-write before writing into a shared block).
+- **Reason (block size):** The sweep over 8/16/32/64 shows no attention-speed difference
+  (79–80 ms/token at 4K context), so the choice rests on memory and reuse. The
+  expected waste is half a block per sequence: 8 tokens × 23 KB = 184 KB for SmolLM2
+  f16 KV, about 12 MB at 64 sequences. Prefix reuse happens at block granularity, so
+  smaller blocks reuse more but mean more table entries and more partial-block
+  copy-on-write. 16 is the balance (and vLLM's default).
+- **Reason (no lock-free list):** allocate+release costs 12.5 ns uncontended and 424 ns p50
+  with 4 threads doing nothing else. Real demand is one allocation per 16 tokens per
+  sequence, about 100/s even at 64 concurrent sequences, so the mutex costs roughly
+  0.004% of one core. A lock-free free list would add ABA hazards and complexity for no
+  measurable gain (spec §20: no lock-free code for appearance). Phase 11 re-measures
+  under real concurrent load.
+- **Invariant:** A shared block is never written. Writers only touch blocks made
+  exclusive with make_writable, and the prefix cache shares only full blocks.
+- **Evidence:** bench_kv and the block sweep above. A 4-thread alloc/clone/COW/release
+  stress test is clean under TSAN, and a copy-on-write test verifies fork isolation on
+  actual K/V contents.

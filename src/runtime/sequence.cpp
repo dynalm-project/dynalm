@@ -16,7 +16,7 @@ std::string_view sequence_status_name(SequenceStatus s) {
   return "?";
 }
 
-SequenceState::SequenceState(uint64_t id, std::span<const TokenId> prompt, const StopParams& stop, KvCache& cache)
+SequenceState::SequenceState(uint64_t id, std::span<const TokenId> prompt, const StopParams& stop, KvBlockPool& cache)
     : id_(id), tokens_(prompt.begin(), prompt.end()), prompt_len_(static_cast<int32_t>(prompt.size())),
       stop_(stop), cache_(&cache), kv_(cache) {}
 

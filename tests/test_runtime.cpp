@@ -154,7 +154,7 @@ TEST_F(CpuOps, AttentionPagedMatchesNaive) {
       g.block_size = 4;
       g.num_blocks = 8;
       g.dtype = kvt;
-      auto cache = KvCache::create(g, be);
+      auto cache = KvBlockPool::create(g, be);
       ASSERT_TRUE(cache.ok());
       const int32_t table[] = {5, 2, 7};  // positions 0..11 scattered
       const KvLayerView kv = (*cache)->layer_view(0, table);
@@ -212,17 +212,17 @@ TEST(Sampler, GreedyPicksFirstMax) {
   EXPECT_EQ(sample_greedy(l), 1);
 }
 
-TEST(KvCache, BlockAccountingAndExhaustion) {
+TEST(KvBlockPool, BlockAccountingAndExhaustion) {
   ThreadPool pool(1);
   CpuBackend be(pool, CpuIsa::kGeneric);
   KvGeometry g{1, 1, 4, 4, 4, 3, DType::kF32};
-  auto cache = KvCache::create(g, be);
+  auto cache = KvBlockPool::create(g, be);
   ASSERT_TRUE(cache.ok());
   {
-    KvSequence s(**cache);
+    KvBlockTable s(**cache);
     ASSERT_TRUE(s.reserve(9).ok());  // 3 blocks
     EXPECT_EQ((*cache)->free_blocks(), 0);
-    KvSequence t(**cache);
+    KvBlockTable t(**cache);
     EXPECT_EQ(t.reserve(1).code(), StatusCode::kResourceExhausted);
   }
   EXPECT_EQ((*cache)->free_blocks(), 3);  // released on destruction
@@ -273,7 +273,7 @@ struct RealModel {
   std::unique_ptr<LoadedModel> model;
   std::unique_ptr<ThreadPool> pool;
   std::unique_ptr<CpuBackend> backend;
-  std::unique_ptr<KvCache> cache;
+  std::unique_ptr<KvBlockPool> cache;
   std::unique_ptr<Transformer> transformer;
 };
 
@@ -288,7 +288,7 @@ std::optional<RealModel> open_real(DType kv, int32_t batch, std::string path = e
   r.backend = std::make_unique<CpuBackend>(*r.pool, CpuIsa::kGeneric);
   const ModelConfig& c = r.model->config;
   KvGeometry g{c.num_layers, c.num_kv_heads, c.head_dim, c.head_dim_v, 16, 16, kv};
-  auto cache = KvCache::create(g, *r.backend);
+  auto cache = KvBlockPool::create(g, *r.backend);
   EXPECT_TRUE(cache.ok());
   r.cache = std::move(*cache);
   auto t = Transformer::create(c, r.model->weights, *r.backend, batch);
@@ -303,7 +303,7 @@ TEST(RuntimeGolden, SmolLm2LogitsMatchReference) {
   ASSERT_FALSE(ref.tokens.empty());
   auto rm = open_real(DType::kF32, 64);
   if (!rm) GTEST_SKIP() << "test model not present";
-  KvSequence seq(*rm->cache);
+  KvBlockTable seq(*rm->cache);
   ASSERT_TRUE(seq.reserve(static_cast<int64_t>(ref.tokens.size())).ok());
   std::vector<int32_t> pos(ref.tokens.size());
   std::iota(pos.begin(), pos.end(), 0);
@@ -345,7 +345,7 @@ TEST(RuntimeGolden, ChunkedPrefillEqualsSinglePass) {
   for (int32_t batch : {64, 5}) {
     auto rm = open_real(DType::kF32, batch);
     if (!rm) GTEST_SKIP() << "test model not present";
-    KvSequence seq(*rm->cache);
+    KvBlockTable seq(*rm->cache);
     ASSERT_TRUE(seq.reserve(static_cast<int64_t>(ref.tokens.size())).ok());
     std::vector<float> logits(static_cast<size_t>(rm->model->config.vocab_size));
     for (size_t off = 0; off < ref.tokens.size(); off += static_cast<size_t>(batch)) {
@@ -373,7 +373,7 @@ TEST(RuntimeGolden, SmolLm2Q8_0MatchesReference) {
   auto rm = open_real(DType::kF32, 64, engine::testing::smollm_q8_model());
   if (!rm) GTEST_SKIP() << "Q8_0 test model not present";
   ASSERT_EQ(rm->model->weights.get(TensorRole::kAttnQ, 0)->dtype(), DType::kQ8_0);
-  KvSequence seq(*rm->cache);
+  KvBlockTable seq(*rm->cache);
   ASSERT_TRUE(seq.reserve(static_cast<int64_t>(ref.tokens.size())).ok());
   std::vector<int32_t> pos(ref.tokens.size());
   std::iota(pos.begin(), pos.end(), 0);
@@ -400,7 +400,7 @@ TEST(RuntimeGolden, SmolLm2Q8_0MatchesReference) {
 TEST(RuntimeGolden, RejectsInvalidInput) {
   auto rm = open_real(DType::kF32, 8);
   if (!rm) GTEST_SKIP() << "test model not present";
-  KvSequence seq(*rm->cache);
+  KvBlockTable seq(*rm->cache);
   ASSERT_TRUE(seq.reserve(4).ok());
   std::vector<float> logits(static_cast<size_t>(rm->model->config.vocab_size));
   const TokenId bad[] = {-1};

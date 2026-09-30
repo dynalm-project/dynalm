@@ -142,7 +142,7 @@ void Transformer::norm(const TensorView& x, const TensorView& w, const TensorVie
   }
 }
 
-Status Transformer::forward(std::span<const TokenId> tokens, std::span<const int32_t> positions, KvCache& cache,
+Status Transformer::forward(std::span<const TokenId> tokens, std::span<const int32_t> positions, KvBlockPool& cache,
                             std::span<const int32_t> block_table, std::span<float> logits) {
   const ModelConfig& c = config_;
   const auto m = static_cast<int64_t>(tokens.size());

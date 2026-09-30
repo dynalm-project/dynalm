@@ -38,7 +38,7 @@ struct StopParams {
 
 class SequenceState {
  public:
-  SequenceState(uint64_t id, std::span<const TokenId> prompt, const StopParams& stop, KvCache& cache);
+  SequenceState(uint64_t id, std::span<const TokenId> prompt, const StopParams& stop, KvBlockPool& cache);
 
   uint64_t id() const { return id_; }
   SequenceStatus status() const { return status_; }
@@ -58,7 +58,11 @@ class SequenceState {
 
   // --- transitions (return an error on an illegal transition) ---
   // Ensures KV capacity for the next `n` tokens, then marks them computed.
-  Status reserve_kv(int32_t n) { return kv_.reserve(num_computed_ + n); }
+  // Shared (copy-on-write) blocks in that range are copied first.
+  Status reserve_kv(int32_t n) {
+    ENGINE_RETURN_IF_ERROR(kv_.reserve(num_computed_ + n));
+    return kv_.make_writable(num_computed_, num_computed_ + n);
+  }
   void mark_computed(int32_t n);
   // Appends a sampled token; finishes on EOG or the length limit.
   void append_token(TokenId t, const Tokenizer& tokenizer);
@@ -79,8 +83,8 @@ class SequenceState {
   SequenceStatus status_ = SequenceStatus::kWaiting;
   FinishReason finish_ = FinishReason::kNone;
   Status error_;
-  KvCache* cache_;
-  KvSequence kv_;
+  KvBlockPool* cache_;
+  KvBlockTable kv_;
 };
 
 // KV geometry for a model under a memory budget (bytes) or a token capacity.

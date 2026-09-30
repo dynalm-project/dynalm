@@ -71,3 +71,6 @@ engine_add_test(test_quant
 
 engine_add_test(test_sequence
   test_sequence.cpp)
+
+engine_add_test(test_kv_cache
+  test_kv_cache.cpp)

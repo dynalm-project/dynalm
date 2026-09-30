@@ -20,7 +20,7 @@ TokenizerData tiny_vocab() {
 class SequenceTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    auto cache = KvCache::create(KvGeometry{1, 1, 4, 4, 4, 8, DType::kF32}, backend);
+    auto cache = KvBlockPool::create(KvGeometry{1, 1, 4, 4, 4, 8, DType::kF32}, backend);
     ASSERT_TRUE(cache.ok());
     cache_ = std::move(*cache);
     auto tok = Tokenizer::create(tiny_vocab());
@@ -29,7 +29,7 @@ class SequenceTest : public ::testing::Test {
   }
   ThreadPool pool{1};
   CpuBackend backend{pool, CpuIsa::kGeneric};
-  std::unique_ptr<KvCache> cache_;
+  std::unique_ptr<KvBlockPool> cache_;
   std::unique_ptr<Tokenizer> tok_;
 };
 

@@ -60,14 +60,14 @@ TEST_P(TinyArch, MatchesReference) {
   ThreadPool pool(3);
   CpuBackend be(pool, CpuIsa::kGeneric);
   KvGeometry g{c.num_layers, c.num_kv_heads, c.head_dim, c.head_dim_v, 4, 16, DType::kF32};
-  auto cache = KvCache::create(g, be);
+  auto cache = KvBlockPool::create(g, be);
   ASSERT_TRUE(cache.ok());
 
   // Logits after the prompt (single pass).
   auto t = Transformer::create(c, (*m)->weights, be, 32);
   ASSERT_TRUE(t.ok()) << t.status().to_string();
   {
-    KvSequence seq(**cache);
+    KvBlockTable seq(**cache);
     ASSERT_TRUE(seq.reserve(static_cast<int64_t>(ref.tokens.size())).ok());
     std::vector<int32_t> pos(ref.tokens.size());
     std::iota(pos.begin(), pos.end(), 0);
@@ -118,11 +118,11 @@ TEST_P(RealArch, MatchesReference) {
   ThreadPool pool(4);
   CpuBackend be(pool, CpuIsa::kGeneric);
   KvGeometry g{c.num_layers, c.num_kv_heads, c.head_dim, c.head_dim_v, 16, 16, DType::kF32};
-  auto cache = KvCache::create(g, be);
+  auto cache = KvBlockPool::create(g, be);
   ASSERT_TRUE(cache.ok());
   auto t = Transformer::create(c, (*m)->weights, be, 64);
   ASSERT_TRUE(t.ok()) << t.status().to_string();
-  KvSequence seq(**cache);
+  KvBlockTable seq(**cache);
   ASSERT_TRUE(seq.reserve(static_cast<int64_t>(ref.tokens.size())).ok());
   std::vector<int32_t> pos(ref.tokens.size());
   std::iota(pos.begin(), pos.end(), 0);

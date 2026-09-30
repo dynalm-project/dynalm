@@ -34,7 +34,7 @@ class Transformer {
   // Runs tokens[i] at positions[i] (1 <= size <= max_batch_tokens) for one
   // sequence whose KV lives at `block_table`, writing K/V for every token and
   // the logits of the LAST token into `logits` (size vocab_size).
-  Status forward(std::span<const TokenId> tokens, std::span<const int32_t> positions, KvCache& cache,
+  Status forward(std::span<const TokenId> tokens, std::span<const int32_t> positions, KvBlockPool& cache,
                  std::span<const int32_t> block_table, std::span<float> logits);
 
  private:

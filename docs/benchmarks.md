@@ -154,3 +154,26 @@ That's about 2.5 ms per layer at 4K, which matches the measured +78 ms.
 Phase 17/18 plan: split-K ("flash-decoding") attention that parallelizes over KV
 blocks and merges partial softmaxes, plus F16C conversion. The target is a nearly flat
 curve up to several thousand tokens.
+
+## Phase 10 — paged KV
+
+### Pool operations (`bench_kv`, SmolLM2-135M geometry: 30 layers, 3 kv heads, 64 dims, f16, 16-token blocks)
+
+| operation | mean ns | p50 | p90 | p95 | p99 |
+|---|---|---|---|---|---|
+| allocate + release (1 thread) | 13.0 | 12.5 | 13.6 | 13.6 | 21.2 |
+| allocate + release (4 threads hammering) | 451 | 424 | 844 | 1013 | 1311 |
+| clone 256-block table + release | 2372 | 2277 | 2525 | 2635 | 3366 |
+| copy-on-write 1 block (360 KiB) | 6450 | 6146 | 6788 | 7319 | 11619 |
+
+### Block size sweep (`bench_decode_context ... 10 <bs>`, SmolLM2-135M Q8_0, p50 ms per decode token)
+
+| block size | ctx 256 | ctx 2048 | ctx 4096 |
+|---|---|---|---|
+| 8 | 16.6 | 49.3 | 80.3 |
+| 16 | 19.1 | 48.7 | 79.9 |
+| 32 | 19.0 | 49.4 | 80.5 |
+| 64 | 19.6 | 48.4 | 79.0 |
+
+Block size has no measurable effect on attention speed today: scalar fp16 compute
+dominates, and the per-token block-table lookup is noise. See DD-024 for the decision.
