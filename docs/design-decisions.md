@@ -373,3 +373,18 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   strict priority order and deadline handling. Outputs match isolated runs throughout.
 - **Tradeoffs:** Fixed budgets aren't optimal for every load. SLO-driven adaptive
   budgets are an AutoTuner item.
+
+## DD-028: Chunked prefill with a per-sequence chunk cap (default 32)
+
+- **Decision:** Prompts are prefilled in chunks bounded by the step's prefill budget, and
+  each sequence takes at most `max_prefill_chunk` rows per step (default 32). Several
+  prompts therefore prefill side by side.
+- **Reason:** Spec §23: a huge prompt must not monopolize the CPU. The budget protects
+  decoders (ITL). The per-sequence cap protects other *prefilling* requests from
+  head-of-line blocking behind a long prompt (TTFT of short requests).
+- **Evidence:** bench_long_prompt: decoder ITL p99 while a 2048-token prompt prefills is
+  36.7 s unchunked vs 1.09 s with 32-token chunks (+12% TTFT for the long request).
+  Test: a short prompt's first token arrives at step 1 instead of step 4 behind a
+  120-token prompt. Chunking never changes outputs (tests compare against isolated runs).
+- **Tradeoffs:** Smaller chunks mean more steps (per-step overhead) and a longer TTFT for
+  long prompts. The AutoTuner can size chunks from measured per-row cost.

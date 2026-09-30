@@ -245,3 +245,24 @@ A smaller prefill budget trades TTFT for ITL tail latency: ITL p99 drops up to 2
 (1226 → 481 ms at 32 requests), while TTFT p99 rises about 50% and throughput dips about 5%.
 Default: 64 (see DD-027). Both budgets are configuration, and the AutoTuner (Phase 22) can pick
 them per model and workload.
+
+## Phase 14 — chunked prefill (`bench_long_prompt`, SmolLM2-135M Q8_0, 10 threads)
+
+8 requests are decoding when a 2048-token prompt arrives. The table shows decoder ITL
+measured during the long prefill, and the long request's TTFT.
+
+| config | ITL p50 ms | ITL p90 | ITL p99 | long TTFT s |
+|---|---|---|---|---|
+| unchunked (whole prompt in one step) | 36710 | 36711 | 36711 | 36.71 |
+| prefill budget 256, chunk 256 | 4132 | 7592 | 7592 | 36.88 |
+| prefill budget 64, chunk 64 | 1147 | 1822 | 2114 | 38.85 |
+| prefill budget 32, chunk 32 | 624 | 1028 | 1086 | 41.19 |
+
+Without chunking a long prompt freezes every active conversation for its entire prefill
+(37 s here). 32-token chunks bound the stall to about 1 s p99 for +12% TTFT on the long
+request. The remaining per-step cost is 32 prefill rows attending over up to 2K context
+with scalar kernels (Phase 17/18).
+
+Head-of-line blocking (test `ChunkCapPreventsHeadOfLineBlocking`): with a per-sequence
+chunk cap of 16, a 4-token prompt submitted behind a 120-token prompt gets its first
+token in step 1 instead of step 4.

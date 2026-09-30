@@ -307,6 +307,40 @@ TEST_F(SchedulerTest, DeadlineExpiresQueuedAndRunningRequests) {
   EXPECT_EQ(pool->free_blocks(), pool->num_blocks());
 }
 
+// --- Phase 14: chunked prefill fairness ---
+
+// Returns the step at which `short_id` produced its first token.
+int first_token_step(Scheduler& sched, uint64_t short_id, std::map<uint64_t, std::vector<TokenId>>& tokens) {
+  for (int s = 1; s <= 64; ++s) {
+    sched.step();
+    if (!tokens[short_id].empty()) return s;
+  }
+  return -1;
+}
+
+TEST_F(SchedulerTest, ChunkCapPreventsHeadOfLineBlocking) {
+  const auto long_p = prompt(120, 1), short_p = prompt(4, 2);
+  int steps_capped = 0, steps_uncapped = 0;
+  for (int32_t chunk : {16, 0}) {
+    make_pool(128);
+    Scheduler sched(*tf, *pool, *model->tokenizer,
+                    SchedulerConfig{.decode_token_budget = 8, .prefill_token_budget = 32, .max_running = 8,
+                                    .max_prefill_chunk = chunk});
+    Collected out;
+    const uint64_t long_id = sched.submit(make_request(long_p, 5, out));
+    const uint64_t short_id = sched.submit(make_request(short_p, 5, out));
+    (chunk ? steps_capped : steps_uncapped) = first_token_step(sched, short_id, out.tokens);
+    if (chunk) {
+      EXPECT_EQ(sched.stats().last_prefill_rows, 20);  // 16 of the long prompt + all 4 of the short one
+    }
+    sched.run_until_idle();
+    EXPECT_EQ(out.tokens[long_id], solo(long_p, 5));   // chunking never changes results
+    EXPECT_EQ(out.tokens[short_id], solo(short_p, 5));
+  }
+  EXPECT_EQ(steps_capped, 1);
+  EXPECT_EQ(steps_uncapped, 4);  // behind 120 long-prompt tokens at 32 rows per step
+}
+
 TEST_F(SchedulerTest, QueueLatencyIsTracked) {
   Scheduler sched(*tf, *pool, *model->tokenizer,
                   SchedulerConfig{.decode_token_budget = 8, .prefill_token_budget = 32, .max_running = 1});

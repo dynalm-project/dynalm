@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Phase 14 — Chunked prefill
+- `SchedulerConfig::max_prefill_chunk` (default 32): per-sequence cap on prefill rows per
+  step, so prompts prefill side by side (no head-of-line blocking).
+- Test: a short prompt behind a long one gets its first token in step 1 (vs 4 unchunked);
+  outputs identical either way.
+- `bench_long_prompt`: decoder ITL p99 during a 2048-token prefill 36.7 s → 1.09 s.
+
 ### Phase 13 — Prefill/decode scheduler
 - `SchedulerConfig`: `decode_token_budget`, `prefill_token_budget`, `max_running`.
 - Decode rows scheduled first with least-recently-served rotation; prefill chunks by

@@ -237,7 +237,8 @@ bool Scheduler::step() {
       const bool decode = is_decode_row(*e);
       int32_t& used = decode ? decode_rows : prefill_rows;
       const int32_t budget = decode ? config_.decode_token_budget : config_.prefill_token_budget;
-      const int32_t n = std::min(e->seq->pending(), budget - used);
+      int32_t n = std::min(e->seq->pending(), budget - used);
+      if (!decode && config_.max_prefill_chunk > 0) n = std::min(n, config_.max_prefill_chunk);
       if (n <= 0) continue;
       const Status st = e->seq->reserve_kv(n);
       if (st.code() == StatusCode::kResourceExhausted) {

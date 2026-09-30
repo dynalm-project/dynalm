@@ -66,6 +66,10 @@ struct SchedulerConfig {
   int32_t decode_token_budget = 64;   // max decode rows per step
   int32_t prefill_token_budget = 64;  // max prefill rows per step (chunked prefill)
   int32_t max_running = 64;           // max admitted sequences
+  // Max prefill rows one sequence may take per step (0 = whole prefill
+  // budget). Smaller values let several prompts prefill side by side, so a
+  // short prompt is not stuck behind a long one (head-of-line blocking).
+  int32_t max_prefill_chunk = 32;
 };
 
 struct SchedulerStats {
