@@ -282,6 +282,7 @@ void check_golden(const std::string& model, const std::string& golden_file) {
 
 TEST(TokenizerGolden, SmolLm2) { check_golden(engine::testing::smollm_model(), "golden_smollm2.txt"); }
 TEST(TokenizerGolden, Qwen25) { check_golden(engine::testing::qwen_model(), "golden_qwen25.txt"); }
+TEST(TokenizerGolden, Gemma3Spm) { check_golden(engine::testing::gemma_model(), "golden_gemma3.txt"); }
 
 TEST(TokenizerGolden, SmolLm2ChatTemplate) {
   const std::string path = engine::testing::smollm_model();

@@ -11,7 +11,10 @@ add_library(engine_core STATIC
   logging/log.cpp
   memory/host_memory.cpp
   memory/storage.cpp
+  model/arch_gemma.cpp
   model/arch_llama.cpp
+  model/arch_phi.cpp
+  model/arch_qwen.cpp
   model/architecture.cpp
   model/transformer.cpp
   model_ir/model_config.cpp

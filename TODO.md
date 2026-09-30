@@ -10,7 +10,7 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
 - [x] Phase 4 — Tokenizer / chat template (BPE + SentencePiece from GGUF metadata)
 - [x] Phase 5 — Llama model
 - [x] Phase 6 — Basic CPU execution (single sequence, greedy, `engine run`)
-- [ ] Phase 7 — Qwen / Mistral / Gemma / Phi / DeepSeek adapters
+- [x] Phase 7 — Qwen / Mistral / Gemma / Phi / DeepSeek adapters
 - [ ] Phase 8 — Quantized GGUF execution
 - [ ] Phase 9 — KV cache
 - [ ] Phase 10 — Paged KV
@@ -36,7 +36,8 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
 ## Open items
 
 - Jinja subset interpreter for chat templates that no family matches (DD-013).
-- Pre-tokenizers for DeepSeek-LLM/V3, Tekken (Mistral Nemo), Gemma BPE variants (Phase 7).
+- Pre-tokenizers for DeepSeek-LLM/V3 and Tekken (Mistral Nemo).
+- YaRN and LongRoPE scaling (Qwen long-context, Phi-3-128k).
 
 - Get a small GGUF test model (~0.5B, e.g. Qwen2.5-0.5B-Instruct Q8_0/Q4_K_M) for Phases 2–8. Keep it out of git.
 - Clang in the Linux container (gcc is covered).

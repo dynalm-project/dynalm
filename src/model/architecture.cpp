@@ -1,5 +1,6 @@
 #include "model/architecture.h"
 
+#include <array>
 #include <string>
 
 #include "model/architectures.h"
@@ -84,6 +85,12 @@ Status validate_standard_decoder(const ModelConfig& c, const TensorRegistry& w) 
 
 Status ModelArchitecture::validate(const ModelConfig& config, const TensorRegistry& weights) const {
   return validate_standard_decoder(config, weights);
+}
+
+std::span<const ModelArchitecture* const> registered_architectures() {
+  static const std::array<const ModelArchitecture*, 4> kAll = {&llama_architecture(), &qwen_architecture(),
+                                                                &gemma_architecture(), &phi_architecture()};
+  return kAll;
 }
 
 const ModelArchitecture* find_architecture(std::string_view arch_id) {

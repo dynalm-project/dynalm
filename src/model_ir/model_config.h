@@ -82,6 +82,10 @@ struct ModelConfig {
   Activation activation = Activation::kSilu;
   MlpType mlp = MlpType::kGated;
   RopeConfig rope;
+  // Sliding-window layers use `rope_local` when set (Gemma 3: base 10k local,
+  // 1M global).
+  bool has_rope_local = false;
+  RopeConfig rope_local;
 
   bool attn_qkv_bias = false;     // Qwen2
   bool attn_output_bias = false;
@@ -103,6 +107,9 @@ struct ModelConfig {
   MoeConfig moe;
 
   int32_t gqa_group() const { return num_kv_heads > 0 ? num_heads / num_kv_heads : 0; }
+  const RopeConfig& layer_rope(int layer) const {
+    return has_rope_local && layer_uses_sliding_window(layer) ? rope_local : rope;
+  }
   bool layer_uses_sliding_window(int layer) const {
     return sliding_window > 0 &&
            (sliding_layers.empty() || sliding_layers[static_cast<size_t>(layer)]);

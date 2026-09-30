@@ -77,6 +77,9 @@ class TensorRegistry {
   Status add(TensorRole role, int layer, Tensor tensor);
 
   const Tensor* find(TensorRole role, int layer = -1) const;
+  // Removes and returns a tensor (adapters use this to reinterpret roles,
+  // e.g. a fused gate|up stored under the "up" name).
+  std::optional<Tensor> take(TensorRole role, int layer = -1);
   Result<Tensor> get(TensorRole role, int layer = -1) const;  // kNotFound if absent
   bool has(TensorRole role, int layer = -1) const { return find(role, layer) != nullptr; }
 

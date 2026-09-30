@@ -199,8 +199,9 @@ Status Transformer::forward(std::span<const TokenId> tokens, std::span<const int
         backend_.rms_norm(kh, L.k_norm, c.norm_eps, kh);
       }
     }
-    backend_.rope(q, c.num_heads, c.head_dim, positions, c.rope, freq_factors);
-    backend_.rope(k, c.num_kv_heads, c.head_dim, positions, c.rope, freq_factors);
+    const RopeConfig& rope = c.layer_rope(l);
+    backend_.rope(q, c.num_heads, c.head_dim, positions, rope, freq_factors);
+    backend_.rope(k, c.num_kv_heads, c.head_dim, positions, rope, freq_factors);
 
     const KvLayerView kv = cache.layer_view(l, block_table);
     backend_.kv_store(k, v, positions, kv);

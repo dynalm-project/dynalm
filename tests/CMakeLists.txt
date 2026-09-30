@@ -21,6 +21,10 @@ set(ENGINE_TEST_MODEL "${PROJECT_SOURCE_DIR}/models/SmolLM2-135M-Instruct-f16.gg
     CACHE FILEPATH "GGUF model used by optional real-model tests")
 set(ENGINE_TEST_MODEL_QWEN "${PROJECT_SOURCE_DIR}/models/qwen2.5-0.5b-instruct-q8_0.gguf"
     CACHE FILEPATH "Qwen GGUF used by optional real-model tests")
+set(ENGINE_TEST_MODEL_QWEN_F16 "${PROJECT_SOURCE_DIR}/models/qwen2.5-0.5b-instruct-fp16.gguf"
+    CACHE FILEPATH "Qwen f16 GGUF used by optional runtime golden tests")
+set(ENGINE_TEST_MODEL_GEMMA "${PROJECT_SOURCE_DIR}/models/gemma-3-270m-it-F16.gguf"
+    CACHE FILEPATH "Gemma-3 f16 GGUF used by optional golden tests")
 
 function(engine_add_test name)
   add_executable(${name} ${ARGN})
@@ -28,7 +32,9 @@ function(engine_add_test name)
   target_compile_definitions(${name} PRIVATE
     ENGINE_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
     ENGINE_TEST_MODEL_PATH="${ENGINE_TEST_MODEL}"
-    ENGINE_TEST_MODEL_QWEN_PATH="${ENGINE_TEST_MODEL_QWEN}")
+    ENGINE_TEST_MODEL_QWEN_PATH="${ENGINE_TEST_MODEL_QWEN}"
+    ENGINE_TEST_MODEL_QWEN_F16_PATH="${ENGINE_TEST_MODEL_QWEN_F16}"
+    ENGINE_TEST_MODEL_GEMMA_PATH="${ENGINE_TEST_MODEL_GEMMA}")
   gtest_discover_tests(${name} DISCOVERY_TIMEOUT 60)
 endfunction()
 
@@ -50,3 +56,6 @@ engine_add_test(test_tokenizer
 
 engine_add_test(test_runtime
   test_runtime.cpp)
+
+engine_add_test(test_architectures
+  test_architectures.cpp)

@@ -53,6 +53,7 @@ Result<std::unique_ptr<LoadedModel>> load_model(const std::string& path) {
   m->weight_bytes = static_cast<int64_t>(file->total_tensor_bytes());
 
   ENGINE_RETURN_IF_ERROR(m->architecture->configure(m->config, m->weights));
+  ENGINE_RETURN_IF_ERROR(m->architecture->prepare_weights(m->config, m->weights));
   ENGINE_RETURN_IF_ERROR(m->architecture->validate(m->config, m->weights));
 
   for (const auto& info : file->tensors()) {

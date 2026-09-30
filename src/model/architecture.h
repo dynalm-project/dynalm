@@ -30,6 +30,14 @@ class ModelArchitecture {
   // the registry for optional features (e.g. biases present).
   virtual Status configure(ModelConfig& config, const TensorRegistry& weights) const = 0;
 
+  // Optional: reinterpret weights after configure(), e.g. move a fused tensor
+  // to its fused role. Runs before validate().
+  virtual Status prepare_weights(const ModelConfig& config, TensorRegistry& weights) const {
+    (void)config;
+    (void)weights;
+    return Status::Ok();
+  }
+
   // Checks required tensors and their shapes. The default validates the
   // standard pre-norm decoder described by the config.
   virtual Status validate(const ModelConfig& config, const TensorRegistry& weights) const;

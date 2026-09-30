@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Phase 7 — Qwen / Mistral / Gemma / Phi / DeepSeek adapters
+- Adapters: Qwen (`qwen2`, `qwen3`), Gemma (`gemma`, `gemma2`, `gemma3`), Phi (`phi3`).
+  Mistral and dense DeepSeek run via the Llama/Qwen adapters (DD-021).
+- `ModelArchitecture::prepare_weights` hook + `TensorRegistry::take` (Phi-3 fused gate|up).
+- Per-layer local RoPE (`ModelConfig::rope_local`) for Gemma-3 sliding layers; Gemma-2/3
+  sliding-window patterns; 27B query scaling.
+- `tools/ref_model.py`: generalized NumPy reference (all families, lazy fp32 upcast).
+- `tools/make_tiny_models.py`: committed tiny GGUFs + fixtures for all 7 architectures.
+- Real-model goldens: Qwen2.5-0.5B f16 and Gemma-3-270M f16 (optional); Gemma-3 SPM
+  tokenizer golden.
+
 ### Phases 5 + 6 — Llama model and basic CPU execution
 (One commit: the Llama adapter can only be verified by executing it. The golden test covers both.)
 - `model/architecture`: `ModelArchitecture` adapter interface, registry, and shared

@@ -18,6 +18,11 @@ inline std::string model_path(const char* env, const char* fallback) {
 inline std::string smollm_model() { return model_path("ENGINE_TEST_MODEL", ENGINE_TEST_MODEL_PATH); }
 inline std::string qwen_model() { return model_path("ENGINE_TEST_MODEL_QWEN", ENGINE_TEST_MODEL_QWEN_PATH); }
 
+inline std::string qwen_f16_model() {
+  return model_path("ENGINE_TEST_MODEL_QWEN_F16", ENGINE_TEST_MODEL_QWEN_F16_PATH);
+}
+inline std::string gemma_model() { return model_path("ENGINE_TEST_MODEL_GEMMA", ENGINE_TEST_MODEL_GEMMA_PATH); }
+
 inline bool exists(const std::string& p) { return !p.empty() && std::filesystem::exists(p); }
 
 }  // namespace engine::testing

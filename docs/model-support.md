@@ -3,11 +3,11 @@
 | Family | Adapter | Status |
 |---|---|---|
 | Llama (incl. Mistral dense, DeepSeek-LLM, SmolLM via `llama` arch) | LlamaArchitecture | ✅ runs; golden-tested on SmolLM2-135M (f16) |
-| Qwen | QwenAdapter | planned (Phase 7) |
-| Mistral | MistralAdapter | planned (Phase 7) |
-| Gemma | GemmaAdapter | planned (Phase 7) |
-| Phi | PhiAdapter | planned (Phase 7) |
-| DeepSeek (dense) | DeepSeekAdapter | planned (Phase 7) |
+| Qwen2 / Qwen2.5 / Qwen3 (dense) | QwenArchitecture (`qwen2`, `qwen3`) | ✅ tiny-model golden; Qwen2.5-0.5B real golden |
+| Mistral 7B (dense) | via LlamaArchitecture (GGUF arch `llama`) | ✅ same code path as Llama (DD-021) |
+| Gemma / Gemma 2 / Gemma 3 (text) | GemmaArchitecture (`gemma`, `gemma2`, `gemma3`) | ✅ tiny-model golden; Gemma-3-270M real golden |
+| Phi-3 / 3.5 / 4-mini (dense) | PhiArchitecture (`phi3`) | ✅ tiny-model golden (no real checkpoint fits the dev machine) |
+| DeepSeek dense (LLM/Coder, R1-Distill) | via Llama / Qwen adapters | ⚠ R1-Distill-Qwen OK; DeepSeek-LLM needs its pre-tokenizer (TODO) |
 | MoE (Mixtral, DeepSeek-MoE, Qwen-MoE) | — | Phase 25 |
 
 Formats: GGUF v2/v3 ✅ (parsing and inspection, Phase 2), SafeTensors (Phase 23).
@@ -22,9 +22,11 @@ Verified files: SmolLM2-135M-Instruct f16 (llama arch, 30 layers, 272 tensors).
 | GGUF `tokenizer.ggml.model` / `pre` | Status |
 |---|---|
 | `gpt2` + gpt2/default, llama3/llama-bpe, qwen2, smollm/starcoder | ✅ (golden-tested: SmolLM2, Qwen2.5) |
-| `llama` (SentencePiece) | ✅ (synthetic tests; real-model golden pending a Llama-2/Mistral file) |
+| `llama` (SentencePiece) | ✅ (golden-tested: Gemma-3, 262K vocab) |
 | deepseek-llm, deepseek-v3, tekken, others | not yet (clear error) |
 
 Chat templates: ChatML, Llama-3, Llama-2, Mistral, Gemma, Phi-3, DeepSeek-V2/3.
 
 Weight types that run today: f32, f16, bf16. Quantized types arrive in Phase 8.
+
+Not yet: YaRN / LongRoPE scaling (Qwen long-context configs, Phi-3-128k), Gemma-3 vision.

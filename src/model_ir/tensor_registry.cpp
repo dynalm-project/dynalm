@@ -58,6 +58,15 @@ const Tensor* TensorRegistry::find(TensorRole role, int layer) const {
   return (s && s->has_value()) ? &**s : nullptr;
 }
 
+std::optional<Tensor> TensorRegistry::take(TensorRole role, int layer) {
+  std::optional<Tensor>* s = slot(role, layer);
+  if (!s || !s->has_value()) return std::nullopt;
+  std::optional<Tensor> out = std::move(*s);
+  s->reset();
+  --count_;
+  return out;
+}
+
 Result<Tensor> TensorRegistry::get(TensorRole role, int layer) const {
   if (const Tensor* t = find(role, layer)) return *t;
   std::string where = layer >= 0 ? " (layer " + std::to_string(layer) + ")" : "";

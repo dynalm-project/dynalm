@@ -40,9 +40,4 @@ const ModelArchitecture& llama_architecture() {
   return a;
 }
 
-std::span<const ModelArchitecture* const> registered_architectures() {
-  static const std::array<const ModelArchitecture*, 1> kAll = {&llama_architecture()};
-  return kAll;
-}
-
 }  // namespace engine

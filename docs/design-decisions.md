@@ -237,3 +237,31 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   that self-consistency tests miss.
 - **Evidence:** SmolLM2-135M: max |Δlogit| < 2e-3 over the top 32; greedy continuation
   identical with f32 and f16 KV; chunked prefill (batch 5) equals a single pass.
+
+## DD-020: Tiny random-weight models as committed adapter fixtures
+
+- **Decision:** `tools/make_tiny_models.py` writes one small GGUF per architecture
+  (160–650 KB, f16, fixed seed) that exercises that family's features: QKV bias, QK-norm,
+  decoupled head_dim, post-norms, soft-caps, sliding-window patterns, local RoPE base,
+  fused QKV and gate|up. It also writes NumPy-reference logits and a greedy continuation
+  for each. The models and fixtures are committed.
+- **Reason:** Every adapter is verified numerically in CI with no downloads, including
+  families whose smallest real checkpoint doesn't fit this machine (Phi-3 at 3.8B).
+  Real f16 checkpoints (Qwen2.5-0.5B, Gemma-3-270M) add optional end-to-end checks.
+- **Tradeoffs:** Random weights can't catch tokenizer or chat-template problems or
+  realistic numeric ranges. The real-model and tokenizer golden tests cover those.
+- **Evidence:** All 7 architectures match the reference (top-32 logits and 6-token greedy)
+  on the first run, with chunked prefill (batch 5) over 12-token prompts that exceed the
+  sliding windows.
+
+## DD-021: Mistral and dense DeepSeek run through existing adapters
+
+- **Decision:** No separate Mistral/DeepSeek adapter classes. Their GGUFs declare
+  `general.architecture = llama` (Mistral 7B, DeepSeek-LLM/Coder) or `qwen2`
+  (DeepSeek-R1-Distill-Qwen), and those adapters already describe them exactly.
+  `deepseek`/`deepseek2` (MoE, MLA) come with Phase 25.
+- **Reason:** The spec asks us not to duplicate transformer code or add abstraction
+  without purpose. An adapter that only renames another adapter adds nothing.
+- **Gaps:** The DeepSeek-LLM and DeepSeek-V3 pre-tokenizers aren't implemented yet, so
+  those files fail with a clear error. Mistral v0.1's sliding window isn't in its GGUF
+  metadata; llama.cpp ignores it too.
