@@ -25,3 +25,7 @@ engine_add_test(test_foundation
   test_status.cpp
   test_logging.cpp
   test_cpu_info.cpp)
+
+engine_add_test(test_tensor
+  test_dtype.cpp
+  test_tensor.cpp)

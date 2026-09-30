@@ -60,3 +60,40 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
 - **Reason:** A standard, well-known framework. Pinning the hash makes builds
   reproducible.
 - **Tradeoffs:** The first configure needs network access, or a pre-installed GTest.
+
+## DD-006: Byte strides; quantized innermost dim is packed
+
+- **Decision:** `TensorLayout` stores strides in bytes. For block-quantized dtypes the
+  innermost dimension is always packed (stride recorded as 0). It can only be sliced on
+  block boundaries and can't be transposed.
+- **Reason:** A Q4_K row can't be addressed per element; addressing only makes sense
+  per 256-element block. Byte strides handle scalar and block types the same way. This
+  matches GGML's `nb[]`, so GGUF tensors map in with zero copies.
+- **Alternatives:** element strides plus a special case for quantized types; separate
+  tensor classes for quantized weights.
+- **Tradeoffs:** Kernels must use `dtype_row_bytes()` rather than `n * sizeof(T)` for
+  row sizes.
+
+## DD-007: Non-owning TensorView for kernels; owning Tensor for lifetime
+
+- **Decision:** `TensorView` (pointer + layout + device) is trivially copyable and has no
+  refcount. `Tensor` = `shared_ptr<Storage>` + view. Kernels and the runtime's inner loops
+  take views. Weights and KV pools hold Tensors.
+- **Reason:** No atomic refcount traffic on hot paths. Ownership stays explicit at
+  subsystem boundaries (the model owns weights, the KV pool owns blocks).
+- **Alternatives:** a single refcounted tensor type (PyTorch-style).
+- **Tradeoffs:** A view can dangle if it outlives its Tensor. The rule: views never
+  outlive the call or step that created them.
+- **Evidence:** `select+slice` p50 is 77 ns (bench_tensor). That's cheap for graph setup
+  but not for per-element use. Kernels compute addresses directly.
+- **Note:** The spec lists a separate `TensorMetadata` type. It isn't needed: dtype, shape
+  and strides are in `TensorLayout`, and device and alignment are properties of the
+  `Storage`. Adding the type would only add another layer.
+
+## DD-008: Engine-owned DType; file type IDs live in loaders
+
+- **Decision:** `DType` is the engine's own enum. GGML type IDs are mapped only inside
+  `loader/gguf`. Types the engine can't run (IQ*, TQ*, MXFP4) still get their geometry
+  checked, so the file is validated, and they're reported as unsupported.
+- **Reason:** Keeps the core free of GGUF (spec §5). A SafeTensors loader maps its own
+  dtype strings the same way.

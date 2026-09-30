@@ -5,3 +5,4 @@ function(engine_add_benchmark name)
 endfunction()
 
 engine_add_benchmark(bench_foundation bench_foundation.cpp)
+engine_add_benchmark(bench_tensor bench_tensor.cpp)

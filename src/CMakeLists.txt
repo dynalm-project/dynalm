@@ -4,9 +4,13 @@ configure_file(common/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/common/
 # benchmarks, CLI and server all link against this one library.
 add_library(engine_core STATIC
   common/status.cpp
+  dtype/dtype.cpp
   logging/log.cpp
+  memory/host_memory.cpp
+  memory/storage.cpp
   platform/cpu_info.cpp
   platform/isa.cpp
+  tensor/tensor.cpp
 )
 
 target_include_directories(engine_core PUBLIC
