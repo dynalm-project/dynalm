@@ -163,7 +163,9 @@ TEST_F(CpuOps, AttentionPagedMatchesNaive) {
       Tensor k = rand(DType::kF32, {T, 16}), v = rand(DType::kF32, {T, 16});
       std::vector<int32_t> pos(T);
       std::iota(pos.begin(), pos.end(), 0);
-      be.kv_store(k, v, pos, kv);
+      const std::vector<int32_t> row_seq(T, 0);
+      const KvLayerView views[] = {kv};
+      be.kv_store(k, v, pos, row_seq, views);
 
       Tensor q = rand(DType::kF32, {T, H * 8});
       auto out = Tensor::zeros(DType::kF32, {T, H * 8});
@@ -171,7 +173,8 @@ TEST_F(CpuOps, AttentionPagedMatchesNaive) {
       ap.q = q;
       ap.out = *out;
       ap.positions = pos;
-      ap.kv = kv;
+      ap.row_seq = row_seq;
+      ap.kv = views;
       ap.num_heads = static_cast<int32_t>(H);
       ap.scale = 0.35f;
       ap.sliding_window = window;

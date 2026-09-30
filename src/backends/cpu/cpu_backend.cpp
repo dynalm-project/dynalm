@@ -196,9 +196,10 @@ void CpuBackend::rope(const TensorView& x, int32_t num_heads, int32_t head_dim, 
 }
 
 void CpuBackend::kv_store(const TensorView& k, const TensorView& v, std::span<const int32_t> positions,
-                          const KvLayerView& kv) {
-  const KvGeometry& g = *kv.geom;
+                          std::span<const int32_t> row_seq, std::span<const KvLayerView> kv_views) {
   for (size_t r = 0; r < positions.size(); ++r) {
+    const KvLayerView& kv = kv_views[static_cast<size_t>(row_seq[r])];
+    const KvGeometry& g = *kv.geom;
     const float* kr = row_ptr<const float>(k, static_cast<int64_t>(r));
     const float* vr = row_ptr<const float>(v, static_cast<int64_t>(r));
     for (int32_t h = 0; h < g.num_kv_heads; ++h) {
@@ -219,8 +220,7 @@ void CpuBackend::kv_store(const TensorView& k, const TensorView& v, std::span<co
 }
 
 void CpuBackend::attention(const AttentionParams& p) {
-  const KvLayerView& kv = p.kv;
-  const KvGeometry& g = *kv.geom;
+  const KvGeometry& g = *p.kv.front().geom;  // all sequences share the pool geometry
   const int32_t group = p.num_heads / g.num_kv_heads;
   const int32_t hd = g.head_dim, hdv = g.head_dim_v;
   const size_t m = p.positions.size();
@@ -234,6 +234,7 @@ void CpuBackend::attention(const AttentionParams& p) {
       const size_t r = job / static_cast<size_t>(p.num_heads);
       const int32_t h = static_cast<int32_t>(job % static_cast<size_t>(p.num_heads));
       const int32_t kvh = h / group;
+      const KvLayerView& kv = p.kv[static_cast<size_t>(p.row_seq[r])];
       const float* q = row_ptr<const float>(p.q, static_cast<int64_t>(r)) + static_cast<int64_t>(h) * hd;
       float* out = row_ptr<float>(p.out, static_cast<int64_t>(r)) + static_cast<int64_t>(h) * hdv;
       const int64_t pos = p.positions[r];

@@ -318,3 +318,20 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
 - **Evidence:** bench_kv and the block sweep above. A 4-thread alloc/clone/COW/release
   stress test is clean under TSAN, and a copy-on-write test verifies fork isolation on
   actual K/V contents.
+
+## DD-025: Batched forward over flattened rows from many sequences
+
+- **Decision:** `Transformer::forward_batch(seqs)` flattens every sequence's tokens into
+  one row batch. Dense ops (matmul, norms, MLP) run on all rows together. Attention and
+  kv_store take a per-row sequence index plus one KV view per sequence. Logits are
+  computed only for rows that request them (gathered first). The single-sequence
+  `forward` is a wrapper.
+- **Reason:** This is the foundation of continuous batching. Decode and prefill rows
+  from different requests share one pass, and each weight is read once per step.
+  Rows are mathematically independent, so batching must not change results.
+- **Alternatives:** padding sequences to a common length ([batch, seq] tensors) wastes
+  compute on padding and complicates chunked prefill.
+- **Evidence:** Mixed batches (decode rows + prefill chunks, with and without logits)
+  are bit-identical to running each sequence alone, for Llama, Gemma-3 (sliding
+  windows, local RoPE) and Phi-3 (fused projections). bench_batch_decode shows up to
+  2.4× aggregate throughput.

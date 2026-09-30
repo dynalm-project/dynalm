@@ -1,6 +1,7 @@
 #include "model/transformer.h"
 
 #include <cmath>
+#include <cstring>
 #include <string>
 
 #include "quant/dequant.h"
@@ -144,22 +145,51 @@ void Transformer::norm(const TensorView& x, const TensorView& w, const TensorVie
 
 Status Transformer::forward(std::span<const TokenId> tokens, std::span<const int32_t> positions, KvBlockPool& cache,
                             std::span<const int32_t> block_table, std::span<float> logits) {
-  const ModelConfig& c = config_;
-  const auto m = static_cast<int64_t>(tokens.size());
-  if (m == 0 || m > max_batch_ || positions.size() != tokens.size()) {
-    return InvalidArgument("forward: batch of " + std::to_string(m) + " tokens (max " + std::to_string(max_batch_) +
-                           ")");
-  }
-  if (static_cast<int64_t>(logits.size()) != c.vocab_size) return InvalidArgument("forward: logits size");
-  for (TokenId t : tokens) {
-    if (t < 0 || t >= c.vocab_size) return InvalidArgument("forward: token id " + std::to_string(t) + " out of range");
-  }
-  const int32_t bs = cache.geometry().block_size;
-  for (int32_t p : positions) {
-    if (p < 0 || static_cast<int64_t>(p / bs) >= static_cast<int64_t>(block_table.size())) {
-      return InvalidArgument("forward: position " + std::to_string(p) + " has no KV block");
+  if (tokens.empty() || positions.size() != tokens.size()) return InvalidArgument("forward: empty or mismatched batch");
+  for (size_t i = 1; i < positions.size(); ++i) {
+    if (positions[i] != positions[0] + static_cast<int32_t>(i)) {
+      return InvalidArgument("forward: positions must be consecutive");
     }
   }
+  const SeqBatch one{tokens, positions[0], block_table, true};
+  return forward_batch({&one, 1}, cache, logits);
+}
+
+Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& cache, std::span<float> logits) {
+  const ModelConfig& c = config_;
+  // --- validate and flatten the batch ---
+  batch_tokens_.clear();
+  batch_pos_.clear();
+  batch_seq_.clear();
+  logit_rows_.clear();
+  const int32_t bs = cache.geometry().block_size;
+  for (size_t si = 0; si < seqs.size(); ++si) {
+    const SeqBatch& sb = seqs[si];
+    if (sb.tokens.empty()) return InvalidArgument("forward: sequence with no tokens");
+    if (batch_tokens_.size() + sb.tokens.size() > static_cast<size_t>(max_batch_)) {
+      return InvalidArgument("forward: batch exceeds max_batch_tokens (" + std::to_string(max_batch_) + ")");
+    }
+    const int64_t last = static_cast<int64_t>(sb.start_pos) + static_cast<int64_t>(sb.tokens.size()) - 1;
+    if (sb.start_pos < 0 || last / bs >= static_cast<int64_t>(sb.block_table.size())) {
+      return InvalidArgument("forward: position " + std::to_string(last) + " has no KV block");
+    }
+    for (size_t i = 0; i < sb.tokens.size(); ++i) {
+      const TokenId t = sb.tokens[i];
+      if (t < 0 || t >= c.vocab_size) return InvalidArgument("forward: token id " + std::to_string(t) + " out of range");
+      batch_tokens_.push_back(t);
+      batch_pos_.push_back(sb.start_pos + static_cast<int32_t>(i));
+      batch_seq_.push_back(static_cast<int32_t>(si));
+    }
+    if (sb.want_logits) logit_rows_.push_back(static_cast<int32_t>(batch_tokens_.size()) - 1);
+  }
+  if (batch_tokens_.empty()) return InvalidArgument("forward: empty batch");
+  if (logits.size() != logit_rows_.size() * static_cast<size_t>(c.vocab_size)) {
+    return InvalidArgument("forward: logits buffer must hold " + std::to_string(logit_rows_.size()) + " rows");
+  }
+  const auto m = static_cast<int64_t>(batch_tokens_.size());
+  const std::span<const TokenId> tokens = batch_tokens_;
+  const std::span<const int32_t> positions = batch_pos_;
+  const std::span<const int32_t> row_seq = batch_seq_;
 
   const int64_t q_dim = static_cast<int64_t>(c.num_heads) * c.head_dim;
   const int64_t k_dim = static_cast<int64_t>(c.num_kv_heads) * c.head_dim;
@@ -203,14 +233,16 @@ Status Transformer::forward(std::span<const TokenId> tokens, std::span<const int
     backend_.rope(q, c.num_heads, c.head_dim, positions, rope, freq_factors);
     backend_.rope(k, c.num_kv_heads, c.head_dim, positions, rope, freq_factors);
 
-    const KvLayerView kv = cache.layer_view(l, block_table);
-    backend_.kv_store(k, v, positions, kv);
+    kv_views_.clear();
+    for (const SeqBatch& sb : seqs) kv_views_.push_back(cache.layer_view(l, sb.block_table));
+    backend_.kv_store(k, v, positions, row_seq, kv_views_);
 
     AttentionParams ap;
     ap.q = q;
     ap.out = attn;
     ap.positions = positions;
-    ap.kv = kv;
+    ap.row_seq = row_seq;
+    ap.kv = kv_views_;
     ap.num_heads = c.num_heads;
     ap.scale = attn_scale;
     ap.softcap = c.attn_logit_softcap;
@@ -245,14 +277,22 @@ Status Transformer::forward(std::span<const TokenId> tokens, std::span<const int
     backend_.add(x, o, x);
   }
 
-  // Logits for the last token only.
-  const TensorView x_last = view2d(static_cast<std::byte*>(x.data()) + (m - 1) * x.stride(0), 1, c.hidden_size,
-                                   x.stride(0));
-  const TensorView xn_last = rows_of(xn_, 1);
-  norm(x_last, output_norm_, output_norm_b_, xn_last);
-  const TensorView out = view2d(logits.data(), 1, c.vocab_size, c.vocab_size * 4);
-  backend_.matmul(xn_last, lm_head_, nullptr, out);
-  if (c.final_logit_softcap > 0) backend_.softcap(out, c.final_logit_softcap);
+  // Logits only for requested rows: gather them into contiguous scratch,
+  // then final norm + LM head on just those rows.
+  if (!logit_rows_.empty()) {
+    const auto n_out = static_cast<int64_t>(logit_rows_.size());
+    const TensorView gathered = rows_of(o_, n_out);  // o_ is free after the last layer
+    for (int64_t i = 0; i < n_out; ++i) {
+      std::memcpy(static_cast<std::byte*>(gathered.data()) + i * gathered.stride(0),
+                  static_cast<const std::byte*>(x.data()) + logit_rows_[static_cast<size_t>(i)] * x.stride(0),
+                  static_cast<size_t>(c.hidden_size) * sizeof(float));
+    }
+    const TensorView normed = rows_of(xn_, n_out);
+    norm(gathered, output_norm_, output_norm_b_, normed);
+    const TensorView out = view2d(logits.data(), n_out, c.vocab_size, c.vocab_size * 4);
+    backend_.matmul(normed, lm_head_, nullptr, out);
+    if (c.final_logit_softcap > 0) backend_.softcap(out, c.final_logit_softcap);
+  }
   return Status::Ok();
 }
 

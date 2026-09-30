@@ -23,6 +23,16 @@
 
 namespace engine {
 
+// One sequence's slice of a batched forward pass: `tokens` occupy positions
+// [start_pos, start_pos + tokens.size()) of the sequence whose KV lives at
+// `block_table`.
+struct SeqBatch {
+  std::span<const TokenId> tokens;
+  int32_t start_pos = 0;
+  std::span<const int32_t> block_table;
+  bool want_logits = true;  // compute logits for this sequence's last token
+};
+
 class Transformer {
  public:
   static Result<std::unique_ptr<Transformer>> create(const ModelConfig& config, const TensorRegistry& weights,
@@ -36,6 +46,12 @@ class Transformer {
   // the logits of the LAST token into `logits` (size vocab_size).
   Status forward(std::span<const TokenId> tokens, std::span<const int32_t> positions, KvBlockPool& cache,
                  std::span<const int32_t> block_table, std::span<float> logits);
+
+  // Batched forward over several sequences (total tokens <= max_batch_tokens).
+  // Every weight is read once for the whole batch. Logits for the last token
+  // of each sequence with want_logits are written to `logits` in order, one
+  // row of vocab_size floats each.
+  Status forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& cache, std::span<float> logits);
 
  private:
   struct Layer {
@@ -67,6 +83,10 @@ class Transformer {
 
   // Scratch [max_batch, ...]
   Tensor x_, xn_, qkv_, attn_, o_, ff_a_, ff_b_;
+  // Per-call batch metadata (reused, capacity max_batch).
+  std::vector<TokenId> batch_tokens_;
+  std::vector<int32_t> batch_pos_, batch_seq_, logit_rows_;
+  std::vector<KvLayerView> kv_views_;
 };
 
 }  // namespace engine

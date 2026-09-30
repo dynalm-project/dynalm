@@ -41,7 +41,7 @@ class CpuBackend final : public Backend {
   void rope(const TensorView& x, int32_t num_heads, int32_t head_dim, std::span<const int32_t> positions,
             const RopeConfig& rope, const float* freq_factors) override;
   void kv_store(const TensorView& k, const TensorView& v, std::span<const int32_t> positions,
-                const KvLayerView& kv) override;
+                std::span<const int32_t> row_seq, std::span<const KvLayerView> kv) override;
   void attention(const AttentionParams& p) override;
   void act_mul(Activation act, const TensorView& gate, const TensorView& up, const TensorView& out) override;
   void activation(Activation act, const TensorView& x, const TensorView& out) override;

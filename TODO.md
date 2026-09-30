@@ -14,7 +14,7 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
 - [x] Phase 8 — Quantized GGUF execution
 - [x] Phase 9 — KV cache
 - [x] Phase 10 — Paged KV
-- [ ] Phase 11 — Concurrent sequences
+- [x] Phase 11 — Concurrent sequences
 - [ ] Phase 12 — Continuous batching
 - [ ] Phase 13 — Prefill/decode scheduler
 - [ ] Phase 14 — Chunked prefill

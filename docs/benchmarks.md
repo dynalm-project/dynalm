@@ -177,3 +177,26 @@ curve up to several thousand tokens.
 
 Block size has no measurable effect on attention speed today: scalar fp16 compute
 dominates, and the per-token block-table lookup is noise. See DD-024 for the decision.
+
+## Phase 11 — concurrent sequences (`bench_batch_decode`, 10 threads, 128-token context each)
+
+One step = one decode token for each of N sequences, in a single batched forward pass.
+
+| seqs | SmolLM2-135M Q8_0 step p50 ms | p99 | aggregate tok/s | Qwen2.5-0.5B Q8_0 step p50 ms | p99 | aggregate tok/s |
+|---|---|---|---|---|---|---|
+| 1 | 14.6 | 16.8 | 68.3 | 51.6 | 80.0 | 19.4 |
+| 2 | 20.9 | 22.1 | 95.5 | 68.4 | 79.8 | 29.3 |
+| 4 | 32.2 | 34.2 | 124.3 | 106.4 | 127.7 | 37.6 |
+| 8 | 52.9 | 54.4 | **151.3** | 206.7 | 227.1 | 38.7 |
+| 16 | 128.4 | 187.2 | 124.6 | 363.2 | 452.5 | 44.1 |
+| 32 | 243.7 | 309.5 | 131.3 | 697.4 | 777.3 | **45.9** |
+
+Takeaways:
+- Batching pays off (2.2× SmolLM2 at 8 sequences, 2.4× Qwen2.5 at 32) because weights
+  are converted and read once per step for all rows.
+- It saturates early because the generic matmul is compute-bound: a scalar dot product
+  per (row, output), after expanding each weight row to fp32. With SIMD and integer dot
+  products (Phase 17) and a blocked GEMM that keeps weight tiles in cache across rows
+  (Phase 18), aggregate throughput should keep scaling well past 8 sequences.
+- Per-sequence ITL grows with batch size (14.6 → 52.9 ms at 8). The Phase 13 scheduler
+  must balance throughput against ITL (decode token budget).

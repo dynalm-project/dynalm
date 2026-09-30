@@ -25,11 +25,14 @@
 
 namespace engine {
 
+// Rows of a batch may belong to different sequences: row r reads/writes the
+// KV of sequence row_seq[r] through kv[row_seq[r]].
 struct AttentionParams {
   TensorView q;    // [m, n_heads * head_dim] fp32
   TensorView out;  // [m, n_heads * head_dim_v] fp32
   std::span<const int32_t> positions;  // absolute position of each query row
-  KvLayerView kv;
+  std::span<const int32_t> row_seq;    // sequence index of each row
+  std::span<const KvLayerView> kv;     // one view per sequence
   int32_t num_heads = 0;
   float scale = 1.0f;
   float softcap = 0.0f;         // 0 = off
@@ -65,9 +68,10 @@ class Backend {
   virtual void rope(const TensorView& x, int32_t num_heads, int32_t head_dim,
                     std::span<const int32_t> positions, const RopeConfig& rope,
                     const float* freq_factors) = 0;
-  // Writes k [m, n_kv * head_dim] and v [m, n_kv * head_dim_v] into the cache.
+  // Writes k [m, n_kv * head_dim] and v [m, n_kv * head_dim_v] into the cache
+  // of each row's sequence.
   virtual void kv_store(const TensorView& k, const TensorView& v, std::span<const int32_t> positions,
-                        const KvLayerView& kv) = 0;
+                        std::span<const int32_t> row_seq, std::span<const KvLayerView> kv) = 0;
   virtual void attention(const AttentionParams& p) = 0;
   // out = act(gate) * up  (elementwise)
   virtual void act_mul(Activation act, const TensorView& gate, const TensorView& up, const TensorView& out) = 0;

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Phase 11 — Concurrent sequences
+- `Transformer::forward_batch(SeqBatch...)`: rows from many sequences in one pass; per-row
+  positions and sequence index; logits only for requested rows.
+- Backend `attention`/`kv_store` address KV per row's sequence (`row_seq` + per-sequence views).
+- Tests: mixed decode/prefill batches bit-identical to sequential runs (Llama, Gemma-3, Phi-3);
+  batch validation.
+- `bench_batch_decode`: aggregate decode throughput vs concurrency (up to 2.4×).
+
 ### Phase 10 — Paged KV
 - `KvBlockPool` (renamed from KvCache): atomic per-block refcounts, allocate/retain/release,
   copy_block; thread-safe.
