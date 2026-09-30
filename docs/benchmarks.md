@@ -281,3 +281,25 @@ the same system prompt + 16 unique tokens, 16 generated. Prefill budget 128, chu
 uncached runs (tests). Limitation: requests arriving in the same step as the *first* request
 with a new prefix can't reuse it, because blocks are cached once computed. In-flight dedup is
 a candidate for the radix cache (Phase 16).
+
+## Phase 16 — radix vs hash prefix cache (`bench_prefix`, SmolLM2-135M Q8_0, 10 threads)
+
+Same workload as Phase 15, but the system prompt is 500 tokens (not a multiple of the
+16-token block).
+
+| cache | wall s | rows computed | TTFT p50 ms | TTFT p90 | TTFT p99 | hit rate |
+|---|---|---|---|---|---|---|
+| off | 57.41 | 7965 | 28137 | 53097 | 56798 | 0% |
+| hash | 6.36 | 525 | 2827 | 3447 | 3448 | 90.8% |
+| **radix** | **5.42** | **465** | **1373** | **2692** | **2692** | 91.0% |
+
+Lookup latency for an 8192-token fully cached prompt (512 blocks):
+
+| cache | p50 ns | p99 ns |
+|---|---|---|
+| hash | 63699 | 73333 |
+| radix | 25975 | 38963 |
+
+Radix reuses the partially matching block (500 = 31×16 + 4), so it computes 11% fewer rows
+and halves median TTFT. Its lookups are 2.5× faster (a per-block child lookup instead of
+per-token chained mixing). Radix is the default.

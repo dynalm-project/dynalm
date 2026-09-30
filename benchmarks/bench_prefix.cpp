@@ -1,8 +1,9 @@
-// Phase 15 benchmark: prefix reuse for a shared system prompt.
+// Phase 15/16 benchmark: prefix reuse for a shared system prompt (cache off,
+// hash, radix), plus lookup latency for a long fully cached prompt.
 //
-// One request warms the cache with a 512-token system prompt; then 15
-// requests sharing that prompt (+16 unique tokens, 16 generated) arrive at
-// once. Compares TTFT / wall time / rows computed with the cache on and off.
+// One request warms the cache with a 500-token system prompt (deliberately not
+// block-aligned); then 15 requests sharing that prompt (+16 unique tokens, 16
+// generated) arrive at once. Compares TTFT / wall time / rows computed.
 //
 // Usage: bench_prefix <model.gguf> [threads]
 
@@ -28,8 +29,9 @@ int main(int argc, char** argv) {
   const ModelConfig& c = (*m)->config;
   ThreadPool pool(threads);
   CpuBackend be(pool, select_best_isa(cpu_info().features));
-  constexpr int kSystem = 512, kUnique = 16, kGen = 16, kReqs = 15;
-  auto kv = KvBlockPool::create(kv_geometry_for(c, DType::kF16, 16, (kReqs + 2) * (kSystem + kUnique + kGen + 16)), be);
+  constexpr int kSystem = 500, kUnique = 16, kGen = 16, kReqs = 15;
+  auto kv = KvBlockPool::create(kv_geometry_for(c, DType::kF16, 16, 8192 + (kReqs + 2) * (kSystem + kUnique + kGen + 16)),
+                                be);
   auto tf = Transformer::create(c, (*m)->weights, be, 256);
   if (!kv.ok() || !tf.ok()) return 1;
 
@@ -40,10 +42,17 @@ int main(int argc, char** argv) {
   std::vector<TokenId> system(kSystem);
   for (int i = 0; i < kSystem; ++i) system[static_cast<size_t>(i)] = static_cast<TokenId>(1000 + (i * 37) % 5000);
 
-  for (bool enabled : {false, true}) {
+  struct Mode {
+    const char* name;
+    bool enabled;
+    PrefixCacheKind kind;
+  };
+  for (const Mode& mode : {Mode{"off", false, PrefixCacheKind::kHash}, Mode{"hash", true, PrefixCacheKind::kHash},
+                           Mode{"radix", true, PrefixCacheKind::kRadix}}) {
     Scheduler sched(**tf, **kv, *(*m)->tokenizer,
                     SchedulerConfig{.decode_token_budget = 64, .prefill_token_budget = 128, .max_running = 32,
-                                    .max_prefill_chunk = 128, .enable_prefix_cache = enabled});
+                                    .max_prefill_chunk = 128, .enable_prefix_cache = mode.enabled,
+                                    .prefix_cache_kind = mode.kind});
     auto make = [&](int i, std::vector<double>* ttft, int64_t t0) {
       Request r;
       r.prompt = system;
@@ -67,10 +76,26 @@ int main(int argc, char** argv) {
     sched.run_until_idle();
     const double wall = static_cast<double>(now_ns() - t0) * 1e-9;
     const auto st = bench::summarize(ttft);
-    const double hit = enabled ? sched.prefix_cache()->stats().hit_rate() : 0.0;
-    std::printf("%-8s %8.2f %12llu %10.0f %10.0f %10.0f %8.0f%%\n", enabled ? "on" : "off", wall,
+    const double hit = mode.enabled ? sched.prefix_cache()->stats().hit_rate() : 0.0;
+    std::printf("%-8s %8.2f %12llu %10.0f %10.0f %10.0f %8.1f%%\n", mode.name, wall,
                 static_cast<unsigned long long>(sched.stats().tokens_computed - rows_before), st.p50, st.p90, st.p99,
                 hit * 100);
+  }
+
+  // Lookup latency: an 8192-token prompt fully cached (512 blocks).
+  std::printf("\nlookup latency, 8192 cached tokens (ns):\n");
+  for (PrefixCacheKind kind : {PrefixCacheKind::kHash, PrefixCacheKind::kRadix}) {
+    auto cache = kind == PrefixCacheKind::kRadix ? make_radix_prefix_cache(**kv) : make_hash_prefix_cache(**kv);
+    std::vector<TokenId> toks(8192);
+    for (size_t i = 0; i < toks.size(); ++i) toks[i] = static_cast<TokenId>((i * 7919) % 30000);
+    KvBlockTable t(**kv);
+    if (!t.reserve(8192).ok()) return 1;
+    cache->insert(toks, t.block_table(), 0, 512);
+    const auto st = bench::run([&] {
+      auto match = cache->lookup(toks, 8192);
+      for (int32_t b : match.blocks) (*kv)->release(b);
+    }, {.warmup_samples = 3, .samples = 50, .batch = 5});
+    std::printf("  %-6s p50 %10.0f  p99 %10.0f\n", kind == PrefixCacheKind::kRadix ? "radix" : "hash", st.p50, st.p99);
   }
   return 0;
 }

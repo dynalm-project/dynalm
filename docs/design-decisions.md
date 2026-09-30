@@ -408,3 +408,24 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   lower TTFT for a 512-token shared system prompt.
 - **Tradeoffs:** Reuse granularity is 16 tokens. Same-step arrivals don't share in-flight
   prefill.
+
+## DD-030: Radix tree over KV blocks with token-granular partial reuse (default)
+
+- **Decision:** `PrefixCache` is an interface with two implementations. The radix cache is
+  a tree whose edges are KV blocks (children keyed by a block-token hash, always verified).
+  When a prompt diverges inside a cached block, the child with the longest common token
+  prefix r is copied into a fresh private block, and r more tokens are reused. Eviction is
+  LRU over leaves referenced only by the cache. The scheduler selects the implementation
+  via `prefix_cache_kind`, and radix is the default.
+- **Reason:** Spec §24 Stage 2. SGLang-style token-level radix trees assume token-granular
+  KV. Our KV is paged, so the tree is block-granular, and the partial-block copy (6 µs)
+  recovers token-granular reuse at the edge without a second KV layout.
+- **Why the copy is correct:** The copied rows [0, r) were computed for exactly the same
+  tokens at the same positions after the same prefix, and rows are batch-independent
+  (bit-exact, DD-025). The copy is exclusive, so the sequence overwrites rows ≥ r freely.
+  Tests: reuse of 18 of 20 tokens and 7 of 8 tokens produces outputs identical to isolated
+  runs, and a partial copy's first r rows equal the source block.
+- **Evidence:** bench_prefix (500-token unaligned prompt): 11% fewer rows, 2× lower TTFT p50
+  than hash, and 2.5× faster lookups (26 µs vs 64 µs for 8K tokens).
+- **Tradeoffs:** A partial hit costs one block copy and one extra block. When the pool
+  has no free block the partial reuse is skipped (it's an optimization).

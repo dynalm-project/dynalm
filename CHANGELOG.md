@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Phase 16 — Radix prefix cache
+- `PrefixCache` is now an interface: `make_hash_prefix_cache` (Phase 15) and
+  `make_radix_prefix_cache` (block-edged radix tree with token-granular partial-block reuse
+  via copy, LRU leaf eviction). `SchedulerConfig::prefix_cache_kind` (radix by default).
+- Fixed admission bookkeeping so a partial (private) block is inserted once it fills.
+- Tests run against both implementations; a radix-specific partial-copy test.
+- `bench_prefix`: radix 11% fewer rows, 2× lower TTFT p50, 2.5× faster lookups than hash.
+
 ### Phase 15 — Prefix hash cache
 - `prefix_cache/PrefixCache`: block-granular, chained verified hashes, LRU leaf-first eviction,
   optional capacity, stats (lookups, hit/eligible tokens, hit rate, inserted/evicted/cached blocks).

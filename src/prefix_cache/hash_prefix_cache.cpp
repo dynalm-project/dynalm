@@ -1,6 +1,8 @@
 #include "prefix_cache/prefix_cache.h"
 
 #include <algorithm>
+#include <list>
+#include <unordered_map>
 
 namespace engine {
 namespace {
@@ -13,28 +15,60 @@ inline uint64_t mix(uint64_t x) {
   return x ^ (x >> 31);
 }
 
+class HashPrefixCache final : public PrefixCache {
+ public:
+  HashPrefixCache(KvBlockPool& pool, int32_t max_blocks);
+  ~HashPrefixCache() override;
+
+  Match lookup(std::span<const TokenId> tokens, int32_t max_tokens) override;
+  void insert(std::span<const TokenId> tokens, std::span<const int32_t> blocks, int32_t first_block,
+              int32_t num_full_blocks) override;
+  int32_t evict(int32_t n) override;
+  const PrefixCacheStats& stats() const override { return stats_; }
+
+ private:
+  struct Entry {
+    uint64_t parent = 0;  // key of the previous block (0 = none)
+    std::vector<TokenId> tokens;
+    int32_t block = -1;
+    int32_t children = 0;
+    std::list<uint64_t>::iterator lru;  // position in lru_ (front = most recent)
+  };
+
+  static uint64_t chain_hash(uint64_t parent, std::span<const TokenId> tokens);
+  void touch(Entry& e, uint64_t key);
+  bool evict_one();
+
+  KvBlockPool& pool_;
+  int32_t block_size_;
+  int32_t max_blocks_;
+  std::unordered_map<uint64_t, Entry> map_;
+  std::list<uint64_t> lru_;
+  PrefixCacheStats stats_;
+};
+
 }  // namespace
 
-PrefixCache::PrefixCache(KvBlockPool& pool, int32_t max_blocks)
+HashPrefixCache::HashPrefixCache(KvBlockPool& pool, int32_t max_blocks)
     : pool_(pool), block_size_(pool.geometry().block_size), max_blocks_(max_blocks) {}
 
-PrefixCache::~PrefixCache() {
+HashPrefixCache::~HashPrefixCache() {
   for (auto& [key, e] : map_) pool_.release(e.block);
 }
 
-uint64_t PrefixCache::chain_hash(uint64_t parent, std::span<const TokenId> tokens) {
+uint64_t HashPrefixCache::chain_hash(uint64_t parent, std::span<const TokenId> tokens) {
   uint64_t h = mix(parent ^ 0x5bd1e995ull);
   for (TokenId t : tokens) h = mix(h ^ static_cast<uint32_t>(t));
   return h == 0 ? 1 : h;  // 0 is reserved for "no parent"
 }
 
-void PrefixCache::touch(Entry& e, uint64_t key) {
+void HashPrefixCache::touch(Entry& e, uint64_t key) {
   lru_.erase(e.lru);
   lru_.push_front(key);
   e.lru = lru_.begin();
 }
 
-PrefixCache::Match PrefixCache::lookup(std::span<const TokenId> tokens, int32_t max_tokens) {
+PrefixCache::Match HashPrefixCache::lookup(std::span<const TokenId> tokens, int32_t max_tokens) {
   Match m;
   ++stats_.lookups;
   const int32_t eligible = std::min(static_cast<int32_t>(tokens.size()), max_tokens) / block_size_ * block_size_;
@@ -59,7 +93,7 @@ PrefixCache::Match PrefixCache::lookup(std::span<const TokenId> tokens, int32_t 
   return m;
 }
 
-void PrefixCache::insert(std::span<const TokenId> tokens, std::span<const int32_t> blocks, int32_t first_block,
+void HashPrefixCache::insert(std::span<const TokenId> tokens, std::span<const int32_t> blocks, int32_t first_block,
                          int32_t num_full_blocks) {
   // Walk the chain from the start to recover parent keys (cheap: hashing only).
   uint64_t parent = 0;
@@ -95,7 +129,7 @@ void PrefixCache::insert(std::span<const TokenId> tokens, std::span<const int32_
   stats_.cached_blocks = static_cast<int64_t>(map_.size());
 }
 
-bool PrefixCache::evict_one() {
+bool HashPrefixCache::evict_one() {
   // Oldest first; skip blocks still used by sequences and non-leaf entries.
   for (auto it = lru_.rbegin(); it != lru_.rend(); ++it) {
     auto e = map_.find(*it);
@@ -113,10 +147,14 @@ bool PrefixCache::evict_one() {
   return false;
 }
 
-int32_t PrefixCache::evict(int32_t n) {
+int32_t HashPrefixCache::evict(int32_t n) {
   int32_t freed = 0;
   while (freed < n && evict_one()) ++freed;
   return freed;
+}
+
+std::unique_ptr<PrefixCache> make_hash_prefix_cache(KvBlockPool& pool, int32_t max_blocks) {
+  return std::make_unique<HashPrefixCache>(pool, max_blocks);
 }
 
 }  // namespace engine

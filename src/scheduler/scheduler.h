@@ -63,6 +63,8 @@ struct Request {
 // and latency-critical; prefill rows are expensive. Capping prefill rows per
 // step bounds how long any step can stall decoding sequences (ITL), at the
 // cost of spreading a prompt over more steps (TTFT). See DD-027.
+enum class PrefixCacheKind : uint8_t { kRadix, kHash };
+
 struct SchedulerConfig {
   int32_t decode_token_budget = 64;   // max decode rows per step
   int32_t prefill_token_budget = 64;  // max prefill rows per step (chunked prefill)
@@ -73,6 +75,7 @@ struct SchedulerConfig {
   int32_t max_prefill_chunk = 32;
   // Reuse KV of shared prompt prefixes across requests (DD-029).
   bool enable_prefix_cache = true;
+  PrefixCacheKind prefix_cache_kind = PrefixCacheKind::kRadix;
   int32_t prefix_cache_max_blocks = 0;  // 0 = bounded only by the KV pool
 };
 

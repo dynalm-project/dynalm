@@ -25,7 +25,8 @@ add_library(engine_core STATIC
   loader/mapped_file.cpp
   loader/model_loader.cpp
   platform/cpu_info.cpp
-  prefix_cache/prefix_cache.cpp
+  prefix_cache/hash_prefix_cache.cpp
+  prefix_cache/radix_prefix_cache.cpp
   platform/isa.cpp
   quant/dequant.cpp
   quant/quant_formats.cpp

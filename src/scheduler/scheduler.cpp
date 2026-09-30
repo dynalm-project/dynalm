@@ -17,7 +17,11 @@ Scheduler::Scheduler(Transformer& model, KvBlockPool& kv, const Tokenizer& token
   config_.prefill_token_budget = std::clamp(config_.prefill_token_budget, 1, cap - config_.decode_token_budget);
   batch_.reserve(static_cast<size_t>(config_.max_running));
   batch_owner_.reserve(static_cast<size_t>(config_.max_running));
-  if (config_.enable_prefix_cache) prefix_cache_ = std::make_unique<PrefixCache>(kv_, config_.prefix_cache_max_blocks);
+  if (config_.enable_prefix_cache) {
+    prefix_cache_ = config_.prefix_cache_kind == PrefixCacheKind::kRadix
+                         ? make_radix_prefix_cache(kv_, config_.prefix_cache_max_blocks)
+                         : make_hash_prefix_cache(kv_, config_.prefix_cache_max_blocks);
+  }
 }
 
 Scheduler::~Scheduler() = default;
@@ -165,7 +169,9 @@ void Scheduler::admit(int64_t now) {
     }
     if (match.tokens > 0) {
       e.seq->adopt_prefix(match.blocks, match.tokens);
-      e.cached_blocks = static_cast<int32_t>(match.blocks.size());
+      // Only whole cached blocks count; a partial (radix) private copy is
+      // offered to the cache once it fills up.
+      e.cached_blocks = match.tokens / bs;
     }
     e.admit_order = ++admit_counter_;
     if (e.seq->preemptions() == 0) {

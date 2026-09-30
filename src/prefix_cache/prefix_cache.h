@@ -1,7 +1,9 @@
 #pragma once
 
-// Hash-based prefix cache: reuse KV blocks across requests that share a
-// token prefix (system prompts, few-shot examples, multi-turn history).
+// Prefix caches: reuse KV blocks across requests that share a token prefix
+// (system prompts, few-shot examples, multi-turn history).
+//
+// Hash cache (Phase 15):
 //
 // Granularity is one full KV block. Block i of a token sequence is keyed by a
 // chained hash h_i = H(h_{i-1}, tokens of block i), so a key identifies the
@@ -20,6 +22,7 @@
 
 #include <cstdint>
 #include <list>
+#include <memory>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -33,59 +36,41 @@ struct PrefixCacheStats {
   uint64_t lookups = 0;
   uint64_t lookup_tokens = 0;  // tokens eligible for reuse across lookups
   uint64_t hit_tokens = 0;     // tokens actually reused
+  uint64_t partial_hit_tokens = 0;  // of which reused via a partially matching block (radix)
   uint64_t inserted_blocks = 0;
   uint64_t evicted_blocks = 0;
   int64_t cached_blocks = 0;
   double hit_rate() const { return lookup_tokens ? static_cast<double>(hit_tokens) / lookup_tokens : 0.0; }
 };
 
+// Common interface of the hash (Phase 15) and radix (Phase 16) caches.
 class PrefixCache {
  public:
-  // `max_blocks` caps how many blocks the cache may hold (0 = no cap beyond
-  // the pool; eviction then happens only on demand).
-  PrefixCache(KvBlockPool& pool, int32_t max_blocks = 0);
-  ~PrefixCache();
-  PrefixCache(const PrefixCache&) = delete;
-  PrefixCache& operator=(const PrefixCache&) = delete;
-
   struct Match {
-    std::vector<int32_t> blocks;  // retained on behalf of the caller
+    // Blocks to adopt, each carrying one reference now owned by the caller.
+    // All but possibly the last are shared, immutable cached blocks; a radix
+    // cache may end the match with a private copy of a partially matching
+    // block, so `tokens` need not be a multiple of the block size.
+    std::vector<int32_t> blocks;
     int32_t tokens = 0;
   };
-  // Longest cached prefix of `tokens`, in full blocks, covering at most
-  // `max_tokens` tokens. The returned blocks carry one reference each that
-  // the caller now owns (e.g. via KvBlockTable::append_shared).
-  Match lookup(std::span<const TokenId> tokens, int32_t max_tokens);
 
+  virtual ~PrefixCache() = default;
+
+  // Longest reusable prefix of `tokens`, covering at most `max_tokens`.
+  virtual Match lookup(std::span<const TokenId> tokens, int32_t max_tokens) = 0;
   // Offers the full blocks [first_block, num_full_blocks) of a sequence whose
   // block i holds tokens [i*bs, (i+1)*bs). New ones are retained by the cache.
-  void insert(std::span<const TokenId> tokens, std::span<const int32_t> blocks, int32_t first_block,
-              int32_t num_full_blocks);
-
+  virtual void insert(std::span<const TokenId> tokens, std::span<const int32_t> blocks, int32_t first_block,
+                      int32_t num_full_blocks) = 0;
   // Frees up to `n` blocks that only the cache references. Returns the count.
-  int32_t evict(int32_t n);
-
-  const PrefixCacheStats& stats() const { return stats_; }
-
- private:
-  struct Entry {
-    uint64_t parent = 0;  // key of the previous block (0 = none)
-    std::vector<TokenId> tokens;
-    int32_t block = -1;
-    int32_t children = 0;
-    std::list<uint64_t>::iterator lru;  // position in lru_ (front = most recent)
-  };
-
-  static uint64_t chain_hash(uint64_t parent, std::span<const TokenId> tokens);
-  void touch(Entry& e, uint64_t key);
-  bool evict_one();
-
-  KvBlockPool& pool_;
-  int32_t block_size_;
-  int32_t max_blocks_;
-  std::unordered_map<uint64_t, Entry> map_;
-  std::list<uint64_t> lru_;
-  PrefixCacheStats stats_;
+  virtual int32_t evict(int32_t n) = 0;
+  virtual const PrefixCacheStats& stats() const = 0;
 };
+
+// Chained-hash cache (full blocks only). `max_blocks` 0 = bounded by the pool.
+std::unique_ptr<PrefixCache> make_hash_prefix_cache(KvBlockPool& pool, int32_t max_blocks = 0);
+// Radix tree of blocks with token-granular partial-block reuse (DD-030).
+std::unique_ptr<PrefixCache> make_radix_prefix_cache(KvBlockPool& pool, int32_t max_blocks = 0);
 
 }  // namespace engine

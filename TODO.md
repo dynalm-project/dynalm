@@ -19,7 +19,7 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
 - [x] Phase 13 — Prefill/decode scheduler
 - [x] Phase 14 — Chunked prefill
 - [x] Phase 15 — Prefix hash cache
-- [ ] Phase 16 — Radix cache
+- [x] Phase 16 — Radix cache
 - [ ] Phase 17 — CPU SIMD optimization
 - [ ] Phase 18 — Kernel optimization
 - [ ] Phase 19 — Streaming
@@ -34,6 +34,8 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
 - [ ] Phase 28 — GPU backend architecture
 
 ## Open items
+
+- In-flight prefix dedup: requests arriving in the same step as the first request with a new prefix recompute it (Phase 15/16 limitation).
 
 - Split-K (flash-decoding) decode attention + F16C KV conversion: decode is ~19 µs per context token today (Phase 17/18, top priority for long context).
 
