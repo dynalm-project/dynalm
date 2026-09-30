@@ -3,20 +3,30 @@ configure_file(common/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/common/
 # engine_core: everything except the executable entry points. Tests,
 # benchmarks, CLI and server all link against this one library.
 add_library(engine_core STATIC
+  backends/cpu/cpu_backend.cpp
   chat_template/chat_template.cpp
   common/status.cpp
   dtype/dtype.cpp
+  kv_cache/kv_cache.cpp
   logging/log.cpp
   memory/host_memory.cpp
   memory/storage.cpp
+  model/arch_llama.cpp
+  model/architecture.cpp
+  model/transformer.cpp
   model_ir/model_config.cpp
   model_ir/tensor_registry.cpp
   loader/gguf/gguf.cpp
   loader/gguf/gguf_model.cpp
   loader/gguf/gguf_tokenizer.cpp
   loader/mapped_file.cpp
+  loader/model_loader.cpp
   platform/cpu_info.cpp
   platform/isa.cpp
+  quant/dequant.cpp
+  runtime/generator.cpp
+  runtime/thread_pool.cpp
+  sampling/sampler.cpp
   tensor/tensor.cpp
   tokenizer/pretokenizer.cpp
   tokenizer/tokenizer.cpp
@@ -32,5 +42,5 @@ target_compile_definitions(engine_core PUBLIC
   ENGINE_HAS_AVX512=$<BOOL:${ENABLE_AVX512}>
   ENGINE_HAS_AMX=$<BOOL:${ENABLE_AMX}>)
 
-add_executable(engine cli/main.cpp cli/inspect.cpp)
+add_executable(engine cli/main.cpp cli/inspect.cpp cli/run.cpp)
 target_link_libraries(engine PRIVATE engine_core)

@@ -7,6 +7,7 @@
 
 #include "dtype/fp16.h"
 #include "gguf_builder.h"
+#include "test_models.h"
 
 namespace engine::gguf {
 namespace {
@@ -202,8 +203,8 @@ TEST_F(GgufTest, RejectsTensorPastEof) {
 
 // Optional: parse a real model when ENGINE_TEST_MODEL points at a GGUF file.
 TEST_F(GgufTest, RealModelIfAvailable) {
-  const char* path = std::getenv("ENGINE_TEST_MODEL");
-  if (!path || !std::filesystem::exists(path)) GTEST_SKIP() << "ENGINE_TEST_MODEL not set";
+  const std::string path = engine::testing::smollm_model();
+  if (!engine::testing::exists(path)) GTEST_SKIP() << "test model not present";
   auto g = GgufFile::open(path);
   ASSERT_TRUE(g.ok()) << g.status().to_string();
   EXPECT_TRUE((*g)->get_string("general.architecture").ok());

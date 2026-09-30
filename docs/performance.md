@@ -16,3 +16,14 @@ Notes: This is a mobile part with hybrid cores and a low power limit. Throughput
 depends on the power profile and on thermals. Barrier-synchronized kernels run
 at E-core speed unless the work is partitioned unevenly or restricted to P-cores
 (see DD-004).
+
+## Current profile (Phase 6, generic kernels)
+
+- Decode: 27 tok/s on SmolLM2-135M f16 at 10 threads. At 256 MiB of weights per token,
+  that's about 7 GB/s effective, well below the ~50 GB/s memory bandwidth, so the
+  generic kernels are compute/latency-bound rather than bandwidth-bound.
+- Prefill: 33 tok/s. There is no GEMM blocking, and every weight row is re-converted
+  from fp16 per call.
+- Planned order (Phase 17/18): AVX2+F16C dot kernels → quantized dot kernels → tiled
+  GEMM for prefill → attention over contiguous block runs → operator fusion where
+  measured.

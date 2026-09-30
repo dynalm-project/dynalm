@@ -25,9 +25,11 @@ set(ENGINE_TEST_MODEL_QWEN "${PROJECT_SOURCE_DIR}/models/qwen2.5-0.5b-instruct-q
 function(engine_add_test name)
   add_executable(${name} ${ARGN})
   target_link_libraries(${name} PRIVATE engine_core GTest::gtest_main)
-  target_compile_definitions(${name} PRIVATE ENGINE_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
-  gtest_discover_tests(${name} DISCOVERY_TIMEOUT 60
-    PROPERTIES ENVIRONMENT "ENGINE_TEST_MODEL=${ENGINE_TEST_MODEL};ENGINE_TEST_MODEL_QWEN=${ENGINE_TEST_MODEL_QWEN}")
+  target_compile_definitions(${name} PRIVATE
+    ENGINE_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
+    ENGINE_TEST_MODEL_PATH="${ENGINE_TEST_MODEL}"
+    ENGINE_TEST_MODEL_QWEN_PATH="${ENGINE_TEST_MODEL_QWEN}")
+  gtest_discover_tests(${name} DISCOVERY_TIMEOUT 60)
 endfunction()
 
 engine_add_test(test_foundation
@@ -45,3 +47,6 @@ engine_add_test(test_loader
 
 engine_add_test(test_tokenizer
   test_tokenizer.cpp)
+
+engine_add_test(test_runtime
+  test_runtime.cpp)

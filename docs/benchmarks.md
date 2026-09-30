@@ -67,3 +67,27 @@ tokenizer build 17.8 ms.
 
 15.3 MB/s encode (6.5 M tokens/s) and 15.5 ns/token decode. A 50K-token prompt
 tokenizes in about 8 ms, far below prefill cost, so the tokenizer is not a bottleneck.
+
+## Phase 6 — baseline end-to-end (generic kernels)
+
+`engine run SmolLM2-135M-Instruct-f16.gguf -p "Write a short story about a robot learning to paint." -n 64`
+(chat template → 41 prompt tokens), f16 weights, f16 KV, generic kernels (no SIMD, no GEMM tiling).
+Linux container (gcc 13, -O3) on WSL2, same i7-1255U. Smart App Control blocked the Windows binary.
+
+| threads | prefill tok/s | TTFT ms | decode tok/s | ITL p50 | ITL p90 | ITL p99 |
+|---|---|---|---|---|---|---|
+| 1 | 14.7 | 2787 | 6.6 | 148.5 | 160.1 | 202.5 |
+| 2 | 25.5 | 1607 | 11.9 | 83.5 | 87.4 | 105.0 |
+| 4 | 31.4 | 1306 | 16.3 | 60.9 | 64.1 | 79.0 |
+| 6 | 34.2 | 1198 | 19.2 | 51.6 | 56.6 | 62.4 |
+| 8 | 27.5 | 1491 | 23.3 | 42.4 | 45.9 | 65.2 |
+| **10** | 32.9 | 1245 | **27.0** | **36.6** | 39.1 | 55.6 |
+| 12 (SMT) | 31.9 | 1284 | 21.6 | 40.6 | 69.1 | 120.3 |
+
+Takeaways:
+- Decode scales to the 10 physical cores. SMT (12 threads) hurts throughput and especially
+  the tail (p99 120 ms). The default of physical cores (DD-004) is confirmed.
+- Prefill is the weak spot: 33 tok/s is barely faster per token than decode. The generic
+  matmul computes one scalar dot product per (row, output), with fp16 conversion and no
+  tiling, so prefill is compute-bound. First targets for Phases 17/18: SIMD dot
+  products with F16C, and a tiled GEMM for m > 1.

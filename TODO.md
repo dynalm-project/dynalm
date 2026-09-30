@@ -8,8 +8,8 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
 - [x] Phase 2 — GGUF loader (mmap, metadata KV, tensor infos, `engine inspect`)
 - [x] Phase 3 — Model IR (ModelConfig, TensorRegistry, tensor roles)
 - [x] Phase 4 — Tokenizer / chat template (BPE + SentencePiece from GGUF metadata)
-- [ ] Phase 5 — Llama model
-- [ ] Phase 6 — Basic CPU execution (single sequence, greedy, `engine run`)
+- [x] Phase 5 — Llama model
+- [x] Phase 6 — Basic CPU execution (single sequence, greedy, `engine run`)
 - [ ] Phase 7 — Qwen / Mistral / Gemma / Phi / DeepSeek adapters
 - [ ] Phase 8 — Quantized GGUF execution
 - [ ] Phase 9 — KV cache

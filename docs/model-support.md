@@ -2,7 +2,7 @@
 
 | Family | Adapter | Status |
 |---|---|---|
-| Llama | LlamaAdapter | planned (Phase 5) |
+| Llama (incl. Mistral dense, DeepSeek-LLM, SmolLM via `llama` arch) | LlamaArchitecture | ✅ runs; golden-tested on SmolLM2-135M (f16) |
 | Qwen | QwenAdapter | planned (Phase 7) |
 | Mistral | MistralAdapter | planned (Phase 7) |
 | Gemma | GemmaAdapter | planned (Phase 7) |
@@ -27,4 +27,4 @@ Verified files: SmolLM2-135M-Instruct f16 (llama arch, 30 layers, 272 tensors).
 
 Chat templates: ChatML, Llama-3, Llama-2, Mistral, Gemma, Phi-3, DeepSeek-V2/3.
 
-No model runs yet.
+Weight types that run today: f32, f16, bf16. Quantized types arrive in Phase 8.

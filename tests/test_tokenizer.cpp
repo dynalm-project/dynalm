@@ -7,6 +7,7 @@
 
 #include "chat_template/chat_template.h"
 #include "loader/gguf/gguf.h"
+#include "test_models.h"
 #include "loader/gguf/gguf_tokenizer.h"
 #include "tokenizer/pretokenizer.h"
 #include "tokenizer/tokenizer.h"
@@ -248,9 +249,8 @@ std::vector<GoldenCase> load_golden(const std::string& path) {
   return cases;
 }
 
-std::unique_ptr<Tokenizer> load_model_tokenizer(const char* env) {
-  const char* path = std::getenv(env);
-  if (!path || !std::filesystem::exists(path)) return nullptr;
+std::unique_ptr<Tokenizer> load_model_tokenizer(const std::string& path) {
+  if (!engine::testing::exists(path)) return nullptr;
   auto g = gguf::GgufFile::open(path);
   if (!g.ok()) return nullptr;
   auto data = gguf::read_tokenizer_data(**g);
@@ -261,9 +261,9 @@ std::unique_ptr<Tokenizer> load_model_tokenizer(const char* env) {
   return t.ok() ? std::move(*t) : nullptr;
 }
 
-void check_golden(const char* env, const std::string& golden_file) {
-  auto tok = load_model_tokenizer(env);
-  if (!tok) GTEST_SKIP() << env << " not set or unreadable";
+void check_golden(const std::string& model, const std::string& golden_file) {
+  auto tok = load_model_tokenizer(model);
+  if (!tok) GTEST_SKIP() << model << " not present";
   const auto cases = load_golden(std::string(ENGINE_TEST_DATA_DIR) + "/" + golden_file);
   ASSERT_FALSE(cases.empty());
   int mismatches = 0;
@@ -280,18 +280,18 @@ void check_golden(const char* env, const std::string& golden_file) {
   EXPECT_EQ(mismatches, 0);
 }
 
-TEST(TokenizerGolden, SmolLm2) { check_golden("ENGINE_TEST_MODEL", "golden_smollm2.txt"); }
-TEST(TokenizerGolden, Qwen25) { check_golden("ENGINE_TEST_MODEL_QWEN", "golden_qwen25.txt"); }
+TEST(TokenizerGolden, SmolLm2) { check_golden(engine::testing::smollm_model(), "golden_smollm2.txt"); }
+TEST(TokenizerGolden, Qwen25) { check_golden(engine::testing::qwen_model(), "golden_qwen25.txt"); }
 
 TEST(TokenizerGolden, SmolLm2ChatTemplate) {
-  const char* path = std::getenv("ENGINE_TEST_MODEL");
-  if (!path || !std::filesystem::exists(path)) GTEST_SKIP();
+  const std::string path = engine::testing::smollm_model();
+  if (!engine::testing::exists(path)) GTEST_SKIP();
   auto g = gguf::GgufFile::open(path);
   ASSERT_TRUE(g.ok());
   auto tmpl = ChatTemplate::from_jinja(gguf::read_chat_template(**g));
   ASSERT_TRUE(tmpl.ok()) << tmpl.status().to_string();
   EXPECT_EQ(tmpl->format(), ChatFormat::kChatMl);
-  auto tok = load_model_tokenizer("ENGINE_TEST_MODEL");
+  auto tok = load_model_tokenizer(path);
   ASSERT_NE(tok, nullptr);
   const ChatMessage msgs[] = {{"user", "What is 2+2?"}};
   auto text = tmpl->apply(msgs, true);
@@ -309,8 +309,8 @@ namespace engine {
 namespace {
 
 TEST(TokenizerGolden, Qwen25ChatTemplateDefaultSystem) {
-  const char* path = std::getenv("ENGINE_TEST_MODEL_QWEN");
-  if (!path || !std::filesystem::exists(path)) GTEST_SKIP();
+  const std::string path = engine::testing::qwen_model();
+  if (!engine::testing::exists(path)) GTEST_SKIP();
   auto g = gguf::GgufFile::open(path);
   if (!g.ok()) GTEST_SKIP() << g.status().to_string();
   auto tmpl = ChatTemplate::from_jinja(gguf::read_chat_template(**g));

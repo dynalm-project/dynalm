@@ -137,7 +137,7 @@ int main(int argc, char** argv) {
   if (cmd == "version") return cmd_version();
   if (cmd == "info") return cmd_info();
   if (cmd == "inspect") return engine::cli::cmd_inspect(std::span(args).subspan(i + 1));
-  if (cmd == "run") return not_implemented(cmd, 6);
+  if (cmd == "run") return engine::cli::cmd_run(std::span(args).subspan(i + 1));
   if (cmd == "serve") return not_implemented(cmd, 20);
   if (cmd == "benchmark") return not_implemented(cmd, 21);
   if (cmd == "list" || cmd == "stop" || cmd == "unload") return not_implemented(cmd, 22);

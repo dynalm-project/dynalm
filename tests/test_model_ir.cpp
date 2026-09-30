@@ -4,6 +4,7 @@
 #include <filesystem>
 
 #include "gguf_builder.h"
+#include "test_models.h"
 #include "loader/gguf/gguf.h"
 #include "loader/gguf/gguf_model.h"
 #include "model_ir/model_config.h"
@@ -203,8 +204,8 @@ TEST(MemoryEstimate, AddsWeightsKvAndScratch) {
 }
 
 TEST(ModelIrReal, SmolLm2ConfigIfAvailable) {
-  const char* path = std::getenv("ENGINE_TEST_MODEL");
-  if (!path || !std::filesystem::exists(path)) GTEST_SKIP() << "ENGINE_TEST_MODEL not set";
+  const std::string path = engine::testing::smollm_model();
+  if (!engine::testing::exists(path)) GTEST_SKIP() << "test model not present";
   auto g = gguf::GgufFile::open(path);
   ASSERT_TRUE(g.ok());
   auto c = gguf::read_model_config(**g);

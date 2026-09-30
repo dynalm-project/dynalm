@@ -1,6 +1,6 @@
 # Architecture
 
-Status: **Phase 0**. This document describes the target architecture and marks
+Status: **Phase 6** (single-sequence inference works end to end). This document describes the target architecture and marks
 what exists today. Implemented parts are marked ✅; everything else is planned.
 
 ## Layering
@@ -10,15 +10,15 @@ CLI / API server            (cli/ ✅ skeleton, server/, api/)
       │
 Request manager / queue     (runtime/)
       │
-Scheduler                   (scheduler/, batching/)  — model-agnostic
+Scheduler                   (scheduler/, batching/)  — model-agnostic; today: runtime/generator ✅ (single sequence)
       │
-KV engine                   (kv_cache/, prefix_cache/, memory/)
+KV engine                   (kv_cache/ ✅ block storage, prefix_cache/, memory/)
       │
 Model runtime               (model/, model_ir/ ✅)   — consumes ModelConfig only
       │
-Kernel dispatch             (execution/, kernels/)
+Kernel dispatch             (backends/backend.h ✅, CpuKernels table ✅)
       │
-Backend                     (backends/cpu/{generic,avx2,avx512,amx}, future GPU)
+Backend                     (backends/cpu ✅ generic; avx2/avx512/amx in Phase 17; future GPU)
       │
 Platform                    (platform/ ✅ CPU + memory detection, ISA selection)
 ```
@@ -61,10 +61,18 @@ SafeTensors ► ST loader ───┴─► TensorRegistry + ModelConfig (IR) �
 - Future GPU backends add a device dimension beside this. They do not change the
   scheduler, model, or KV interfaces.
 
-## Threads (planned)
+## Forward pass (✅)
 
-API threads → lock-free request queue → one scheduler thread → persistent worker
-pool for kernels. No thread creation per request.
+`Transformer::forward(tokens, positions, kv, block_table)`: embedding → per layer
+[norm → QKV (fused or separate, +bias) → optional QK-norm → RoPE → kv_store → paged
+attention → O proj → optional post-norm → residual → norm → gated/plain MLP →
+optional post-norm → residual] → final norm on the last row → LM head → optional
+soft-cap. Every branch is a `ModelConfig` flag.
+
+## Threads (partially ✅)
+
+API threads → request queue → one scheduler thread → persistent worker pool
+(`runtime/thread_pool` ✅) for kernels. No thread creation per request.
 
 ## Error model ✅
 

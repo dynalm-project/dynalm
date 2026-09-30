@@ -176,3 +176,64 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   binaries. The Linux container gives a reliable gate without weakening host security.
 - **Tradeoffs:** Docker is needed for the full gate. Windows builds remain for native
   benchmarking.
+
+## DD-015: One generic Transformer; adapters hold no execution code
+
+- **Decision:** A single `Transformer` runs every decoder family. Variation (RoPE style,
+  norm type, biases, fused QKV/gate-up, QK-norm, sandwich norms, soft-capping, sliding
+  windows, tied embeddings) is expressed as `ModelConfig` fields. Adapters only
+  `configure()` and `validate()`.
+- **Reason:** The spec requires no duplicated transformer code and a scheduler that
+  doesn't know about model families. Adding Qwen/Gemma/Phi becomes a configuration
+  task, and every kernel optimization benefits all families at once.
+- **Alternatives:** a forward function per family (llama.cpp's early approach);
+  a dynamic graph IR.
+- **Tradeoffs:** Exotic architectures (MLA, hybrid SSM) will need new `ModelConfig`
+  concepts or a second runtime. A dynamic graph can be added then if needed.
+
+## DD-016: Coarse-grained Backend interface over TensorViews
+
+- **Decision:** `Backend` exposes whole-batch ops (matmul, attention, rope, norms, kv_store,
+  ...) that take `TensorView`s. `CpuBackend` implements them, with an inner
+  `CpuKernels` table selected by ISA.
+- **Reason:** A CUDA backend can implement the same ops with device pointers and no
+  scheduler or model changes (spec §45). A virtual call per op is negligible:
+  about 300 ops per token versus milliseconds of compute.
+- **Tradeoffs:** Cross-op fusion must be expressed as new, fused ops (Phase 18),
+  not discovered automatically.
+
+## DD-017: Block-based KV layout from the first implementation
+
+- **Decision:** KV is stored in fixed blocks, `[block][kv_head][slot][head_dim]` per layer,
+  and addressed through a per-sequence block table (`KvLayerView`). The single-sequence
+  runtime uses the same path with a trivial block table.
+- **Reason:** Paged KV, prefix sharing and continuous batching (Phases 10–16) then change
+  only block management, not attention kernels. Head-major blocks keep one head's keys
+  contiguous across tokens, which is the decode access pattern.
+- **Evidence:** A test runs attention over a scrambled block table [5, 2, 7] and matches
+  a naive contiguous computation (GQA, f32/f16 KV, sliding window).
+- **Tradeoffs:** One indirection per token per head in attention. It will be amortized
+  per block in the optimized kernel (Phase 18).
+
+## DD-018: Persistent spin-then-sleep pool with dynamic chunking
+
+- **Decision:** `ThreadPool` keeps its workers alive and spins about 100 µs before
+  sleeping. `parallel_for` hands out chunks from an atomic counter.
+- **Reason:** A decode step launches hundreds of kernels, and waking threads through a
+  condition variable on each launch would add milliseconds per token. Dynamic
+  chunks let P-cores take more work than E-cores on hybrid CPUs.
+- **Bug found:** Workers originally initialized their "seen epoch" with a fresh load. A
+  job published before a worker's first instruction was then never run, and the caller
+  spun forever. They now start from the construction epoch (0). Caught by the golden
+  tests hanging, and covered by the TSAN run.
+
+## DD-019: Golden logits from an independent NumPy implementation
+
+- **Decision:** `tools/ref_llama.py` is a direct fp32 NumPy Llama forward pass with no KV
+  cache, reading the same GGUF through the `gguf` package. Its top-32 logits, logit
+  statistics and 8-token greedy continuation are committed as fixtures.
+- **Reason:** An independent implementation is easy to audit against the model
+  definition, and it catches layout errors (RoPE pairing, GQA mapping, tied embeddings)
+  that self-consistency tests miss.
+- **Evidence:** SmolLM2-135M: max |Δlogit| < 2e-3 over the top 32; greedy continuation
+  identical with f32 and f16 KV; chunked prefill (batch 5) equals a single pass.

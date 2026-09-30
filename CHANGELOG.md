@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Phases 5 + 6 — Llama model and basic CPU execution
+(One commit: the Llama adapter can only be verified by executing it. The golden test covers both.)
+- `model/architecture`: `ModelArchitecture` adapter interface, registry, and shared
+  standard-decoder shape validation. `LlamaArchitecture` covers Llama/Mistral/DeepSeek-LLM/SmolLM GGUFs.
+- `loader/model_loader`: file → validated `LoadedModel` (config, weights, adapter, tokenizer, chat template).
+- `backends/backend.h`: backend-independent op interface. `CpuBackend` with generic kernels
+  (matmul f32/f16/bf16, RMSNorm/LayerNorm, RoPE interleaved/half-split with linear scaling and
+  freq factors, paged kv_store, GQA attention with soft-cap and sliding window, SiLU/GELU).
+- `model/transformer`: generic decoder forward. Weights resolved once, scratch preallocated,
+  logits only for the last token.
+- `kv_cache/`: block-based KV storage (f32/f16) + per-sequence block tables.
+- `runtime/thread_pool`: persistent spin-then-sleep workers, dynamic chunking.
+- `runtime/generator`: chunked prefill + greedy decode with TTFT/ITL stats. `sampling/`: greedy.
+- `engine run <model> -p ...`: streamed chat/raw generation with stats.
+- Golden tests vs an independent NumPy reference (`tools/ref_llama.py`).
+
 ### Phase 4 — Tokenizer / chat template
 - `tokenizer/`: `Tokenizer` with byte-level BPE (rank merges, O(n log n)) and
   SentencePiece BPE (score merges, byte fallback); special-token splitting (control
