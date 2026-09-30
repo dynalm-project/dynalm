@@ -6,7 +6,7 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
 - [x] Phase 0 — Project foundation
 - [x] Phase 1 — Tensor + dtype system (DType incl. GGUF block types, TensorShape/Layout/View, aligned allocator)
 - [x] Phase 2 — GGUF loader (mmap, metadata KV, tensor infos, `engine inspect`)
-- [ ] Phase 3 — Model IR (ModelConfig, TensorRegistry, tensor roles)
+- [x] Phase 3 — Model IR (ModelConfig, TensorRegistry, tensor roles)
 - [ ] Phase 4 — Tokenizer / chat template (BPE + SentencePiece from GGUF metadata)
 - [ ] Phase 5 — Llama model
 - [ ] Phase 6 — Basic CPU execution (single sequence, greedy, `engine run`)

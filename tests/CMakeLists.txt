@@ -15,10 +15,16 @@ endif()
 
 include(GoogleTest)
 
+# Optional real-model tests: skipped when the file is absent
+# (fetch with tools/fetch_models.sh smollm).
+set(ENGINE_TEST_MODEL "${PROJECT_SOURCE_DIR}/models/SmolLM2-135M-Instruct-f16.gguf"
+    CACHE FILEPATH "GGUF model used by optional real-model tests")
+
 function(engine_add_test name)
   add_executable(${name} ${ARGN})
   target_link_libraries(${name} PRIVATE engine_core GTest::gtest_main)
-  gtest_discover_tests(${name} DISCOVERY_TIMEOUT 60)
+  gtest_discover_tests(${name} DISCOVERY_TIMEOUT 60
+    PROPERTIES ENVIRONMENT "ENGINE_TEST_MODEL=${ENGINE_TEST_MODEL}")
 endfunction()
 
 engine_add_test(test_foundation
@@ -31,4 +37,5 @@ engine_add_test(test_tensor
   test_tensor.cpp)
 
 engine_add_test(test_loader
-  test_gguf.cpp)
+  test_gguf.cpp
+  test_model_ir.cpp)

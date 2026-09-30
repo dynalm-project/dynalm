@@ -48,3 +48,9 @@ Model: SmolLM2-135M-Instruct f16, 258 MiB, 272 tensors, 33 KV (49,152 tokens, 48
 
 Most of the open time is validating the vocab and merges string arrays. Weights are not
 touched at load time.
+
+## Phase 3 — Model IR
+
+Nothing here is performance-critical: IR construction happens once per model load, and
+role lookups are O(1) array indexing. `engine inspect` on SmolLM2-135M (open + config +
+estimate) runs at process-startup speed. No benchmark was added.

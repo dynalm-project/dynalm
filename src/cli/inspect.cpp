@@ -8,6 +8,10 @@
 
 #include "cli/commands.h"
 #include "loader/gguf/gguf.h"
+#include "loader/gguf/gguf_model.h"
+#include "model_ir/model_config.h"
+#include "platform/cpu_info.h"
+#include "platform/isa.h"
 
 namespace engine::cli {
 namespace {
@@ -95,6 +99,47 @@ int cmd_inspect(std::span<const std::string_view> args) {
   for (const auto& [name, s] : by_type) {
     std::printf("  %-8.*s %5d tensors %10.1f MiB%s\n", static_cast<int>(name.size()), name.data(),
                 s.count, s.bytes / kMiB, s.executable ? "" : "  (unsupported type)");
+  }
+
+  if (auto ft = g.get_uint("general.file_type"); ft.ok()) {
+    std::printf("Quantization:  %s\n", std::string(gguf::file_type_name(static_cast<uint32_t>(*ft))).c_str());
+  }
+
+  auto cfg = gguf::read_model_config(g);
+  if (!cfg.ok()) {
+    std::printf("\nModel config:  unreadable (%s)\n", cfg.status().to_string().c_str());
+  } else {
+    const ModelConfig& c = *cfg;
+    std::printf("\nModel:\n");
+    std::printf("  Layers:        %d\n", c.num_layers);
+    std::printf("  Hidden:        %lld\n", static_cast<long long>(c.hidden_size));
+    std::printf("  FFN:           %lld\n", static_cast<long long>(c.intermediate_size));
+    std::printf("  Heads:         %d (head_dim %d)\n", c.num_heads, c.head_dim);
+    std::printf("  KV heads:      %d (GQA group %d)\n", c.num_kv_heads, c.gqa_group());
+    std::printf("  Vocab:         %lld\n", static_cast<long long>(c.vocab_size));
+    std::printf("  Context:       %lld\n", static_cast<long long>(c.context_length));
+    std::printf("  RoPE:          dim %d, base %.0f%s\n", c.rope.dim, c.rope.freq_base,
+                c.rope.scaling == RopeScaling::kNone ? "" : ", scaled");
+    std::printf("  Norm:          %s, eps %g\n", std::string(norm_type_name(c.norm)).c_str(), c.norm_eps);
+    std::printf("  Embeddings:    %s\n", c.tied_embeddings ? "tied" : "separate lm_head");
+    if (c.sliding_window > 0) std::printf("  Sliding win:   %d\n", c.sliding_window);
+    if (c.moe.num_experts > 0) {
+      std::printf("  MoE:           %d experts, %d active\n", c.moe.num_experts, c.moe.experts_per_token);
+    }
+    const Status valid = c.validate();
+    std::printf("  Valid:         %s\n", valid.ok() ? "yes" : valid.to_string().c_str());
+
+    const auto est = estimate_memory(c, static_cast<int64_t>(g.total_tensor_bytes()),
+                                     c.context_length, DType::kF16);
+    std::printf("\nEstimated RAM (full %lld-token context, f16 KV):\n",
+                static_cast<long long>(c.context_length));
+    std::printf("  Weights:       %8.1f MiB (memory-mapped)\n", est.weight_bytes / kMiB);
+    std::printf("  KV cache:      %8.1f MiB (%lld bytes/token)\n", est.kv_bytes / kMiB,
+                static_cast<long long>(c.kv_bytes_per_token(DType::kF16)));
+    std::printf("  Scratch:       %8.1f MiB\n", est.activation_bytes / kMiB);
+    std::printf("  Total:         %8.1f MiB\n", est.total() / kMiB);
+    std::printf("\nSupported:     pending (architecture adapters arrive in phase 5)\n");
+    std::printf("Backend:       CPU/%s\n", std::string(isa_name(select_best_isa(cpu_info().features))).c_str());
   }
 
   if (show_metadata) {

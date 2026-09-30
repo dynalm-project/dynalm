@@ -14,7 +14,7 @@ Scheduler                   (scheduler/, batching/)  — model-agnostic
       │
 KV engine                   (kv_cache/, prefix_cache/, memory/)
       │
-Model runtime               (model/, model_ir/)      — consumes ModelConfig only
+Model runtime               (model/, model_ir/ ✅)   — consumes ModelConfig only
       │
 Kernel dispatch             (execution/, kernels/)
       │

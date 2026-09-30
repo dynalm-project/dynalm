@@ -8,7 +8,10 @@ add_library(engine_core STATIC
   logging/log.cpp
   memory/host_memory.cpp
   memory/storage.cpp
+  model_ir/model_config.cpp
+  model_ir/tensor_registry.cpp
   loader/gguf/gguf.cpp
+  loader/gguf/gguf_model.cpp
   loader/mapped_file.cpp
   platform/cpu_info.cpp
   platform/isa.cpp

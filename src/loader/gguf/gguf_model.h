@@ -25,6 +25,9 @@ struct TensorMapping {
 // Zero-copy: every registry tensor views the file mapping.
 Result<TensorMapping> map_tensors(const GgufFile& file, int num_layers);
 
+// llama.cpp `general.file_type` label, e.g. 15 -> "Q4_K_M". "unknown" if unrecognized.
+std::string_view file_type_name(uint32_t file_type);
+
 // Parses a GGUF tensor name into (role, layer). Exposed for tests.
 bool parse_tensor_name(std::string_view name, TensorRole& role, int& layer);
 

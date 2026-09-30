@@ -122,3 +122,20 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   `kCorrupt`, not undefined behavior.
 - **Evidence:** A test truncates the file at every byte offset, and 300 random-corruption
   runs pass without crashes.
+
+## DD-011: Model IR filled in two steps; weights addressed by role
+
+- **Decision:** `ModelConfig` is format- and family-neutral. The format loader copies raw
+  hyperparameters. The architecture adapter (Phase 5) sets family semantics (RoPE style,
+  MLP type, norms, biases, soft-capping) and validates the result. Weights live in a
+  `TensorRegistry` keyed by `(TensorRole, layer)`. Loaders translate their naming scheme
+  into roles, and anything they can't map is reported rather than dropped silently.
+- **Reason:** The same Llama adapter must run a GGUF or a SafeTensors checkpoint. Only the
+  loaders know `blk.N.attn_q.weight` vs `model.layers.N.self_attn.q_proj.weight`. A flat
+  array of slots makes lookup O(1) with no string hashing after load.
+- **Alternatives:** adapters read GGUF keys directly (couples families to the format);
+  string-keyed weight maps (slower, and typos only show up at runtime).
+- **Tradeoffs:** Loaders need role tables, and new tensor kinds need a new enum value.
+  That's deliberate: every weight the engine uses has a named meaning.
+- **Precision:** `PrecisionConfig` keeps activation, accumulator and KV dtypes separate.
+  Weight dtypes are per tensor (spec §6).
