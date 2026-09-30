@@ -1,0 +1,15 @@
+/build/
+/out/
+/.vs/
+/.vscode/
+/.cache/
+compile_commands.json
+CMakeUserPresets.json
+
+# Model files are never committed.
+*.gguf
+*.safetensors
+/models/
+
+__pycache__/
+*.pyc

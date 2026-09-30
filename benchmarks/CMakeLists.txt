@@ -1,0 +1,7 @@
+function(engine_add_benchmark name)
+  add_executable(${name} ${ARGN})
+  target_link_libraries(${name} PRIVATE engine_core)
+  target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+endfunction()
+
+engine_add_benchmark(bench_foundation bench_foundation.cpp)
