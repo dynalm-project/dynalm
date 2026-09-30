@@ -139,3 +139,40 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   That's deliberate: every weight the engine uses has a named meaning.
 - **Precision:** `PrecisionConfig` keeps activation, accumulator and KV dtypes separate.
   Weight dtypes are per tensor (spec §6).
+
+## DD-012: Hand-written pre-tokenizers, verified against HF
+
+- **Decision:** Byte-level BPE pre-tokenization uses hand-written matchers, one per
+  regex family (GPT-2, Llama-3, Qwen2, StarCoder/SmolLM). The Unicode L/N/White_Space
+  tables are generated from `unicodedata`. Unknown `tokenizer.ggml.pre` ids are rejected.
+- **Reason:** `std::regex` has no `\p{L}`/`\p{N}` and is slow. A wrong split silently
+  changes token IDs, so unknown variants fail loudly instead of falling back.
+- **Evidence:** Golden tests against HF `tokenizers` (tools/gen_tokenizer_golden.py)
+  match exactly on 38 varied cases for SmolLM2 (49K vocab) and Qwen2.5 (151K vocab).
+  Throughput is 15 MB/s encode (`bench_tokenizer`), so no word cache is needed yet.
+- **Tradeoffs:** Each new regex family needs a matcher, a unit test and a golden file.
+
+## DD-013: Chat templates by family detection, not Jinja (for now)
+
+- **Decision:** Detect the template family from signature strings in the GGUF Jinja
+  source and render it natively (ChatML, Llama-3, Llama-2, Mistral, Gemma, Phi-3,
+  DeepSeek-V2/3). Default system prompts embedded in ChatML templates are extracted.
+  BOS is never rendered; the tokenizer adds it per `add_bos`.
+- **Reason:** A Jinja interpreter is a sizable subsystem, and the families above cover
+  the Tier-1 models. Rendering is deterministic and testable.
+- **Alternatives:** embed a Jinja engine (minja, jinja2cpp).
+- **Tradeoffs:** Templates with custom logic (tools, reasoning toggles) render only
+  their family's core format. Unrecognized templates return an error and the caller
+  picks a format explicitly. Jinja support is tracked in TODO.
+
+## DD-014: Linux container is the reference test environment
+
+- **Decision:** `tools/linux.sh <preset>` builds and tests in an Ubuntu 24.04 / GCC 13
+  container. Sanitizers run there: ASAN+UBSAN (fatal on first finding) and TSAN
+  (with ASLR disabled via `setarch -R`, required by GCC 13's TSAN on kernels with
+  32-bit mmap entropy).
+- **Reason:** MSVC has no UBSAN or TSAN. Separately, Windows Smart App Control on the
+  dev machine is in enforce mode and randomly blocks freshly linked unsigned test
+  binaries. The Linux container gives a reliable gate without weakening host security.
+- **Tradeoffs:** Docker is needed for the full gate. Windows builds remain for native
+  benchmarking.

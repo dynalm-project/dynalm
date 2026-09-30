@@ -1,0 +1,11 @@
+# Linux dev/test image: gcc 13, cmake, ninja, GoogleTest.
+# Used for Linux builds and sanitizer runs (ASAN/UBSAN/TSAN), which MSVC lacks.
+#
+#   docker build -t engine-dev -f tools/docker/Dockerfile.dev tools/docker
+#   tools/linux.sh linux-asan-ubsan
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      g++ cmake ninja-build libgtest-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src

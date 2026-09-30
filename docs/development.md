@@ -26,6 +26,32 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_CUDA=OFF
 cmake --build build
 ```
 
+## Linux build and sanitizers (Docker)
+
+```sh
+bash tools/linux.sh linux-release      # gcc 13, -Wall -Wextra -Wshadow, zero warnings
+bash tools/linux.sh linux-asan-ubsan   # fatal on first finding
+bash tools/linux.sh linux-tsan         # runs with ASLR disabled (see DD-014)
+```
+
+This is the reference gate: every phase must pass all three.
+
+## Windows Smart App Control
+
+When Smart App Control is in enforce mode, Windows may block freshly linked, unsigned
+test or benchmark executables ("An Application Control policy has blocked this file").
+This shows up as `Error running test executable` during gtest discovery. It's a host
+security policy, and the build doesn't try to work around it. Use the Linux container
+as the test gate, or turn Smart App Control off in Windows Security if you choose to.
+
+## Test models
+
+`bash tools/fetch_models.sh` downloads SmolLM2-135M (f16, Q8_0) and Qwen2.5-0.5B
+(Q8_0, Q4_K_M) into `models/` (git-ignored). Real-model tests pick them up
+automatically and are skipped when the files are absent. Tokenizer golden files come
+from `tools/gen_tokenizer_golden.py` (needs `pip install tokenizers` and the model's
+HF `tokenizer.json`).
+
 ## Feature flags
 
 | Flag | Default | Meaning |

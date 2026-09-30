@@ -17,4 +17,14 @@ q8_0, q8_1, q2_K–q6_K, q8_K. Recognized but unsupported: iq*, tq*, mxfp4, i64,
 
 Verified files: SmolLM2-135M-Instruct f16 (llama arch, 30 layers, 272 tensors).
 
+## Tokenizers
+
+| GGUF `tokenizer.ggml.model` / `pre` | Status |
+|---|---|
+| `gpt2` + gpt2/default, llama3/llama-bpe, qwen2, smollm/starcoder | ✅ (golden-tested: SmolLM2, Qwen2.5) |
+| `llama` (SentencePiece) | ✅ (synthetic tests; real-model golden pending a Llama-2/Mistral file) |
+| deepseek-llm, deepseek-v3, tekken, others | not yet (clear error) |
+
+Chat templates: ChatML, Llama-3, Llama-2, Mistral, Gemma, Phi-3, DeepSeek-V2/3.
+
 No model runs yet.

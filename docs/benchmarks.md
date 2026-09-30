@@ -54,3 +54,16 @@ touched at load time.
 Nothing here is performance-critical: IR construction happens once per model load, and
 role lookups are O(1) array indexing. `engine inspect` on SmolLM2-135M (open + config +
 estimate) runs at process-startup speed. No benchmark was added.
+
+## Phase 4 — tokenizer (`bench_tokenizer models/SmolLM2-135M-Instruct-f16.gguf`)
+
+32 KiB of mixed prose, code, numbers, CJK and emoji → 13,985 tokens. Vocab 49,152;
+tokenizer build 17.8 ms.
+
+| benchmark | mean | p50 | p90 | p95 | p99 |
+|---|---|---|---|---|---|
+| encode 32 KiB | 2.51 ms | 2.15 ms | 3.15 ms | 5.25 ms | 6.37 ms |
+| decode 13,985 tokens | 228 µs | 217 µs | 258 µs | 329 µs | 360 µs |
+
+15.3 MB/s encode (6.5 M tokens/s) and 15.5 ns/token decode. A 50K-token prompt
+tokenizes in about 8 ms, far below prefill cost, so the tokenizer is not a bottleneck.

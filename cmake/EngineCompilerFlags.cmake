@@ -16,6 +16,8 @@ if(MSVC)
 else()
   target_compile_options(engine_options INTERFACE
     -Wall -Wextra -Wpedantic -Wshadow -Wno-unused-parameter
+    # GCC 12/13 false positives on std::variant holding std::string (GCC PR 105562).
+    $<$<CXX_COMPILER_ID:GNU>:-Wno-maybe-uninitialized>
     $<$<CONFIG:Release,RelWithDebInfo>:-O3>)
   find_package(Threads REQUIRED)
   target_link_libraries(engine_options INTERFACE Threads::Threads)
@@ -46,7 +48,9 @@ else()
   endif()
   if(_san)
     list(JOIN _san "," _san_csv)
-    target_compile_options(engine_options INTERFACE -fsanitize=${_san_csv} -fno-omit-frame-pointer -g)
+    # Sanitizer findings fail the test instead of printing and continuing.
+    target_compile_options(engine_options INTERFACE -fsanitize=${_san_csv} -fno-sanitize-recover=all
+                           -fno-omit-frame-pointer -g)
     target_link_options(engine_options INTERFACE -fsanitize=${_san_csv})
   endif()
 endif()

@@ -118,7 +118,9 @@ TEST(Bf16, Conversions) {
   EXPECT_EQ(fp32_to_bf16(std::numeric_limits<float>::infinity()), 0x7F80);
   for (uint32_t h = 0; h <= 0xFFFF; ++h) {
     const float f = bf16_to_fp32(static_cast<uint16_t>(h));
-    if (!std::isnan(f)) ASSERT_EQ(fp32_to_bf16(f), h);
+    if (!std::isnan(f)) {
+      ASSERT_EQ(fp32_to_bf16(f), h);
+    }
   }
 }
 

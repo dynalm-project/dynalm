@@ -28,9 +28,15 @@ TEST(CpuInfo, CachedInstanceMatchesFreshDetection) {
 TEST(CpuInfo, FeatureImplications) {
   const CpuFeatures& f = cpu_info().features;
   // OS-enabled wider state implies the narrower one.
-  if (f.avx2) EXPECT_TRUE(f.avx);
-  if (f.avx512f) EXPECT_TRUE(f.avx2);
-  if (f.amx_int8) EXPECT_TRUE(f.amx_tile);
+  if (f.avx2) {
+    EXPECT_TRUE(f.avx);
+  }
+  if (f.avx512f) {
+    EXPECT_TRUE(f.avx2);
+  }
+  if (f.amx_int8) {
+    EXPECT_TRUE(f.amx_tile);
+  }
 #if ENGINE_ARCH_X86_64
   EXPECT_FALSE(cpu_info().vendor.empty());
 #endif

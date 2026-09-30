@@ -25,6 +25,8 @@ Platform                    (platform/ ✅ CPU + memory detection, ISA selection
 
 Data: `dtype/` ✅, `tensor/` ✅, `memory/` ✅ (host allocator + Storage; pools later).
 
+Text: `tokenizer/` ✅, `chat_template/` ✅ (neither knows about GGUF; the loader fills `TokenizerData`).
+
 Cross-cutting: `common/` ✅ (Status/Result, platform macros, timer),
 `logging/` ✅, `metrics/`, `config/`.
 

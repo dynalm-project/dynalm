@@ -49,9 +49,13 @@ inline Stats summarize(std::vector<double> v) {
 // Prevents the compiler from discarding a computed value.
 template <typename T>
 inline void do_not_optimize(T const& value) {
-  // A volatile read of the value's address is portable across MSVC/GCC/Clang.
+#if defined(_MSC_VER) && !defined(__clang__)
+  // MSVC has no inline asm on x64; a volatile store of the address is enough.
   static volatile const void* sink;
   sink = &value;
+#else
+  asm volatile("" : : "r,m"(value) : "memory");
+#endif
 }
 
 struct Options {

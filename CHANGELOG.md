@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Phase 4 — Tokenizer / chat template
+- `tokenizer/`: `Tokenizer` with byte-level BPE (rank merges, O(n log n)) and
+  SentencePiece BPE (score merges, byte fallback); special-token splitting (control
+  tokens only with `parse_special`); EOG set from metadata plus known terminators;
+  `Utf8Buffer` for streaming-safe decoding.
+- Hand-written pre-tokenizers (GPT-2, Llama-3, Qwen2, StarCoder/SmolLM) over generated
+  Unicode tables (`tools/gen_unicode_tables.py`).
+- `chat_template/`: family detection from Jinja source; ChatML (with default system
+  extraction), Llama-3, Llama-2, Mistral, Gemma, Phi-3, DeepSeek-V2/3.
+- `loader/gguf/gguf_tokenizer`: GGUF → format-neutral `TokenizerData`.
+- Golden tests: exact match with HF `tokenizers` for SmolLM2 and Qwen2.5 (38 cases each).
+- Linux container gate (`tools/linux.sh`): gcc 13 with zero warnings; ASAN+UBSAN (fatal); TSAN.
+- `bench_tokenizer`: 15 MB/s encode, 15.5 ns/token decode.
+
 ### Phase 3 — Model IR
 - `model_ir/ModelConfig`: family-neutral hyperparameters (GQA, head dims, RoPE incl.
   scaling, norms, activation, biases, QK-norm, sandwich norms, soft-capping, sliding

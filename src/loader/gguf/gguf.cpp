@@ -30,8 +30,8 @@ struct GgmlType {
 const GgmlType* ggml_type(uint32_t id) {
   static const std::array<GgmlType, 40> kTypes = [] {
     std::array<GgmlType, 40> t{};
-    auto set = [&](uint32_t id, std::string_view n, uint32_t be, uint32_t bb,
-                   std::optional<DType> d) { t[id] = {n, be, bb, d}; };
+    auto set = [&](uint32_t type_id, std::string_view n, uint32_t be, uint32_t bb,
+                   std::optional<DType> d) { t[type_id] = {n, be, bb, d}; };
     set(0, "f32", 1, 4, DType::kF32);
     set(1, "f16", 1, 2, DType::kF16);
     set(2, "q4_0", 32, 18, DType::kQ4_0);
@@ -152,16 +152,16 @@ Status read_value(Reader& r, ValueType type, Value& v) {
   v.type = type;
   bool ok = true;
   switch (type) {
-    case ValueType::kU8: { uint8_t x; ok = r.read(x); v.scalar.u = x; break; }
-    case ValueType::kI8: { int8_t x; ok = r.read(x); v.scalar.i = x; break; }
-    case ValueType::kU16: { uint16_t x; ok = r.read(x); v.scalar.u = x; break; }
-    case ValueType::kI16: { int16_t x; ok = r.read(x); v.scalar.i = x; break; }
-    case ValueType::kU32: { uint32_t x; ok = r.read(x); v.scalar.u = x; break; }
-    case ValueType::kI32: { int32_t x; ok = r.read(x); v.scalar.i = x; break; }
-    case ValueType::kU64: { uint64_t x; ok = r.read(x); v.scalar.u = x; break; }
-    case ValueType::kI64: { int64_t x; ok = r.read(x); v.scalar.i = x; break; }
-    case ValueType::kF32: { float x; ok = r.read(x); v.scalar.f = x; break; }
-    case ValueType::kF64: { double x; ok = r.read(x); v.scalar.f = x; break; }
+    case ValueType::kU8: { uint8_t x{}; ok = r.read(x); v.scalar.u = x; break; }
+    case ValueType::kI8: { int8_t x{}; ok = r.read(x); v.scalar.i = x; break; }
+    case ValueType::kU16: { uint16_t x{}; ok = r.read(x); v.scalar.u = x; break; }
+    case ValueType::kI16: { int16_t x{}; ok = r.read(x); v.scalar.i = x; break; }
+    case ValueType::kU32: { uint32_t x{}; ok = r.read(x); v.scalar.u = x; break; }
+    case ValueType::kI32: { int32_t x{}; ok = r.read(x); v.scalar.i = x; break; }
+    case ValueType::kU64: { uint64_t x{}; ok = r.read(x); v.scalar.u = x; break; }
+    case ValueType::kI64: { int64_t x{}; ok = r.read(x); v.scalar.i = x; break; }
+    case ValueType::kF32: { float x{}; ok = r.read(x); v.scalar.f = x; break; }
+    case ValueType::kF64: { double x{}; ok = r.read(x); v.scalar.f = x; break; }
     case ValueType::kBool: {
       uint8_t x;
       ok = r.read(x) && x <= 1;
