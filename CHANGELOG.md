@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Phase 19 — Streaming
+- `runtime/text_stream`: `TextStreamer`, UTF-8-safe deltas with stop strings that are
+  never emitted (minimal holdback).
+- `runtime/engine`: `Engine` facade (model, pool, backend, KV, scheduler, scheduler thread),
+  `generate_text` / `generate_chat` → `RequestStream` (thread-safe event queue: deltas, final
+  event with finish reason, error, token usage), consumer cancellation, safe shutdown.
+- `engine run` streams through the Engine (`--stop` added); reports TTFT and inter-delta latency.
+- Tests: streamer behaviour; engine incremental streaming, stop strings, concurrent clients,
+  cancellation, errors, shutdown.
+
 ### Phase 18 — Kernel optimization
 - Forward-pass profiler (`Transformer::set_profiling`, `ForwardProfile`, `bench_profile`).
 - Prefill GEMM: AVX2 4×2 register-blocked `gemm_panel` (+ generic) over expanded weight

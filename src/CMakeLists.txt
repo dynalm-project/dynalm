@@ -32,8 +32,10 @@ add_library(engine_core STATIC
   platform/isa.cpp
   quant/dequant.cpp
   quant/quant_formats.cpp
+  runtime/engine.cpp
   runtime/generator.cpp
   runtime/sequence.cpp
+  runtime/text_stream.cpp
   runtime/thread_pool.cpp
   sampling/sampler.cpp
   scheduler/scheduler.cpp

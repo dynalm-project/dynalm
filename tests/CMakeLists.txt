@@ -86,3 +86,6 @@ engine_add_test(test_prefix_cache
 
 engine_add_test(test_kernels
   test_kernels.cpp)
+
+engine_add_test(test_streaming
+  test_streaming.cpp)

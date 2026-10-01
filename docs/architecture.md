@@ -6,7 +6,9 @@ what exists today. Implemented parts are marked ✅; everything else is planned.
 ## Layering
 
 ```
-CLI / API server            (cli/ ✅ skeleton, server/, api/)
+CLI / API server            (cli/ ✅, server/, api/)
+      │
+Engine facade               (runtime/engine ✅: scheduler thread + RequestStream streaming)
       │
 Request manager / queue     (runtime/)
       │

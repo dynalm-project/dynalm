@@ -480,3 +480,26 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   fp32 FMA throughput, so VNNI (2–4× int8 MACs) is the right next prefill lever. It changes
   numerics, though, and needs its own accuracy tests against the references (planned).
 - **Evidence:** `bench_profile` breakdown (docs/benchmarks.md, Phase 18).
+
+## DD-034: Engine facade with a dedicated scheduler thread and per-request event streams
+
+- **Decision:** `Engine` owns the model, thread pool, backend, KV pool and scheduler, plus
+  one scheduler thread that steps while there's work and sleeps on a condition variable
+  otherwise. `generate_text/generate_chat` submit through the scheduler's handoff queue
+  and return a `RequestStream`. Scheduler callbacks run `TextStreamer` (UTF-8-safe
+  deltas, stop strings) and push events without blocking. Consumers pop with a timeout
+  and may cancel. A weak-pointer control block keeps `cancel()` safe after shutdown, and
+  streams still open at shutdown end with `kCancelled`.
+- **Reason:** Spec §27–28 and §31: stream without buffering, and an HTTP thread → request
+  queue → scheduler → runtime path where HTTP can never block the scheduler. A slow client
+  only grows its own event queue.
+- **Stop strings:** Text is held back only while it could still begin a stop string (the
+  minimal suffix), so normal text flows immediately and a stop string is never emitted,
+  even split across tokens. On a match, the stream ends with `stop` and the scheduler
+  request is cancelled to free its KV.
+- **Evidence:** Tests: UTF-8 never split; stop strings across tokens; minimal holdback;
+  earliest of several stops; engine streams incrementally and matches the Generator;
+  concurrent clients on 4 threads; consumer cancellation; per-request errors; streams
+  outliving the engine. `engine run` now uses this path.
+- **Tradeoffs:** Event queues are unbounded per request. A client that never reads holds
+  at most its own request's text, bounded by `max_tokens`.

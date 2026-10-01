@@ -22,7 +22,7 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
 - [x] Phase 16 — Radix cache
 - [x] Phase 17 — CPU SIMD optimization
 - [x] Phase 18 — Kernel optimization
-- [ ] Phase 19 — Streaming
+- [x] Phase 19 — Streaming
 - [ ] Phase 20 — OpenAI API
 - [ ] Phase 21 — Benchmark framework
 - [ ] Phase 22 — Production hardening
