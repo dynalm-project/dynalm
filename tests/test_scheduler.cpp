@@ -188,7 +188,8 @@ TEST_F(SchedulerTest, RequestLargerThanCacheFailsCleanly) {
   const uint64_t id = sched.submit(make_request(prompt(30, 1), 5, out));
   sched.run_until_idle();
   EXPECT_EQ(out.final_event[id].status, SequenceStatus::kError);
-  EXPECT_EQ(out.final_event[id].error.code(), StatusCode::kResourceExhausted);
+  // Rejected at validation (Phase 22): it could never fit, even alone.
+  EXPECT_EQ(out.final_event[id].error.code(), StatusCode::kInvalidArgument);
   EXPECT_EQ(pool->free_blocks() + cached_blocks(sched), pool->num_blocks());  // no leaks
 }
 

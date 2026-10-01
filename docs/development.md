@@ -85,8 +85,39 @@ curl http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/jso
 curl http://127.0.0.1:8000/metrics
 ```
 
-Endpoints: `GET /health`, `GET /v1/models`, `GET /metrics` (Prometheus text),
-`POST /v1/chat/completions`, `POST /v1/completions` (both support `stream`).
+Endpoints: `GET /health` (503 `draining` during shutdown), `GET /v1/models`,
+`GET /metrics` (Prometheus text), `POST /v1/chat/completions`, `POST /v1/completions` (both
+support `stream`), and `POST /admin/shutdown` (loopback only; `--disable-admin` turns it off).
+
+### Configuration
+
+Options come from three sources; later ones win: config file < `ENGINE_<OPTION>`
+environment < command line. `threads`, `ctx`, `batch` and `http-threads` accept `auto`. With
+`ctx auto` (the default), the KV cache uses half of the free RAM left after the weights, capped
+at 65536 tokens (DD-038).
+
+```ini
+# engine.conf — keys are the long option names
+model = models/qwen2.5-0.5b-instruct-q4_k_m.gguf
+host = 0.0.0.0
+port = 8000
+threads = auto
+ctx = auto
+max-active = 64          # concurrent requests before 503 + Retry-After
+request-timeout = 600    # seconds, queued + generating
+shutdown-timeout = 30    # drain time on SIGTERM / engine stop
+```
+
+```sh
+ENGINE_PORT=9000 engine serve --config engine.conf --threads 8
+engine list models          # GGUF files with architecture, quantization, context, support status
+engine stop --port 9000     # drain in-flight requests, then exit (alias: unload)
+```
+
+Status codes: 400 for invalid or unsupported requests (including prompt + max_tokens larger
+than the context or the KV cache), 503 for overload, draining or a retryable resource limit,
+504 for a request timeout, and 500 otherwise. Error bodies use the OpenAI shape
+`{"error":{"message","type"}}`.
 Sampling parameters are accepted, but decoding is greedy until Phase 26.
 The `"ignore_eos": true` request extension (also accepted by llama.cpp) disables stopping on
 end-of-generation tokens. It is used for fixed-length benchmarking.

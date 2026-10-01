@@ -30,6 +30,7 @@
 #include "common/status.h"
 #include "kv_cache/kv_cache.h"
 #include "loader/model_loader.h"
+#include "metrics/metrics.h"
 #include "model/transformer.h"
 #include "runtime/thread_pool.h"
 #include "scheduler/scheduler.h"
@@ -39,7 +40,7 @@ namespace engine {
 struct EngineOptions {
   std::string model_path;
   int threads = 0;              // 0 = physical cores
-  int64_t kv_tokens = 0;        // KV capacity in tokens; 0 = min(context, 16384)
+  int64_t kv_tokens = 0;        // KV capacity in tokens; 0 = auto (auto_kv_tokens)
   DType kv_dtype = DType::kF16;
   int32_t max_batch_tokens = 256;
   SchedulerConfig scheduler;
@@ -92,12 +93,22 @@ class RequestStream {
   std::function<void()> cancel_fn_;
 };
 
+// AUTO KV capacity in tokens (DD-038): half of the RAM still available after
+// the weights, capped at 65536 tokens, at least min(context, 2048), rounded
+// down to whole 16-token blocks. `available_ram` 0 (unknown) falls back to
+// min(context, 16384).
+int64_t auto_kv_tokens(const ModelConfig& c, DType kv_dtype, int64_t weight_bytes, int64_t available_ram);
+
 // Observability snapshot, refreshed by the scheduler thread after each step.
 struct EngineStats {
   SchedulerStats scheduler;
   PrefixCacheStats prefix;
   int32_t kv_blocks_used = 0;
   int32_t kv_blocks_total = 0;
+  // Throughput over the last completed window of >= 1 s of busy steps.
+  double generation_tok_s = 0;
+  double prefill_tok_s = 0;
+  uint64_t prefill_tokens = 0;  // prompt rows computed (excludes prefix-cache hits)
 };
 
 class Engine {
@@ -121,6 +132,12 @@ class Engine {
   const KvGeometry& kv_geometry() const { return kv_->geometry(); }
   // Snapshot taken on the scheduler thread after its latest step.
   EngineStats stats() const;
+  // Duration of each scheduler step (batched forward pass), ms.
+  const metrics::Histogram& step_ms() const { return step_ms_; }
+  // Bytes of the KV pool and of the memory-mapped weights.
+  int64_t kv_bytes() const { return kv_->geometry().total_bytes(); }
+  int64_t weight_bytes() const { return model_->weight_bytes; }
+  int64_t kv_capacity_tokens() const;
 
  private:
   Engine() = default;
@@ -148,6 +165,7 @@ class Engine {
   std::vector<std::weak_ptr<RequestStream>> live_;  // open streams (guarded by wake_mu_), ended at shutdown
   mutable std::mutex stats_mu_;
   EngineStats stats_;
+  metrics::Histogram step_ms_{metrics::latency_buckets_ms()};
 };
 
 }  // namespace engine

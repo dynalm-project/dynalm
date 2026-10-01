@@ -28,7 +28,8 @@ void print_usage() {
       "  run <model> -p TEXT  generate from a prompt (engine run for options)\n"
       "  serve <model>        OpenAI-compatible HTTP server (engine serve for options)\n"
       "  benchmark <model>    load test (in-process or --url server), P50-P99 latency\n"
-      "  list | stop | unload model management               (phase 22)\n");
+      "  list [dir]           GGUF models under dir (default ./models or $ENGINE_MODELS_DIR)\n"
+      "  stop | unload        ask a local server to drain and exit (--host, --port)\n");
 }
 
 int cmd_version() {
@@ -95,12 +96,6 @@ int cmd_info() {
   return 0;
 }
 
-int not_implemented(std::string_view cmd, int phase) {
-  std::fprintf(stderr, "engine: '%.*s' is not implemented yet (planned for phase %d)\n",
-               static_cast<int>(cmd.size()), cmd.data(), phase);
-  return 2;
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -147,7 +142,9 @@ int main(int argc, char** argv) {
   }
 #endif
   if (cmd == "benchmark") return engine::cli::cmd_benchmark(std::span(args).subspan(i + 1));
-  if (cmd == "list" || cmd == "stop" || cmd == "unload") return not_implemented(cmd, 22);
+  if (cmd == "list") return engine::cli::cmd_list(std::span(args).subspan(i + 1));
+  // One model per server process (DD-039): unloading it means stopping it.
+  if (cmd == "stop" || cmd == "unload") return engine::cli::cmd_stop(std::span(args).subspan(i + 1));
   if (cmd == "help") {
     print_usage();
     return 0;

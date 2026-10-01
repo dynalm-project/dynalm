@@ -235,6 +235,125 @@ TEST_F(ServerTest, ClientDisconnectCancelsGeneration) {
   EXPECT_EQ(ok->status, 200);
 }
 
+// --- Phase 22: hardening ---
+
+// A second server over the fixture's engine with custom options.
+std::unique_ptr<Server> start_server(Engine& e, ServerOptions so) {
+  so.port = 0;
+  auto s = std::make_unique<Server>(e, std::move(so));
+  EXPECT_TRUE(s->start().ok());
+  return s;
+}
+
+TEST_F(ServerTest, OverloadIsRejectedWith503AndHealthStillAnswers) {
+  ServerOptions so;
+  so.max_active = 0;  // every completion is over the limit
+  auto s = start_server(*eng, so);
+  httplib::Client c("127.0.0.1", s->port());
+  auto res = c.Post("/v1/completions", R"({"prompt":"x","max_tokens":2})", "application/json");
+  ASSERT_TRUE(res);
+  EXPECT_EQ(res->status, 503);
+  EXPECT_EQ(res->get_header_value("Retry-After"), "1");
+  EXPECT_EQ(J(res->body.c_str()).find("error")->find("type")->as_string(), "overloaded_error");
+  EXPECT_EQ(s->active_requests(), 0);  // the refused request released its slot
+  EXPECT_EQ(c.Get("/health")->status, 200);
+  EXPECT_NE(c.Get("/metrics")->body.find("engine_requests_rejected_total 1"), std::string::npos);
+}
+
+TEST_F(ServerTest, AdmissionLimitUnderConcurrency) {
+  ServerOptions so;
+  so.max_active = 2;
+  auto s = start_server(*eng, so);
+  std::atomic<int> ok{0}, rejected{0}, other{0};
+  std::vector<std::thread> ts;
+  for (int i = 0; i < 8; ++i) {
+    ts.emplace_back([&, i] {
+      httplib::Client c("127.0.0.1", s->port());
+      c.set_read_timeout(60, 0);
+      const std::string body = R"({"prompt":"load )" + std::to_string(i) + R"(","max_tokens":40,"stream":true})";
+      auto res = c.Post("/v1/completions", body, "application/json");
+      if (res && res->status == 200) ok.fetch_add(1);
+      else if (res && res->status == 503) rejected.fetch_add(1);
+      else other.fetch_add(1);
+    });
+  }
+  for (auto& t : ts) t.join();
+  EXPECT_EQ(ok.load() + rejected.load(), 8);
+  EXPECT_EQ(other.load(), 0);
+  EXPECT_GE(ok.load(), 1);
+  EXPECT_EQ(s->active_requests(), 0);  // every slot came back, streamed or refused
+}
+
+TEST_F(ServerTest, DrainRefusesNewWork) {
+  server->begin_drain();
+  auto h = client->Get("/health");
+  ASSERT_TRUE(h);
+  EXPECT_EQ(h->status, 503);
+  EXPECT_NE(h->body.find("draining"), std::string::npos);
+  auto res = client->Post("/v1/completions", R"({"prompt":"x","max_tokens":2})", "application/json");
+  ASSERT_TRUE(res);
+  EXPECT_EQ(res->status, 503);
+  EXPECT_FALSE(res->get_header_value("Retry-After").empty());
+}
+
+TEST_F(ServerTest, AdminShutdownFromLoopback) {
+  std::atomic<int> calls{0};
+  ServerOptions so;
+  so.on_shutdown_request = [&] { calls.fetch_add(1); };
+  auto s = start_server(*eng, so);
+  ASSERT_TRUE(request_server_shutdown("127.0.0.1", s->port()).ok());
+  EXPECT_EQ(calls.load(), 1);
+  EXPECT_TRUE(s->draining());
+
+  ServerOptions off;
+  off.enable_admin = false;
+  auto s2 = start_server(*eng, off);
+  httplib::Client c("127.0.0.1", s2->port());
+  EXPECT_EQ(c.Post("/admin/shutdown")->status, 404);
+  EXPECT_FALSE(request_server_shutdown("127.0.0.1", s2->port()).ok());
+  EXPECT_FALSE(s2->draining());
+}
+
+TEST_F(ServerTest, RequestTimeoutIs504AndFreesKv) {
+  ServerOptions so;
+  so.request_timeout_ms = 1;
+  auto s = start_server(*eng, so);
+  httplib::Client c("127.0.0.1", s->port());
+  c.set_read_timeout(60, 0);
+  // The tiny model's context is 128 tokens; 120 decode steps take well over 1 ms.
+  auto res = c.Post("/v1/completions", R"({"prompt":"slow","max_tokens":120,"ignore_eos":true})", "application/json");
+  ASSERT_TRUE(res);
+  EXPECT_EQ(res->status, 504) << res->body;
+  EXPECT_EQ(J(res->body.c_str()).find("error")->find("type")->as_string(), "timeout_error");
+  // Stats are a post-step snapshot; the step that retired the request publishes both.
+  for (int i = 0; i < 500 && eng->stats().scheduler.timed_out == 0; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  EXPECT_GE(eng->stats().scheduler.timed_out, 1u);
+  EXPECT_EQ(eng->stats().scheduler.running, 0);
+}
+
+TEST_F(ServerTest, MetricsCoverSpecList) {
+  ASSERT_EQ(client->Post("/v1/completions", R"({"prompt":"m","max_tokens":4})", "application/json")->status, 200);
+  const std::string m = client->Get("/metrics")->body;
+  for (const char* name :
+       {"engine_requests_total", "engine_requests_active", "engine_requests_failed_total",
+        "engine_generation_tokens_total", "engine_tokens_processed_total", "engine_prefill_tokens_total",
+        "engine_generation_tokens_per_second", "engine_prefill_tokens_per_second", "engine_kv_cache_used_blocks",
+        "engine_kv_cache_capacity_tokens", "engine_kv_cache_hit_rate", "engine_scheduler_step_ms_bucket",
+        "engine_queue_latency_ms_avg", "engine_ttft_ms_bucket", "engine_itl_ms_bucket", "engine_tpot_ms_bucket"}) {
+    EXPECT_NE(m.find(name), std::string::npos) << name;
+  }
+}
+
+TEST(ServerStatus, EngineErrorsMapToHttp) {
+  EXPECT_EQ(http_status_for(StatusCode::kInvalidArgument), 400);
+  EXPECT_EQ(http_status_for(StatusCode::kUnsupported), 400);
+  EXPECT_EQ(http_status_for(StatusCode::kResourceExhausted), 503);
+  EXPECT_EQ(http_status_for(StatusCode::kDeadlineExceeded), 504);
+  EXPECT_EQ(http_status_for(StatusCode::kInternal), 500);
+}
+
 TEST_F(ServerTest, ChatWithoutTemplateIsClearError) {
   // The tiny Qwen model ships no chat template: chat requests must fail
   // clearly (400), completions still work.

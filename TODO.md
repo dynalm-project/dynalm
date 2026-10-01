@@ -25,7 +25,7 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
 - [x] Phase 19 — Streaming
 - [x] Phase 20 — OpenAI API
 - [x] Phase 21 — Benchmark framework
-- [ ] Phase 22 — Production hardening
+- [x] Phase 22 — Production hardening
 - [ ] Phase 23 — SafeTensors
 - [ ] Phase 24 — GPTQ/AWQ architecture preparation
 - [ ] Phase 25 — MoE support
@@ -42,6 +42,8 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
 - Multi-row fused decode kernel (decode each weight block once, dot against up to 4 activation
   rows in registers) to replace the expand path for small batches (DD-036).
 - Open-loop (Poisson arrival) mode for the load generator (DD-037).
+- Token-authenticated admin endpoint for deployments behind a same-host proxy (DD-039).
+- CPU affinity / thread pinning / NUMA placement (spec §32), measured against the baselines.
 - AVX2 Q5_K/Q2_K/Q3_K/Q4_1/Q5_1 fused kernels (they use the chunked fallback today).
 - Cold-start TTFT: prefetch mmapped weights at load (first forward is page-fault bound).
 

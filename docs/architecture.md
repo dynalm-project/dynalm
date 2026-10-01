@@ -71,12 +71,28 @@ attention → O proj → optional post-norm → residual → norm → gated/plai
 optional post-norm → residual] → final norm on the last row → LM head → optional
 soft-cap. Every branch is a `ModelConfig` flag.
 
-## Threads (partially ✅)
+## Threads ✅
 
-API threads → request queue → one scheduler thread → persistent worker pool
-(`runtime/thread_pool` ✅) for kernels. No thread creation per request.
+HTTP workers (cpp-httplib pool, max-active + 8) → `Engine::submit` → one scheduler
+thread → persistent worker pool (`runtime/thread_pool`) for kernels. No thread is
+created per request. HTTP workers only parse, submit and relay a `RequestStream`;
+they never run model code (DD-034).
+
+## Serving lifecycle ✅ (DD-039)
+
+```
+request ─► admission (≤ max-active, else 503) ─► validation (context, KV capacity: 400)
+        ─► scheduler queue ─► running (preemptible) ─► finished | cancelled | timed out (504)
+```
+
+Each admitted request is owned by an RAII guard that returns its admission slot and
+cancels the engine request on every exit path. A shutdown (SIGTERM or
+`/admin/shutdown`) drains: new work gets 503 and in-flight requests finish within the
+grace period. Configuration is merged as file < env < CLI (DD-038).
 
 ## Error model ✅
 
 `Status` / `Result<T>` at every fallible boundary. No exceptions on the hot path.
 One request failing must not take down the server (errors are per-request).
+Engine status codes map to HTTP: 400 invalid or unsupported, 503 overloaded or
+retryable, 504 deadline, 500 internal.

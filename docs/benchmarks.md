@@ -511,3 +511,22 @@ These rows are not directly comparable:
 
 The comparable signal is single-stream ITL: 25–28 ms natively vs our 30–35 ms and
 llama.cpp's 29–33 ms in the container. Some of that difference is likely the VM boundary.
+
+## Phase 22 — hardening overhead
+
+Hardening adds two atomic operations per HTTP request (admission slot), one shared guard
+per request, and two clock reads plus one histogram update per scheduler step (steps take
+≥ 10 ms). In-process decode, Qwen2.5-0.5B Q4_K_M, 10 threads, prompt 128 / output 64, two
+alternating repetitions:
+
+| ITL p50 ms | Phase 21 (DD-036 sweep) | Phase 22 |
+|---|---|---|
+| c=2 | 34.8–37.5 | 32.8–37.0 |
+| c=4 | 42.7–47.0 | 40.7–47.5 |
+
+No measurable change; run-to-run spread on this laptop is ±10%.
+
+Lifecycle checks in the container:
+- `engine stop` drains and exits 0.
+- SIGTERM with one request in flight finishes it (96 tokens, 0 errors), then exits 0.
+- AUTO KV picked 65536 tokens (0.75 GB) with 5.85 GB free.

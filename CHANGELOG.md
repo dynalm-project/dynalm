@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Phase 22 — Production hardening
+- Configuration (DD-038): `config/` merges a config file (`--config`/`ENGINE_CONFIG`),
+  `ENGINE_<OPTION>` env vars and CLI flags; `auto` values; KV capacity sized from free RAM by
+  default (`auto_kv_tokens`).
+- Server (DD-039): admission limit `--max-active` (503 + Retry-After), HTTP workers default to
+  max-active + 8, default request timeout `--request-timeout` (504), engine-error → HTTP status
+  mapping, graceful drain on SIGINT/SIGTERM with `--shutdown-timeout`, `/health` reports
+  `draining`, loopback-only `POST /admin/shutdown` (`--disable-admin`). Requests are owned by
+  an RAII guard, which fixes a leaked active-request gauge (and an uncancelled request) when
+  a client vanished before streaming began.
+- Scheduler: requests larger than the KV pool are rejected at submission.
+- Metrics: `engine_scheduler_step_ms`, `engine_tpot_ms`, `engine_generation_tokens_per_second`,
+  `engine_prefill_tokens_per_second`, `engine_prefill_tokens_total`,
+  `engine_kv_cache_capacity_tokens`, `engine_requests_rejected_total`,
+  `engine_requests_timed_out_total`, `engine_queue_latency_ms_max`.
+- CLI: `engine list [dir]`, `engine stop|unload [--host --port]`. The structured startup
+  summary now includes RAM required and the KV size.
+- Tests: `test_config`, `test_compat` (spec §38 suite for every tiny architecture plus real
+  models when present), `test_hardening` (abuse/leak/shutdown), and 7 new `test_server` cases.
+
 ### Phase 21 — Benchmark framework
 - `bench/loadgen`: closed-loop load generator. Exact-length prompts, unique per request and
   per point, fixed output lengths, a warm-up request. Reports TTFT/ITL/TPOT/E2E at

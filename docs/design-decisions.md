@@ -606,3 +606,96 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
 - **Evidence:** `test_bench`: percentile ranks, exact prompt lengths, unique prefixes,
   fixed output lengths through the scheduler, no cross-point prefix reuse. Results are in
   `docs/benchmarks.md` (Phase 21).
+
+## DD-038: Layered configuration and RAM-based AUTO sizing
+
+- **Decision:**
+  - **Merging.** `engine serve` options come from a config file (`--config` or
+    `ENGINE_CONFIG`; `key = value` lines), then `ENGINE_<OPTION>` environment variables,
+    then the command line. Later sources win. `config/merge_config` concatenates the three
+    sources into one argument list, and the command's existing parser consumes it, so every
+    option works in every source without duplicated parsing.
+  - **AUTO values.** `threads auto` means physical cores. `batch auto` means 256.
+    `http-threads auto` means max-active + 8.
+  - **KV auto (`ctx auto`, the default).** Use half of the RAM still available after the
+    weights. Cap at 65536 tokens, never go below min(context, 2048), and round down to
+    whole blocks. If RAM is unknown, fall back to min(context, 16384).
+- **Reason:** Spec §42 asks for CLI, environment variables and a config file, plus an AUTO
+  mode from cores, RAM, SIMD, model size and context. The old fixed min(context, 16384)
+  default wasted capacity on large machines and could overcommit small ones.
+  - Half of the free RAM leaves room for the page cache that backs the memory-mapped
+    weights, and for other processes.
+  - The 65536-token cap bounds the up-front allocation. At ~12 KiB per token (Qwen2.5-0.5B)
+    that is 0.75 GB, enough for 32 concurrent 2K-token conversations.
+- **Alternatives:**
+  - A TOML/YAML parser: a dependency for a flat key/value need.
+  - Per-option environment handling in each command: duplicated and easy to forget.
+  - Growing the KV pool on demand: needs re-addressing of block tables. The pool is fixed,
+    and sizing it is the AUTO decision.
+- **Tradeoffs:**
+  - MemAvailable is a point-in-time reading, so a later memory spike by another process is
+    not foreseen.
+  - The file format has no sections or quoting; values cannot contain `#`.
+- **Evidence:**
+  - `test_config`: parsing with line-numbered errors, file < env < CLI precedence, `auto`,
+    and the AUTO KV policy (budget, cap, floor, unknown RAM, f32).
+  - Container run: a 5.85 GB-free machine chose 65536 tokens (0.75 GB) for Qwen2.5-0.5B, and
+    the startup log reports RAM required = weights + KV.
+
+## DD-039: Server hardening: admission limit, spare HTTP workers, timeouts, graceful drain
+
+- **Decision:**
+  - **Admission limit.** At most `max_active` (default 64) completion requests are served
+    at once. Further requests get 503 `overloaded_error` with `Retry-After: 1`.
+  - **Spare workers.** The HTTP pool defaults to max_active + 8 workers. A streaming
+    response occupies a worker for its whole lifetime, so the spare workers keep `/health`
+    and `/metrics` answering under full load.
+  - **Timeouts.** Every request gets a default timeout (600 s, queued plus generating),
+    enforced by the scheduler's deadlines.
+  - **Error mapping.** Engine errors map to HTTP status codes: 400 invalid or unsupported,
+    503 resource exhausted or cancelled, 504 deadline, otherwise 500.
+  - **Capacity check.** A request whose prompt + max_tokens exceeds the KV pool is
+    rejected at submission, before any compute.
+  - **Graceful drain.** On SIGINT/SIGTERM or `POST /admin/shutdown`, the server drains:
+    new requests get 503, `/health` returns 503 `draining`, and in-flight requests run to
+    completion for up to `--shutdown-timeout` (default 30 s). A second signal stops
+    immediately; the remaining streams end as cancelled.
+  - **Admin endpoint.** `/admin/shutdown` accepts loopback clients only, and
+    `--disable-admin` removes it. `engine stop` is its client.
+  - **Request ownership.** Each admitted request is owned by an RAII `Inflight` object held
+    by the response. Its destructor returns the admission slot and cancels the engine
+    request if it did not finish. That covers every exit path, including a client that
+    disconnects before the streaming provider first runs; the old code leaked the active
+    gauge, and never cancelled the request, on that path.
+- **Reason:** Spec §29, §39 and §40.
+  - Unbounded admission turns overload into unbounded latency and memory. Explicit 503s let
+    load balancers retry elsewhere.
+  - Before this change, with 16 HTTP workers, a 17th streaming client blocked behind the
+    others, and so did health checks.
+  - Draining lets rolling restarts happen without cutting off users mid-answer.
+- **One model per process:** `engine unload` is the same as `engine stop`. Multi-model
+  hosting means separate weights, KV pools and schedulers competing for the same cores and
+  memory bandwidth. On a CPU that is better done with separate processes behind a router,
+  whose failures are also isolated. This keeps the server small.
+- **Alternatives:**
+  - Queueing beyond `max_active` inside the server instead of 503: hides overload and grows
+    TTFT without bound. The scheduler already queues up to `max_running`.
+  - An async HTTP server so streams don't hold threads: cpp-httplib is thread-per-request,
+    and 72 mostly idle threads cost little. Switching libraries would be a large change for
+    no measured gain.
+  - Token-authenticated admin: deferred. Loopback-only plus an off switch covers the
+    single-host case. Behind a same-host reverse proxy, every client appears as loopback,
+    so deployments should either use `--disable-admin` or block `/admin/` at the proxy.
+- **Tradeoffs:** A fixed `max_active` is not adaptive to request size; KV pressure is handled
+  by scheduler preemption beneath it.
+- **Evidence:**
+  - `test_server`: overload 503 with no leaked slot, health under overload, an 8-client
+    admission storm (only 200 or 503, every slot returned), drain, loopback admin and
+    disable, 504 on timeout with KV freed, spec §44 metric names, and status mapping.
+  - `test_hardening`: 96 mixed requests (invalid, oversized, timeouts, cancellations) on a
+    10-block KV pool. Every request ends exactly once, good requests succeed, no KV block
+    leaks, and the engine stays usable. Oversized requests are rejected before compute.
+    Engine destruction with in-flight streams is safe.
+  - Container runs: SIGTERM with one request in flight let it finish (96 tokens, no error)
+    and then exited 0; `engine stop` drained and exited.
+  - The gate runs all of these under ASAN/UBSAN and TSAN.

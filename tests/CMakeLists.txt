@@ -102,3 +102,12 @@ endif()
 
 engine_add_test(test_bench
   test_bench.cpp)
+
+engine_add_test(test_config
+  test_config.cpp)
+
+engine_add_test(test_compat
+  test_compat.cpp)
+
+engine_add_test(test_hardening
+  test_hardening.cpp)

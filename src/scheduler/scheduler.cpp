@@ -95,6 +95,12 @@ void Scheduler::drain_incoming() {
       bad = InvalidArgument("empty prompt");
     } else if (s.prompt_len() + static_cast<int64_t>(s.stop().max_new_tokens) > c.context_length) {
       bad = InvalidArgument("prompt + max_new_tokens exceeds context length " + std::to_string(c.context_length));
+    } else if (s.prompt_len() + static_cast<int64_t>(s.stop().max_new_tokens) >
+               static_cast<int64_t>(kv_.num_blocks()) * kv_.geometry().block_size) {
+      // Could never fit even alone; reject now instead of failing mid-generation.
+      bad = InvalidArgument("prompt + max_new_tokens exceeds the KV cache capacity of " +
+                            std::to_string(static_cast<int64_t>(kv_.num_blocks()) * kv_.geometry().block_size) +
+                            " tokens");
     } else if (s.stop().max_new_tokens <= 0) {
       bad = InvalidArgument("max_new_tokens must be > 0");
     } else {

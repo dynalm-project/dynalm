@@ -11,6 +11,7 @@ add_library(engine_core STATIC
   backends/cpu/generic/kernels_generic.cpp
   chat_template/chat_template.cpp
   common/status.cpp
+  config/config.cpp
   dtype/dtype.cpp
   kv_cache/kv_cache.cpp
   logging/log.cpp
@@ -64,7 +65,7 @@ if(ENABLE_AVX2)
   engine_set_isa(AVX2 backends/cpu/avx2/kernels_avx2.cpp)
 endif()
 
-add_executable(engine cli/main.cpp cli/benchmark.cpp cli/inspect.cpp cli/run.cpp)
+add_executable(engine cli/main.cpp cli/benchmark.cpp cli/inspect.cpp cli/manage.cpp cli/run.cpp)
 target_link_libraries(engine PRIVATE engine_core)
 
 # HTTP server (cpp-httplib: pinned single header, verified by SHA256).

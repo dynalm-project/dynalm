@@ -2,7 +2,9 @@
 
 #include <algorithm>
 
+#include "common/timer.h"
 #include "logging/log.h"
+#include "platform/cpu_info.h"
 #include "runtime/sequence.h"
 #include "runtime/text_stream.h"
 
@@ -77,6 +79,16 @@ StreamFinish map_finish(const RequestEvent& ev) {
 
 }  // namespace
 
+int64_t auto_kv_tokens(const ModelConfig& c, DType kv_dtype, int64_t weight_bytes, int64_t available_ram) {
+  constexpr int64_t kBlock = 16, kMax = 65536;
+  if (available_ram <= 0) return std::min<int64_t>(c.context_length, 16384);
+  const int64_t per_token = std::max<int64_t>(1, c.kv_bytes_per_token(kv_dtype));
+  const int64_t budget = std::max<int64_t>(0, available_ram - weight_bytes) / 2;
+  const int64_t floor = std::min<int64_t>(c.context_length, 2048);
+  const int64_t tokens = std::clamp<int64_t>(budget / per_token, floor, std::max(floor, kMax));
+  return std::max(kBlock, tokens / kBlock * kBlock);
+}
+
 Result<std::unique_ptr<Engine>> Engine::create(EngineOptions opts) {
   std::unique_ptr<Engine> e(new Engine());
   ENGINE_ASSIGN_OR_RETURN(e->model_, load_model(opts.model_path));
@@ -84,7 +96,9 @@ Result<std::unique_ptr<Engine>> Engine::create(EngineOptions opts) {
   const int threads = opts.threads > 0 ? opts.threads : cpu_info().physical_cores;
   e->pool_ = std::make_unique<ThreadPool>(threads);
   e->backend_ = std::make_unique<CpuBackend>(*e->pool_, select_best_isa(cpu_info().features));
-  const int64_t kv_tokens = opts.kv_tokens > 0 ? opts.kv_tokens : std::min<int64_t>(c.context_length, 16384);
+  const int64_t kv_tokens = opts.kv_tokens > 0 ? opts.kv_tokens
+                                               : auto_kv_tokens(c, opts.kv_dtype, e->model_->weight_bytes,
+                                                                memory_info().available_bytes);
   ENGINE_ASSIGN_OR_RETURN(e->kv_, KvBlockPool::create(kv_geometry_for(c, opts.kv_dtype, 16, kv_tokens), *e->backend_));
   ENGINE_ASSIGN_OR_RETURN(e->transformer_,
                           Transformer::create(c, e->model_->weights, *e->backend_, opts.max_batch_tokens));
@@ -119,21 +133,52 @@ Engine::~Engine() {
 }
 
 void Engine::loop() {
+  // Throughput window: restarts whenever the engine wakes from idle.
+  int64_t window_start = 0;
+  uint64_t window_gen = 0, window_prefill = 0, prefill_total = 0;
+  double gen_rate = 0, prefill_rate = 0;
   for (;;) {
     {
       std::unique_lock<std::mutex> lock(wake_mu_);
       wake_cv_.wait(lock, [&] { return stop_ || !scheduler_->idle(); });
       if (stop_) return;
     }
+    const uint64_t gen_before = scheduler_->stats().tokens_generated;
+    const int64_t t0 = now_ns();
+    if (window_start == 0) window_start = t0;
     scheduler_->step();
+    const int64_t t1 = now_ns();
+    step_ms_.observe(static_cast<double>(t1 - t0) * 1e-6);
+
     EngineStats st;
     st.scheduler = scheduler_->stats();
+    window_gen += st.scheduler.tokens_generated - gen_before;
+    window_prefill += static_cast<uint64_t>(st.scheduler.last_prefill_rows);
+    prefill_total += static_cast<uint64_t>(st.scheduler.last_prefill_rows);
+    if (const double secs = static_cast<double>(t1 - window_start) * 1e-9; secs >= 1.0) {
+      gen_rate = static_cast<double>(window_gen) / secs;
+      prefill_rate = static_cast<double>(window_prefill) / secs;
+      window_start = t1;
+      window_gen = window_prefill = 0;
+    }
+    if (scheduler_->idle()) {  // going to sleep: rates are no longer current
+      gen_rate = prefill_rate = 0;
+      window_start = 0;
+      window_gen = window_prefill = 0;
+    }
+    st.generation_tok_s = gen_rate;
+    st.prefill_tok_s = prefill_rate;
+    st.prefill_tokens = prefill_total;
     if (const PrefixCache* pc = scheduler_->prefix_cache()) st.prefix = pc->stats();
     st.kv_blocks_total = kv_->num_blocks();
     st.kv_blocks_used = kv_->used_blocks();
     std::lock_guard<std::mutex> lock(stats_mu_);
     stats_ = st;
   }
+}
+
+int64_t Engine::kv_capacity_tokens() const {
+  return static_cast<int64_t>(kv_->num_blocks()) * kv_->geometry().block_size;
 }
 
 EngineStats Engine::stats() const {

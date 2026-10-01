@@ -9,28 +9,44 @@
 #include <thread>
 
 #include "cli/commands.h"
+#include "config/config.h"
 #include "logging/log.h"
+#include "platform/cpu_info.h"
 #include "runtime/engine.h"
 #include "server/server.h"
 
 namespace engine::cli {
 namespace {
 
-std::atomic<bool> g_stop{false};
-extern "C" void on_signal(int) { g_stop.store(true); }
+std::atomic<int> g_signals{0};
+std::atomic<bool> g_shutdown_requested{false};
+extern "C" void on_signal(int) { g_signals.fetch_add(1); }
+
+constexpr OptionSpec kServeOptions[] = {
+    {"model"},        {"host"},        {"port"},           {"model-id"},         {"threads"},
+    {"ctx"},          {"batch"},       {"kv"},             {"http-threads"},     {"max-tokens"},
+    {"max-active"},   {"request-timeout"}, {"shutdown-timeout"}, {"disable-admin", false},
+};
 
 void usage() {
   std::fprintf(stderr,
                "usage: engine serve <model.gguf> [options]\n"
-               "  --host ADDR           bind address (default 127.0.0.1)\n"
-               "  --port N              port (default 8000)\n"
-               "  --model-id NAME       id reported by /v1/models (default: file name)\n"
-               "  -t, --threads N       compute threads (default: physical cores)\n"
-               "  -c, --ctx N           KV cache capacity in tokens (default: min(context, 16384))\n"
-               "  --batch N             max tokens per forward pass (default 256)\n"
-               "  --kv f16|f32          KV cache dtype (default f16)\n"
-               "  --http-threads N      HTTP worker threads (default 16)\n"
-               "  --max-tokens N        default max_tokens per request (default 1024)\n");
+               "  --config FILE           read options from FILE (key = value lines)\n"
+               "  --host ADDR             bind address (default 127.0.0.1)\n"
+               "  --port N                port (default 8000)\n"
+               "  --model-id NAME         id reported by /v1/models (default: file name)\n"
+               "  -t, --threads N|auto    compute threads (auto: physical cores)\n"
+               "  -c, --ctx N|auto        KV cache capacity in tokens (auto: from free RAM)\n"
+               "  --batch N|auto          max tokens per forward pass (auto: 256)\n"
+               "  --kv f16|f32            KV cache dtype (default f16)\n"
+               "  --max-active N          concurrent requests before 503 (default 64)\n"
+               "  --http-threads N|auto   HTTP workers (auto: max-active + 8)\n"
+               "  --max-tokens N          default max_tokens per request (default 1024)\n"
+               "  --request-timeout S     per-request timeout in seconds, 0 = none (default 600)\n"
+               "  --shutdown-timeout S    drain time for in-flight requests on stop (default 30)\n"
+               "  --disable-admin         turn off POST /admin/shutdown (used by `engine stop`)\n"
+               "Every option can also be set as ENGINE_<OPTION> (e.g. ENGINE_HTTP_THREADS=32)\n"
+               "or in the config file; precedence: command line > environment > file.\n");
 }
 
 bool parse_int(std::string_view s, int& out) {
@@ -38,29 +54,48 @@ bool parse_int(std::string_view s, int& out) {
   return ec == std::errc() && p == s.data() + s.size();
 }
 
+std::string gib(int64_t bytes) {
+  char buf[32];
+  std::snprintf(buf, sizeof(buf), "%.2f GB", static_cast<double>(bytes) / (1024.0 * 1024.0 * 1024.0));
+  return buf;
+}
+
 }  // namespace
 
-int cmd_serve(std::span<const std::string_view> args) {
+int cmd_serve(std::span<const std::string_view> raw_args) {
+  auto merged = merge_config(raw_args, kServeOptions);
+  if (!merged.ok()) {
+    std::fprintf(stderr, "serve: %s\n", merged.status().to_string().c_str());
+    return 1;
+  }
+  const std::vector<std::string>& args = *merged;
+
   EngineOptions eo;
   ServerOptions so;
-  int threads = 0, ctx = 0, batch = 256, http_threads = 16, max_tokens = 1024;
+  int threads = 0, ctx = 0, batch = 0, http_threads = 0, max_tokens = 1024, max_active = 64;
+  int request_timeout_s = 600, shutdown_timeout_s = 30;
   for (size_t i = 0; i < args.size(); ++i) {
     const std::string_view a = args[i];
-    auto value = [&]() -> std::string_view { return i + 1 < args.size() ? args[++i] : std::string_view(); };
+    auto value = [&]() -> std::string_view { return i + 1 < args.size() ? std::string_view(args[++i]) : std::string_view(); };
     bool ok = true;
-    if (a == "--host") so.host = value();
+    if (a == "--model") eo.model_path = value();
+    else if (a == "--host") so.host = value();
     else if (a == "--port") ok = parse_int(value(), so.port);
     else if (a == "--model-id") so.model_id = value();
-    else if (a == "-t" || a == "--threads") ok = parse_int(value(), threads);
-    else if (a == "-c" || a == "--ctx") ok = parse_int(value(), ctx);
-    else if (a == "--batch") ok = parse_int(value(), batch);
-    else if (a == "--http-threads") ok = parse_int(value(), http_threads);
+    else if (a == "-t" || a == "--threads") ok = parse_int_or_auto(value(), threads);
+    else if (a == "-c" || a == "--ctx") ok = parse_int_or_auto(value(), ctx);
+    else if (a == "--batch") ok = parse_int_or_auto(value(), batch);
+    else if (a == "--http-threads") ok = parse_int_or_auto(value(), http_threads);
     else if (a == "--max-tokens") ok = parse_int(value(), max_tokens);
+    else if (a == "--max-active") ok = parse_int(value(), max_active);
+    else if (a == "--request-timeout") ok = parse_int(value(), request_timeout_s);
+    else if (a == "--shutdown-timeout") ok = parse_int(value(), shutdown_timeout_s);
+    else if (a == "--disable-admin") so.enable_admin = false;
     else if (a == "--kv") {
       const std::string_view v = value();
       ok = v == "f16" || v == "f32";
       eo.kv_dtype = v == "f32" ? DType::kF32 : DType::kF16;
-    } else if (eo.model_path.empty() && !a.starts_with("-")) eo.model_path = a;
+    } else if (!a.starts_with("-")) eo.model_path = a;  // positional wins over file/env
     else ok = false;
     if (!ok) {
       std::fprintf(stderr, "serve: invalid argument '%.*s'\n", static_cast<int>(a.size()), a.data());
@@ -68,40 +103,64 @@ int cmd_serve(std::span<const std::string_view> args) {
       return 1;
     }
   }
-  if (eo.model_path.empty() || threads < 0 || ctx < 0 || batch <= 0 || http_threads <= 0 || max_tokens <= 0) {
+  if (eo.model_path.empty() || max_tokens <= 0 || max_active <= 0 || request_timeout_s < 0 || shutdown_timeout_s < 0 ||
+      so.port < 0 || so.port > 65535) {
     usage();
     return 1;
   }
   eo.threads = threads;
   eo.kv_tokens = ctx;
-  eo.max_batch_tokens = batch;
+  eo.max_batch_tokens = batch > 0 ? batch : 256;
   so.http_threads = http_threads;
+  so.max_active = max_active;
   so.default_max_tokens = max_tokens;
+  so.request_timeout_ms = static_cast<int64_t>(request_timeout_s) * 1000;
+  so.on_shutdown_request = [] { g_shutdown_requested.store(true); };
 
   auto eng = Engine::create(eo);
   if (!eng.ok()) {
     std::fprintf(stderr, "serve: %s\n", eng.status().to_string().c_str());
     return 1;
   }
-  const LoadedModel& lm = (*eng)->model();
-  LOG_INFO("Model: {} ({}, {})", lm.config.name.empty() ? lm.config.architecture : lm.config.name,
-           lm.architecture->name(), lm.quantization);
-  LOG_INFO("Backend: {}, threads: {}", (*eng)->backend_name(), (*eng)->threads());
-  LOG_INFO("KV cache: {} tokens, prefix cache: radix", (*eng)->kv_geometry().num_blocks * (*eng)->kv_geometry().block_size);
-  LOG_INFO("Scheduler: continuous batching (prefill budget {}, decode budget {})", eo.scheduler.prefill_token_budget,
-           eo.scheduler.decode_token_budget);
+  Engine& e = **eng;
+  const LoadedModel& lm = e.model();
+  const MemoryInfo mem = memory_info();
+  LOG_INFO("Model: {} ({})", lm.config.name.empty() ? lm.config.architecture : lm.config.name, lm.architecture->name());
+  LOG_INFO("Quantization: {}", lm.quantization);
+  LOG_INFO("Backend: {}", e.backend_name());
+  LOG_INFO("Threads: {}", e.threads());
+  LOG_INFO("RAM required: {} (weights {}, KV cache {}); available {}", gib(e.weight_bytes() + e.kv_bytes()),
+           gib(e.weight_bytes()), gib(e.kv_bytes()), gib(mem.available_bytes));
+  LOG_INFO("KV cache: {} tokens ({}{})", e.kv_capacity_tokens(), eo.kv_dtype == DType::kF32 ? "f32" : "f16",
+           ctx == 0 ? ", auto" : "");
+  LOG_INFO("Scheduler: continuous batching (prefill budget {}, decode budget {}, max batch {})",
+           eo.scheduler.prefill_token_budget, eo.scheduler.decode_token_budget, eo.max_batch_tokens);
+  LOG_INFO("Prefix cache: {}", eo.scheduler.enable_prefix_cache ? "enabled (radix)" : "disabled");
 
-  Server server(**eng, so);
+  Server server(e, so);
   if (Status st = server.start(); !st.ok()) {
     std::fprintf(stderr, "serve: %s\n", st.to_string().c_str());
     return 1;
   }
-  LOG_INFO("Listening on http://{}:{} (OpenAI-compatible: /v1/chat/completions, /v1/completions)", so.host,
-           server.port());
+  LOG_INFO("Listening on http://{}:{} (max {} concurrent requests, timeout {} s)", so.host, server.port(), max_active,
+           request_timeout_s);
 
   std::signal(SIGINT, on_signal);
   std::signal(SIGTERM, on_signal);
-  while (!g_stop.load()) std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  while (g_signals.load() == 0 && !g_shutdown_requested.load()) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+  // Graceful drain: refuse new work, let in-flight requests finish, then stop.
+  // A second signal skips the wait (remaining requests end as cancelled).
+  server.begin_drain();
+  const int signals_at_drain = g_signals.load();
+  LOG_INFO("Draining {} in-flight request(s) (up to {} s; signal again to stop now)", server.active_requests(),
+           shutdown_timeout_s);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(shutdown_timeout_s);
+  while (server.active_requests() > 0 && std::chrono::steady_clock::now() < deadline &&
+         g_signals.load() == signals_at_drain) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  if (server.active_requests() > 0) LOG_WARN("Stopping with {} request(s) still active", server.active_requests());
   LOG_INFO("Shutting down");
   server.stop();
   return 0;
