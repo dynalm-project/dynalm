@@ -447,3 +447,36 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   reference). Speedups in docs/benchmarks.md.
 - **Tradeoffs:** Activation quantization (int8 dot products) would be faster still but
   changes numerics. It gets separate accuracy tests in Phase 18.
+
+## DD-032: Register-blocked, K-blocked GEMM for prefill; split-K decode attention
+
+- **Decision:**
+  - Prefill matmul: expand panels of 4 weight rows to fp32 once, then run an AVX2 4×2
+    microkernel (8 accumulators) over all activation rows. K is sliced into 1024-wide pieces
+    so an activation slice stays cache-resident while a thread sweeps its panels; partial
+    sums accumulate. The slice width is a backend setting (`ENGINE_GEMM_KC` overrides it,
+    for experiments and the AutoTuner).
+  - Decode attention: when (rows × heads) can't fill the pool and the context exceeds 512,
+    split each context into 256-position chunks and merge the partial softmaxes with
+    log-sum-exp rescaling.
+- **Reason:** The profile showed matmuls at 84% of prefill, running at about 10 GFLOPS per
+  core-equivalent. The per-row dot streamed every activation row once per weight row.
+- **Evidence:** `bench_kernels` microkernel 56–81 GFLOPS single-thread. Prefill 2× faster
+  (Qwen 132 → 277 tok/s, ≈257 GFLOPS sustained). The K-slice sweep picked 1024 (+47% on the
+  down shape). Split-K: 4K-context decode 27.0 → 22.9 ms. Tests: gemm_panel vs reference in
+  every tier, including accumulate mode; split-K vs naive softmax with scrambled blocks, mixed
+  row lengths and a sliding window. All goldens unchanged.
+- **Tradeoffs:** Expanded panels use 4×K floats of thread-local scratch. Split-K adds a merge
+  pass and scratch of (pairs × chunks × (head_dim+2)) floats.
+
+## DD-033: No elementwise operator fusion yet; int8/VNNI deferred with a plan
+
+- **Decision:** Don't fuse RMSNorm/RoPE/activation into neighboring matmuls now. Defer int8
+  activation quantization with AVX-VNNI.
+- **Reason:** Spec §33: fuse only where measurements show meaningful gains. Norms, RoPE,
+  activations and KV stores together are under 6% of prefill and 3% of decode, so the best
+  case for fusion is a few percent at a large maintenance cost. Decode is bandwidth-bound
+  (≈18.7 GB/s), so int8 compute doesn't help it. Prefill is now compute-bound at near-peak
+  fp32 FMA throughput, so VNNI (2–4× int8 MACs) is the right next prefill lever. It changes
+  numerics, though, and needs its own accuracy tests against the references (planned).
+- **Evidence:** `bench_profile` breakdown (docs/benchmarks.md, Phase 18).

@@ -4,6 +4,7 @@
 // from a CpuKernels table selected once for the running CPU (generic / AVX2).
 
 #include <memory>
+#include <vector>
 
 #include "backends/backend.h"
 #include "backends/cpu/cpu_kernels.h"
@@ -46,6 +47,11 @@ class CpuBackend final : public Backend {
  private:
   ThreadPool& pool_;
   CpuKernels k_;
+  int64_t gemm_kc_ = 1024;  // GEMM K-slice width (multiple of 256; 0 = no K-blocking)
+  std::vector<float> split_scratch_;  // split-K attention partials (scheduler thread only)
+
+  void attend_range(const AttentionParams& p, size_t r, int32_t h, int64_t t0, int64_t t1, float* acc, float& mx_out,
+                    double& sum_out);
   std::string name_;
 };
 

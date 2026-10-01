@@ -33,6 +33,13 @@ struct CpuKernels {
   float (*dot_f16_f32)(const uint16_t* a, const float* b, int64_t n) = nullptr;
   void (*axpy_f16)(float a, const uint16_t* x, float* y, int64_t n) = nullptr;
 
+  // Register-blocked GEMM panel: y[i * y_stride + r] (+)= dot(w + r*k, x + i*x_stride)
+  // for r < nr (nr <= 4 weight rows, contiguous with stride k) and i < m
+  // activation rows; `accumulate` adds to y instead of overwriting (K-blocking).
+  // Used for prefill (many rows) after expanding weights.
+  void (*gemm_panel)(const float* w, int nr, const float* x, int64_t x_stride, int64_t m, int64_t k, float* y,
+                     int64_t y_stride, bool accumulate) = nullptr;
+
   // Per weight dtype; every supported dtype has both entries after
   // registration of the generic tier.
   std::array<VecDotFn, static_cast<size_t>(DType::kCount)> vec_dot{};

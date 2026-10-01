@@ -135,6 +135,45 @@ TEST(Kernels, FloatHelpersAllTiers) {
   }
 }
 
+TEST(Kernels, GemmPanelMatchesDots) {
+  std::mt19937 rng(11);
+  std::normal_distribution<float> nd(0, 1);
+  for (int64_t k : {8, 24, 64, 13}) {
+    for (int nr = 1; nr <= 4; ++nr) {
+      for (int64_t m : {1, 2, 3, 7}) {
+        std::vector<float> w(static_cast<size_t>(nr * k)), x(static_cast<size_t>(m * k));
+        for (auto& v : w) v = nd(rng);
+        for (auto& v : x) v = nd(rng);
+        const int64_t y_stride = 6;  // wider than nr: results land in place
+        for (const CpuKernels& kt : tiers()) {
+          std::vector<float> y(static_cast<size_t>(m * y_stride), -99.0f);
+          kt.gemm_panel(w.data(), nr, x.data(), k, m, k, y.data(), y_stride, false);
+          for (int64_t i = 0; i < m; ++i) {
+            for (int r = 0; r < nr; ++r) {
+              double ref = 0;
+              for (int64_t q = 0; q < k; ++q) {
+                ref += static_cast<double>(w[static_cast<size_t>(r * k + q)]) * x[static_cast<size_t>(i * k + q)];
+              }
+              ASSERT_NEAR(y[static_cast<size_t>(i * y_stride + r)], ref, 1e-4)
+                  << isa_name(kt.isa) << " k=" << k << " nr=" << nr << " m=" << m;
+            }
+            for (int64_t r = nr; r < y_stride; ++r) ASSERT_EQ(y[static_cast<size_t>(i * y_stride + r)], -99.0f);
+          }
+          // Accumulate mode adds a second identical product: results double.
+          std::vector<float> y2 = y;
+          kt.gemm_panel(w.data(), nr, x.data(), k, m, k, y2.data(), y_stride, true);
+          for (int64_t i = 0; i < m; ++i) {
+            for (int r = 0; r < nr; ++r) {
+              const auto idx = static_cast<size_t>(i * y_stride + r);
+              ASSERT_NEAR(y2[idx], 2.0f * y[idx], 1e-4f + 1e-6f * std::abs(y[idx]));
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 TEST(Kernels, Avx2TierSelectedWhenSupported) {
   const CpuKernels k = make_cpu_kernels(select_best_isa(cpu_info().features));
   if (isa_supported(CpuIsa::kAvx2, cpu_info().features) && isa_compiled(CpuIsa::kAvx2)) {

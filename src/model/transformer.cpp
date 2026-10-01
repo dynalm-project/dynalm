@@ -4,6 +4,7 @@
 #include <cstring>
 #include <string>
 
+#include "common/timer.h"
 #include "quant/dequant.h"
 
 namespace engine {
@@ -143,6 +144,20 @@ void Transformer::norm(const TensorView& x, const TensorView& w, const TensorVie
   }
 }
 
+std::string_view forward_op_name(ForwardOp op) {
+  static constexpr std::string_view kNames[] = {"embed",   "norm",     "qkv",     "rope+qknorm", "kv_store", "attention",
+                                                "attn_out", "mlp_up",   "act",     "mlp_down",    "lm_head"};
+  static_assert(std::size(kNames) == static_cast<size_t>(ForwardOp::kCount));
+  return kNames[static_cast<size_t>(op)];
+}
+
+void Transformer::mark(ForwardOp op) {
+  if (!profiling_) return;
+  const int64_t now = now_ns();
+  profile_.ns[static_cast<size_t>(op)] += now - mark_ns_;
+  mark_ns_ = now;
+}
+
 Status Transformer::forward(std::span<const TokenId> tokens, std::span<const int32_t> positions, KvBlockPool& cache,
                             std::span<const int32_t> block_table, std::span<float> logits) {
   if (tokens.empty() || positions.size() != tokens.size()) return InvalidArgument("forward: empty or mismatched batch");
@@ -203,14 +218,21 @@ Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& c
   const TensorView ff_a = rows_of(ff_a_, m), ff_b = rows_of(ff_b_, m);
   const TensorView q = cols_of(qkv, 0, q_dim), k = cols_of(qkv, q_dim, k_dim), v = cols_of(qkv, q_dim + k_dim, v_dim);
 
+  if (profiling_) {
+    mark_ns_ = now_ns();
+    ++profile_.calls;
+    profile_.rows += static_cast<uint64_t>(m);
+  }
   backend_.embedding(tok_embd_, tokens, x);
   if (c.embedding_scale != 1.0f) backend_.scale(x, c.embedding_scale);
+  mark(ForwardOp::kEmbed);
 
   for (int l = 0; l < c.num_layers; ++l) {
     const Layer& L = layers_[static_cast<size_t>(l)];
 
     // --- attention ---
     norm(x, L.attn_norm, L.attn_norm_b, xn);
+    mark(ForwardOp::kNorm);
     if (L.fused_qkv) {
       backend_.matmul(xn, L.wqkv, present(L.bqkv) ? &L.bqkv : nullptr, qkv);
     } else {
@@ -218,6 +240,7 @@ Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& c
       backend_.matmul(xn, L.wk, present(L.bk) ? &L.bk : nullptr, k);
       backend_.matmul(xn, L.wv, present(L.bv) ? &L.bv : nullptr, v);
     }
+    mark(ForwardOp::kQkv);
     if (c.attn_qk_norm) {
       // Per-head RMSNorm: view each row's heads as [heads, head_dim].
       for (int64_t r = 0; r < m; ++r) {
@@ -232,10 +255,12 @@ Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& c
     const RopeConfig& rope = c.layer_rope(l);
     backend_.rope(q, c.num_heads, c.head_dim, positions, rope, freq_factors);
     backend_.rope(k, c.num_kv_heads, c.head_dim, positions, rope, freq_factors);
+    mark(ForwardOp::kRope);
 
     kv_views_.clear();
     for (const SeqBatch& sb : seqs) kv_views_.push_back(cache.layer_view(l, sb.block_table));
     backend_.kv_store(k, v, positions, row_seq, kv_views_);
+    mark(ForwardOp::kKvStore);
 
     AttentionParams ap;
     ap.q = q;
@@ -248,13 +273,16 @@ Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& c
     ap.softcap = c.attn_logit_softcap;
     ap.sliding_window = c.layer_uses_sliding_window(l) ? c.sliding_window : 0;
     backend_.attention(ap);
+    mark(ForwardOp::kAttention);
 
     backend_.matmul(attn, L.wo, present(L.bo) ? &L.bo : nullptr, o);
     if (present(L.post_attn_norm)) backend_.rms_norm(o, L.post_attn_norm, c.norm_eps, o);
     backend_.add(x, o, x);
+    mark(ForwardOp::kAttnOut);
 
     // --- MLP ---
     norm(x, L.ffn_norm, L.ffn_norm_b, xn);
+    mark(ForwardOp::kNorm);
     if (c.mlp == MlpType::kGated) {
       TensorView gate, up;
       if (L.fused_gate_up) {
@@ -267,14 +295,19 @@ Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& c
         backend_.matmul(xn, L.w_gate, nullptr, gate);
         backend_.matmul(xn, L.w_up, present(L.b_up) ? &L.b_up : nullptr, up);
       }
+      mark(ForwardOp::kMlpUp);
       backend_.act_mul(c.activation, gate, up, ff_b);
+      mark(ForwardOp::kAct);
     } else {
       backend_.matmul(xn, L.w_up, present(L.b_up) ? &L.b_up : nullptr, ff_b);
+      mark(ForwardOp::kMlpUp);
       backend_.activation(c.activation, ff_b, ff_b);
+      mark(ForwardOp::kAct);
     }
     backend_.matmul(ff_b, L.w_down, present(L.b_down) ? &L.b_down : nullptr, o);
     if (present(L.post_ffn_norm)) backend_.rms_norm(o, L.post_ffn_norm, c.norm_eps, o);
     backend_.add(x, o, x);
+    mark(ForwardOp::kMlpDown);
   }
 
   // Logits only for requested rows: gather them into contiguous scratch,
@@ -292,6 +325,7 @@ Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& c
     const TensorView out = view2d(logits.data(), n_out, c.vocab_size, c.vocab_size * 4);
     backend_.matmul(normed, lm_head_, nullptr, out);
     if (c.final_logit_softcap > 0) backend_.softcap(out, c.final_logit_softcap);
+    mark(ForwardOp::kLmHead);
   }
   return Status::Ok();
 }

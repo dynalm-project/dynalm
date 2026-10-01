@@ -358,3 +358,70 @@ Takeaways:
 - Prefill barely moved (it runs the same per-row dots for every activation row). The first
   Phase 18 target is a tiled GEMM that keeps weight tiles in cache across rows, followed by
   int8 activation quantization (AVX-VNNI is available) and split-K decode attention.
+
+## Phase 18 — kernel optimization
+
+### Where time goes (`bench_profile`, Qwen2.5-0.5B Q8_0, 10 threads, before GEMM tiling)
+
+| op | prefill 256 tokens | decode (32 steps) |
+|---|---|---|
+| qkv | 5.6% | 10.3% |
+| attention | 3.2% | 4.1% |
+| attn_out | 4.3% | 5.7% |
+| mlp_up (gate+up) | 44.0% | 36.2% |
+| mlp_down | 40.2% | 19.2% |
+| lm_head | 0.5% | 22.1% |
+| norm + rope + act + kv_store + embed | 2.3% | 2.5% |
+
+Matmuls dominate both phases. Elementwise ops are under 6% in total, so fusing them can't pay off
+(DD-033). Decode reads 675 MB per token in 36 ms (≈18.7 GB/s): bandwidth-bound.
+
+### Matmul (`bench_matmul`, m=256, Q8_0)
+
+- Register-blocked GEMM panel (4 weight rows × 2 activation rows, 8 accumulators): 56–81
+  GFLOPS single-thread, **~290 GFLOPS on 10 threads** for the gate/up shape (k=896).
+- K-blocking on the down shape (k=4864, n=896), 10 threads:
+
+| K-slice | Q8_0 GFLOPS | f32 GFLOPS |
+|---|---|---|
+| off | 172.8 | 188.9 |
+| 512 | 240.4 | 198.8 |
+| **1024 (default)** | **254.8** | **252.9** |
+| 2048 | 173.3 | 205.5 |
+
+### Warm prefill, 256 tokens (`bench_profile`)
+
+| model | Phase 17 | Phase 18 |
+|---|---|---|
+| SmolLM2-135M Q8_0 | ~493 tok/s | **912 tok/s** |
+| Qwen2.5-0.5B Q8_0 | 132 tok/s | **277 tok/s** |
+| Qwen2.5-0.5B Q4_K_M | — | **278 tok/s** |
+
+Qwen prefill sustains about 257 GFLOPS end to end (≈1 GFLOP per token), near this laptop's
+practical fp32 FMA peak. Earlier `engine run` prefill numbers (16–50 tok/s) were dominated by
+cold page faults of the memory-mapped weights on the first forward pass, not by compute.
+
+### Split-K decode attention (`bench_decode_context`, SmolLM2 Q8_0) — p50 ms/token
+
+| context | Phase 17 | Phase 18 |
+|---|---|---|
+| 256 | 10.9 | 9.9 |
+| 1024 | 15.0 | 12.8 |
+| 2048 | 17.4 | 15.4 |
+| 4096 | 27.0 | 22.9 |
+
+The remaining long-context cost is memory traffic: about 94 MB of K/V per token at 4K, and each
+GQA KV head is read once per query head (3×). Grouped GQA attention is the next step (TODO).
+
+### End to end through the scheduler (`bench_scheduler`, SmolLM2 Q8_0, budgets 64/64)
+
+| requests | Phase 13 tok/s | Phase 18 tok/s | TTFT p50 ms (was) | ITL p99 ms (was) |
+|---|---|---|---|---|
+| 1 | — | 38.5 | 939 | 62.2 |
+| 4 | — | 177.1 | 137 | 77.4 |
+| 8 | 68.4 | **246.3** | 317 (1373) | 82.6 (376.0) |
+| 16 | 73.0 | **316.4** | 613 (2893) | 90.9 (441.0) |
+| 32 | 75.6 | **314.2** | 1341 (6252) | 200.7 (760.6) |
+
+Faster prefill shrinks the per-step stall, so throughput, TTFT and the ITL tail all improve at
+the same time: 4× throughput and 4.7× lower TTFT at 16 requests.

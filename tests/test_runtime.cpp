@@ -210,6 +210,79 @@ TEST_F(CpuOps, AttentionPagedMatchesNaive) {
   }
 }
 
+// Decode-shaped attention (few rows, long context) takes the split-K path:
+// chunk partials merged with log-sum-exp must equal a single softmax.
+TEST_F(CpuOps, AttentionSplitKMatchesNaive) {
+  for (DType kvt : {DType::kF32, DType::kF16}) {
+    for (int32_t window : {0, 600}) {
+      KvGeometry g;
+      g.num_layers = 1;
+      g.num_kv_heads = 2;
+      g.head_dim = 8;
+      g.head_dim_v = 8;
+      g.block_size = 16;
+      g.num_blocks = 64;  // 1024 tokens
+      g.dtype = kvt;
+      auto cache = KvBlockPool::create(g, be);
+      ASSERT_TRUE(cache.ok());
+      std::vector<int32_t> table(64);
+      for (int32_t i = 0; i < 64; ++i) table[static_cast<size_t>(i)] = (i * 37) % 64;  // scrambled
+      const KvLayerView kv = (*cache)->layer_view(0, table);
+
+      const int64_t T = 900, H = 4;
+      Tensor k = rand(DType::kF32, {T, 16}), v = rand(DType::kF32, {T, 16});
+      std::vector<int32_t> pos(T), seq0(T, 0);
+      std::iota(pos.begin(), pos.end(), 0);
+      const KvLayerView views[] = {kv};
+      be.kv_store(k, v, pos, seq0, views);
+
+      // Two query rows: one at position 899 (long), one at 40 (short: most
+      // of its chunks are empty).
+      const int32_t qpos[] = {899, 40};
+      const int32_t qseq[] = {0, 0};
+      Tensor q = rand(DType::kF32, {2, H * 8});
+      auto out = Tensor::zeros(DType::kF32, {2, H * 8});
+      AttentionParams ap;
+      ap.q = q;
+      ap.out = *out;
+      ap.positions = qpos;
+      ap.row_seq = qseq;
+      ap.kv = views;
+      ap.num_heads = static_cast<int32_t>(H);
+      ap.scale = 0.35f;
+      ap.sliding_window = window;
+      be.attention(ap);
+
+      auto kvv = [&](const Tensor& t, int64_t tok, int64_t h, int i) {
+        const float f = t.data_as<float>()[tok * 16 + h * 8 + i];
+        return kvt == DType::kF16 ? fp16_to_fp32(fp32_to_fp16(f)) : f;
+      };
+      for (int r = 0; r < 2; ++r) {
+        const int64_t p = qpos[r];
+        const int64_t lo = window > 0 ? std::max<int64_t>(0, p - window + 1) : 0;
+        for (int64_t h = 0; h < H; ++h) {
+          std::vector<double> s;
+          double mx = -1e30;
+          for (int64_t u = lo; u <= p; ++u) {
+            double d = 0;
+            for (int i = 0; i < 8; ++i) d += q.data_as<float>()[r * 32 + h * 8 + i] * kvv(k, u, h / 2, i);
+            s.push_back(d * 0.35);
+            mx = std::max(mx, s.back());
+          }
+          double sum = 0;
+          for (double& e : s) sum += (e = std::exp(e - mx));
+          for (int i = 0; i < 8; ++i) {
+            double ref = 0;
+            for (int64_t u = lo; u <= p; ++u) ref += s[static_cast<size_t>(u - lo)] / sum * kvv(v, u, h / 2, i);
+            ASSERT_NEAR(out->data_as<float>()[r * 32 + h * 8 + i], ref, 2e-4)
+                << dtype_name(kvt) << " window=" << window << " row " << r;
+          }
+        }
+      }
+    }
+  }
+}
+
 TEST(Sampler, GreedyPicksFirstMax) {
   const float l[] = {0.1f, 3.0f, -1.0f, 3.0f};
   EXPECT_EQ(sample_greedy(l), 1);

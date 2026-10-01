@@ -125,6 +125,57 @@ void dequant_f16(const void* w, float* out, int64_t n) {
   for (; i < n; ++i) out[i] = fp16_to_fp32(a[i]);
 }
 
+// 4 weight rows x 2 activation rows per pass over k: 8 accumulators, and
+// each loaded vector feeds several FMAs (x: 4, w: 2).
+void gemm_panel(const float* w, int nr, const float* x, int64_t x_stride, int64_t m, int64_t k, float* y,
+                int64_t y_stride, bool accumulate) {
+  auto put = [accumulate](float& dst, float v) { dst = accumulate ? dst + v : v; };
+  if (nr < 4 || k % 8 != 0) {
+    for (int64_t i = 0; i < m; ++i) {
+      for (int r = 0; r < nr; ++r) put(y[i * y_stride + r], dot_f32(w + r * k, x + i * x_stride, k));
+    }
+    return;
+  }
+  const float* w0 = w;
+  const float* w1 = w + k;
+  const float* w2 = w + 2 * k;
+  const float* w3 = w + 3 * k;
+  int64_t i = 0;
+  for (; i + 2 <= m; i += 2) {
+    const float* xa = x + i * x_stride;
+    const float* xb = xa + x_stride;
+    __m256 a0 = _mm256_setzero_ps(), a1 = a0, a2 = a0, a3 = a0, b0 = a0, b1 = a0, b2 = a0, b3 = a0;
+    for (int64_t kk = 0; kk < k; kk += 8) {
+      const __m256 va = _mm256_loadu_ps(xa + kk), vb = _mm256_loadu_ps(xb + kk);
+      __m256 vw = _mm256_loadu_ps(w0 + kk);
+      a0 = _mm256_fmadd_ps(vw, va, a0);
+      b0 = _mm256_fmadd_ps(vw, vb, b0);
+      vw = _mm256_loadu_ps(w1 + kk);
+      a1 = _mm256_fmadd_ps(vw, va, a1);
+      b1 = _mm256_fmadd_ps(vw, vb, b1);
+      vw = _mm256_loadu_ps(w2 + kk);
+      a2 = _mm256_fmadd_ps(vw, va, a2);
+      b2 = _mm256_fmadd_ps(vw, vb, b2);
+      vw = _mm256_loadu_ps(w3 + kk);
+      a3 = _mm256_fmadd_ps(vw, va, a3);
+      b3 = _mm256_fmadd_ps(vw, vb, b3);
+    }
+    float* ya = y + i * y_stride;
+    float* yb = ya + y_stride;
+    put(ya[0], hsum(a0));
+    put(ya[1], hsum(a1));
+    put(ya[2], hsum(a2));
+    put(ya[3], hsum(a3));
+    put(yb[0], hsum(b0));
+    put(yb[1], hsum(b1));
+    put(yb[2], hsum(b2));
+    put(yb[3], hsum(b3));
+  }
+  for (; i < m; ++i) {
+    for (int r = 0; r < 4; ++r) put(y[i * y_stride + r], dot_f32(w + r * k, x + i * x_stride, k));
+  }
+}
+
 // --- quantized kernels --------------------------------------------------------
 
 float vec_dot_q8_0(const void* w, const float* x, int64_t n) {
@@ -245,6 +296,7 @@ bool register_avx2_kernels(CpuKernels& k) {
   k.axpy_f32 = axpy_f32;
   k.dot_f16_f32 = dot_f16_f32;
   k.axpy_f16 = axpy_f16;
+  k.gemm_panel = gemm_panel;
   k.vec_dot[static_cast<size_t>(DType::kF32)] = vec_dot_f32;
   k.vec_dot[static_cast<size_t>(DType::kF16)] = vec_dot_f16;
   k.vec_dot[static_cast<size_t>(DType::kBF16)] = vec_dot_bf16;

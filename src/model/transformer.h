@@ -9,8 +9,10 @@
 // scratch is preallocated for `max_batch_tokens`, so forward() does no weight
 // lookups and no allocation.
 
+#include <array>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <span>
 #include <vector>
 
@@ -33,6 +35,24 @@ struct SeqBatch {
   bool want_logits = true;  // compute logits for this sequence's last token
 };
 
+// Optional per-op timing of forward passes (off by default; profiling adds
+// one timestamp per op).
+enum class ForwardOp : uint8_t {
+  kEmbed, kNorm, kQkv, kRope, kKvStore, kAttention, kAttnOut, kMlpUp, kAct, kMlpDown, kLmHead, kCount
+};
+std::string_view forward_op_name(ForwardOp op);
+
+struct ForwardProfile {
+  std::array<int64_t, static_cast<size_t>(ForwardOp::kCount)> ns{};
+  uint64_t calls = 0;
+  uint64_t rows = 0;
+  int64_t total_ns() const {
+    int64_t t = 0;
+    for (int64_t v : ns) t += v;
+    return t;
+  }
+};
+
 class Transformer {
  public:
   static Result<std::unique_ptr<Transformer>> create(const ModelConfig& config, const TensorRegistry& weights,
@@ -52,6 +72,10 @@ class Transformer {
   // of each sequence with want_logits are written to `logits` in order, one
   // row of vocab_size floats each.
   Status forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& cache, std::span<float> logits);
+
+  void set_profiling(bool on) { profiling_ = on; }
+  const ForwardProfile& profile() const { return profile_; }
+  void reset_profile() { profile_ = ForwardProfile{}; }
 
  private:
   struct Layer {
@@ -87,6 +111,11 @@ class Transformer {
   std::vector<TokenId> batch_tokens_;
   std::vector<int32_t> batch_pos_, batch_seq_, logit_rows_;
   std::vector<KvLayerView> kv_views_;
+
+  void mark(ForwardOp op);
+  bool profiling_ = false;
+  int64_t mark_ns_ = 0;
+  ForwardProfile profile_;
 };
 
 }  // namespace engine

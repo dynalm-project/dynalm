@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Phase 18 — Kernel optimization
+- Forward-pass profiler (`Transformer::set_profiling`, `ForwardProfile`, `bench_profile`).
+- Prefill GEMM: AVX2 4×2 register-blocked `gemm_panel` (+ generic) over expanded weight
+  panels; K-blocking with 1024-wide slices (`ENGINE_GEMM_KC` override).
+- Split-K decode attention with log-sum-exp merging (`attend_range` partials).
+- Benchmarks: `bench_matmul` (threads × shapes), `bench_kernels` gemm section, `bench_profile`.
+- Tests: gemm_panel in every tier incl. accumulate; split-K vs naive (scrambled blocks, mixed
+  lengths, sliding window).
+- Prefill 2× faster (Qwen2.5-0.5B 277 tok/s, SmolLM2 912 tok/s warm). Scheduler at 16 requests:
+  4× throughput, 4.7× lower TTFT, 4.9× lower ITL p99.
+
 ### Phase 17 — CPU SIMD optimization
 - `backends/cpu/cpu_kernels.h`: `CpuKernels` table (dot/axpy f32 and f16, per-dtype fused
   `vec_dot` and `dequant`), generic tier (fused scalar kernels + chunked fallback for every

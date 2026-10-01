@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -45,7 +46,13 @@ inline float apply_act(Activation a, float x) {
 }  // namespace
 
 CpuBackend::CpuBackend(ThreadPool& pool, CpuIsa isa)
-    : pool_(pool), k_(make_cpu_kernels(isa)), name_("CPU/" + std::string(isa_name(k_.isa))) {}
+    : pool_(pool), k_(make_cpu_kernels(isa)), name_("CPU/" + std::string(isa_name(k_.isa))) {
+  // Tuning override for experiments / the AutoTuner (multiple of 256; 0 = off).
+  if (const char* kc = std::getenv("ENGINE_GEMM_KC")) {
+    const long v = std::strtol(kc, nullptr, 10);
+    gemm_kc_ = v > 0 ? v / 256 * 256 : 0;
+  }
+}
 
 Result<std::shared_ptr<Storage>> CpuBackend::allocate(size_t bytes) { return Storage::allocate_host(bytes); }
 
@@ -77,6 +84,48 @@ void CpuBackend::matmul(const TensorView& x, const TensorView& w, const TensorVi
   // reuse it for every activation row.
   constexpr int64_t kExpandThreshold = 4;
   const bool expand = wt != DType::kF32 && m >= kExpandThreshold;
+
+  // Prefill path: panels of kPanel weight rows are expanded to fp32 once and
+  // multiplied against all activation rows by the register-blocked kernel.
+  constexpr int64_t kPanel = 4;
+  const bool x_dense = x.stride(0) == k * static_cast<int64_t>(sizeof(float));
+  const bool f32_panel = wt == DType::kF32 && m >= kExpandThreshold && x_dense;
+  if ((expand || f32_panel) && x_dense) {
+    const size_t panels = static_cast<size_t>((n + kPanel - 1) / kPanel);
+    const int64_t y_stride = y.stride(0) / static_cast<int64_t>(sizeof(float));
+    const auto* xp = x.data_as<const float>();
+    auto* yp = y.data_as<float>();
+    // K-blocking (gemm_kc_ > 0): slices of gemm_kc_ columns, so a slice of
+    // all activation rows stays cache-resident while a thread sweeps its
+    // panels; partial sums accumulate into y. Slices start on multiples of
+    // 256, so every block format dequantizes slice by slice.
+    const int64_t kc = (gemm_kc_ > 0 && gemm_kc_ < k) ? gemm_kc_ : k;
+    pool_.parallel_for(panels, grain_for(panels, pool_.size(), 1), [&](size_t begin, size_t end) {
+      thread_local std::vector<float> panel;
+      panel.resize(static_cast<size_t>(kPanel * kc));
+      for (int64_t k0 = 0; k0 < k; k0 += kc) {
+        const int64_t len = std::min(kc, k - k0);
+        for (size_t pi = begin; pi < end; ++pi) {
+          const int64_t j0 = static_cast<int64_t>(pi) * kPanel;
+          const int nr = static_cast<int>(std::min<int64_t>(kPanel, n - j0));
+          for (int r = 0; r < nr; ++r) {
+            dequant(wbase + (j0 + r) * w_row_bytes + dtype_row_bytes(wt, k0), panel.data() + r * len, len);
+          }
+          k_.gemm_panel(panel.data(), nr, xp + k0, k, m, len, yp + j0, y_stride, /*accumulate=*/k0 > 0);
+        }
+      }
+      if (b) {
+        for (size_t pi = begin; pi < end; ++pi) {
+          const int64_t j0 = static_cast<int64_t>(pi) * kPanel;
+          const int nr = static_cast<int>(std::min<int64_t>(kPanel, n - j0));
+          for (int64_t i = 0; i < m; ++i) {
+            for (int r = 0; r < nr; ++r) yp[i * y_stride + j0 + r] += b[j0 + r];
+          }
+        }
+      }
+    });
+    return;
+  }
 
   pool_.parallel_for(static_cast<size_t>(n), grain_for(static_cast<size_t>(n), pool_.size(), 4),
                      [&](size_t begin, size_t end) {
@@ -191,58 +240,132 @@ void CpuBackend::kv_store(const TensorView& k, const TensorView& v, std::span<co
   }
 }
 
+// Unnormalized attention over key positions [t0, t1) of one (row, head):
+// acc = sum_t exp(s_t - mx) * v_t, with mx = max_t s_t and sum = sum_t exp(s_t - mx).
+// A full softmax is acc / sum; partials over disjoint ranges merge exactly
+// with log-sum-exp rescaling (split-K / flash-decoding).
+void CpuBackend::attend_range(const AttentionParams& p, size_t r, int32_t h, int64_t t0, int64_t t1, float* acc,
+                              float& mx_out, double& sum_out) {
+  const KvGeometry& g = *p.kv.front().geom;
+  const int32_t kvh = h / (p.num_heads / g.num_kv_heads);
+  const int32_t hd = g.head_dim, hdv = g.head_dim_v;
+  const KvLayerView& kv = p.kv[static_cast<size_t>(p.row_seq[r])];
+  const float* q = row_ptr<const float>(p.q, static_cast<int64_t>(r)) + static_cast<int64_t>(h) * hd;
+  const bool f32 = g.dtype == DType::kF32;
+  thread_local std::vector<float> scores;
+  scores.resize(static_cast<size_t>(t1 - t0));
+
+  float mx = -INFINITY;
+  for (int64_t t = t0; t < t1; ++t) {
+    const int64_t off = kv.k_offset(t, kvh);
+    float s = (f32 ? k_.dot_f32(q, static_cast<const float*>(kv.k) + off, hd)
+                   : k_.dot_f16_f32(static_cast<const uint16_t*>(kv.k) + off, q, hd)) *
+              p.scale;
+    if (p.softcap > 0) s = p.softcap * std::tanh(s / p.softcap);
+    scores[static_cast<size_t>(t - t0)] = s;
+    mx = std::max(mx, s);
+  }
+  double sum = 0;
+  std::fill(acc, acc + hdv, 0.0f);
+  for (int64_t t = t0; t < t1; ++t) {
+    const float e = std::exp(scores[static_cast<size_t>(t - t0)] - mx);
+    sum += e;
+    const int64_t off = kv.v_offset(t, kvh);
+    if (f32) {
+      k_.axpy_f32(e, static_cast<const float*>(kv.v) + off, acc, hdv);
+    } else {
+      k_.axpy_f16(e, static_cast<const uint16_t*>(kv.v) + off, acc, hdv);
+    }
+  }
+  mx_out = mx;
+  sum_out = sum;
+}
+
 void CpuBackend::attention(const AttentionParams& p) {
   const KvGeometry& g = *p.kv.front().geom;  // all sequences share the pool geometry
-  const int32_t group = p.num_heads / g.num_kv_heads;
-  const int32_t hd = g.head_dim, hdv = g.head_dim_v;
+  const int32_t hdv = g.head_dim_v;
   const size_t m = p.positions.size();
-  const DType kt = g.dtype;
-  const auto dot = k_.dot_f32;
-  const auto dot_f16 = k_.dot_f16_f32;
-  const auto axpy = k_.axpy_f32;
-  const auto axpy_f16 = k_.axpy_f16;
+  const size_t pairs = m * static_cast<size_t>(p.num_heads);
+  auto range_of = [&](size_t r, int64_t& lo, int64_t& hi) {
+    const int64_t pos = p.positions[r];
+    lo = p.sliding_window > 0 ? std::max<int64_t>(0, pos - p.sliding_window + 1) : 0;
+    hi = pos + 1;
+  };
+  int64_t longest = 0;
+  for (size_t r = 0; r < m; ++r) {
+    int64_t lo, hi;
+    range_of(r, lo, hi);
+    longest = std::max(longest, hi - lo);
+  }
 
-  pool_.parallel_for(m * static_cast<size_t>(p.num_heads), 1, [&](size_t begin, size_t end) {
-    thread_local std::vector<float> scores;
+  // Split-K when (row, head) pairs alone cannot occupy the pool (decode) and
+  // contexts are long enough to amortize the merge.
+  constexpr int64_t kChunk = 256;
+  const bool split = pairs < static_cast<size_t>(2 * pool_.size()) && longest > 2 * kChunk;
+  if (!split) {
+    pool_.parallel_for(pairs, 1, [&](size_t begin, size_t end) {
+      for (size_t job = begin; job < end; ++job) {
+        const size_t r = job / static_cast<size_t>(p.num_heads);
+        const auto h = static_cast<int32_t>(job % static_cast<size_t>(p.num_heads));
+        int64_t lo, hi;
+        range_of(r, lo, hi);
+        float* out = row_ptr<float>(p.out, static_cast<int64_t>(r)) + static_cast<int64_t>(h) * hdv;
+        float mx;
+        double sum;
+        attend_range(p, r, h, lo, hi, out, mx, sum);
+        const auto inv = static_cast<float>(1.0 / sum);
+        for (int32_t i = 0; i < hdv; ++i) out[i] *= inv;
+      }
+    });
+    return;
+  }
+
+  // Pass 1: every (pair, chunk) computes a partial into scratch.
+  const auto chunks = static_cast<size_t>((longest + kChunk - 1) / kChunk);
+  const size_t stride = static_cast<size_t>(hdv) + 2;  // acc[hdv], max, sum
+  split_scratch_.resize(pairs * chunks * stride);
+  float* scratch = split_scratch_.data();
+  pool_.parallel_for(pairs * chunks, 1, [&](size_t begin, size_t end) {
     for (size_t job = begin; job < end; ++job) {
-      const size_t r = job / static_cast<size_t>(p.num_heads);
-      const int32_t h = static_cast<int32_t>(job % static_cast<size_t>(p.num_heads));
-      const int32_t kvh = h / group;
-      const KvLayerView& kv = p.kv[static_cast<size_t>(p.row_seq[r])];
-      const float* q = row_ptr<const float>(p.q, static_cast<int64_t>(r)) + static_cast<int64_t>(h) * hd;
+      const size_t pair = job / chunks, c = job % chunks;
+      const size_t r = pair / static_cast<size_t>(p.num_heads);
+      const auto h = static_cast<int32_t>(pair % static_cast<size_t>(p.num_heads));
+      int64_t lo, hi;
+      range_of(r, lo, hi);
+      const int64_t t0 = lo + static_cast<int64_t>(c) * kChunk, t1 = std::min(hi, t0 + kChunk);
+      float* part = scratch + job * stride;
+      if (t0 >= t1) {  // this row's context is shorter than the longest
+        part[hdv] = -INFINITY;
+        part[hdv + 1] = 0.0f;
+        continue;
+      }
+      float mx;
+      double sum;
+      attend_range(p, r, h, t0, t1, part, mx, sum);
+      part[hdv] = mx;
+      part[hdv + 1] = static_cast<float>(sum);
+    }
+  });
+  // Pass 2: merge partials per pair with log-sum-exp rescaling.
+  pool_.parallel_for(pairs, 1, [&](size_t begin, size_t end) {
+    for (size_t pair = begin; pair < end; ++pair) {
+      const size_t r = pair / static_cast<size_t>(p.num_heads);
+      const auto h = static_cast<int32_t>(pair % static_cast<size_t>(p.num_heads));
       float* out = row_ptr<float>(p.out, static_cast<int64_t>(r)) + static_cast<int64_t>(h) * hdv;
-      const int64_t pos = p.positions[r];
-      const int64_t lo = p.sliding_window > 0 ? std::max<int64_t>(0, pos - p.sliding_window + 1) : 0;
-      const int64_t n = pos - lo + 1;
-      scores.resize(static_cast<size_t>(n));
-
-      float mx = -INFINITY;
-      for (int64_t t = 0; t < n; ++t) {
-        const int64_t off = kv.k_offset(lo + t, kvh);
-        float s = (kt == DType::kF32 ? dot(q, static_cast<const float*>(kv.k) + off, hd)
-                                     : dot_f16(static_cast<const uint16_t*>(kv.k) + off, q, hd)) *
-                  p.scale;
-        if (p.softcap > 0) s = p.softcap * std::tanh(s / p.softcap);
-        scores[static_cast<size_t>(t)] = s;
-        mx = std::max(mx, s);
-      }
-      double sum = 0;
-      for (int64_t t = 0; t < n; ++t) {
-        const float e = std::exp(scores[static_cast<size_t>(t)] - mx);
-        scores[static_cast<size_t>(t)] = e;
-        sum += e;
-      }
-      const float inv = static_cast<float>(1.0 / sum);
+      const float* parts = scratch + pair * chunks * stride;
+      float gmax = -INFINITY;
+      for (size_t c = 0; c < chunks; ++c) gmax = std::max(gmax, parts[c * stride + static_cast<size_t>(hdv)]);
+      double total = 0;
       std::fill(out, out + hdv, 0.0f);
-      for (int64_t t = 0; t < n; ++t) {
-        const float w = scores[static_cast<size_t>(t)] * inv;
-        const int64_t off = kv.v_offset(lo + t, kvh);
-        if (kt == DType::kF32) {
-          axpy(w, static_cast<const float*>(kv.v) + off, out, hdv);
-        } else {
-          axpy_f16(w, static_cast<const uint16_t*>(kv.v) + off, out, hdv);
-        }
+      for (size_t c = 0; c < chunks; ++c) {
+        const float* part = parts + c * stride;
+        if (part[hdv] == -INFINITY) continue;
+        const float w = std::exp(part[hdv] - gmax);
+        total += static_cast<double>(w) * part[hdv + 1];
+        k_.axpy_f32(w, part, out, hdv);
       }
+      const auto inv = static_cast<float>(1.0 / total);
+      for (int32_t i = 0; i < hdv; ++i) out[i] *= inv;
     }
   });
 }

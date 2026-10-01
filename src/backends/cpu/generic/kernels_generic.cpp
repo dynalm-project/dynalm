@@ -44,6 +44,16 @@ void axpy_f16(float a, const uint16_t* x, float* y, int64_t n) {
   for (int64_t i = 0; i < n; ++i) y[i] += a * fp16_to_fp32(x[i]);
 }
 
+void gemm_panel(const float* w, int nr, const float* x, int64_t x_stride, int64_t m, int64_t k, float* y,
+                int64_t y_stride, bool accumulate) {
+  for (int64_t i = 0; i < m; ++i) {
+    for (int r = 0; r < nr; ++r) {
+      const float d = dot_f32(w + r * k, x + i * x_stride, k);
+      y[i * y_stride + r] = accumulate ? y[i * y_stride + r] + d : d;
+    }
+  }
+}
+
 // --- fused dequantize-dot, scalar ---
 
 float vec_dot_f32(const void* w, const float* x, int64_t n) { return dot_f32(static_cast<const float*>(w), x, n); }
@@ -174,6 +184,7 @@ void register_generic_kernels(CpuKernels& k) {
   k.axpy_f32 = axpy_f32;
   k.dot_f16_f32 = dot_f16_f32;
   k.axpy_f16 = axpy_f16;
+  k.gemm_panel = gemm_panel;
 
   auto set = [&](DType t, VecDotFn vd, DequantFn dq) {
     k.vec_dot[static_cast<size_t>(t)] = vd;
