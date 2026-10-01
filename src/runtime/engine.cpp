@@ -126,12 +126,17 @@ void Engine::loop() {
       if (stop_) return;
     }
     scheduler_->step();
+    EngineStats st;
+    st.scheduler = scheduler_->stats();
+    if (const PrefixCache* pc = scheduler_->prefix_cache()) st.prefix = pc->stats();
+    st.kv_blocks_total = kv_->num_blocks();
+    st.kv_blocks_used = kv_->used_blocks();
     std::lock_guard<std::mutex> lock(stats_mu_);
-    stats_ = scheduler_->stats();
+    stats_ = st;
   }
 }
 
-SchedulerStats Engine::stats() const {
+EngineStats Engine::stats() const {
   std::lock_guard<std::mutex> lock(stats_mu_);
   return stats_;
 }

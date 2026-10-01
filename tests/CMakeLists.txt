@@ -89,3 +89,13 @@ engine_add_test(test_kernels
 
 engine_add_test(test_streaming
   test_streaming.cpp)
+
+engine_add_test(test_json
+  test_json.cpp)
+
+if(ENABLE_SERVER)
+  engine_add_test(test_server
+    test_server.cpp)
+  target_include_directories(test_server SYSTEM PRIVATE ${ENGINE_HTTPLIB_DIR})
+  target_link_libraries(test_server PRIVATE engine_server)
+endif()

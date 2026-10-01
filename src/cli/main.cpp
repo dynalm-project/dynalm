@@ -24,9 +24,9 @@ void print_usage() {
       "commands:\n"
       "  version              print version and build configuration\n"
       "  info                 print detected hardware and selected CPU backend\n"
-      "  inspect <model>      show model metadata            (phase 2/3)\n"
-      "  run <model>          generate from a prompt         (phase 6)\n"
-      "  serve <model>        start OpenAI-compatible server (phase 20)\n"
+      "  inspect <model>      show model metadata, config and memory estimate\n"
+      "  run <model> -p TEXT  generate from a prompt (engine run for options)\n"
+      "  serve <model>        OpenAI-compatible HTTP server (engine serve for options)\n"
       "  benchmark <model>    run the benchmark suite        (phase 21)\n"
       "  list | stop | unload model management               (phase 22)\n");
 }
@@ -138,7 +138,14 @@ int main(int argc, char** argv) {
   if (cmd == "info") return cmd_info();
   if (cmd == "inspect") return engine::cli::cmd_inspect(std::span(args).subspan(i + 1));
   if (cmd == "run") return engine::cli::cmd_run(std::span(args).subspan(i + 1));
-  if (cmd == "serve") return not_implemented(cmd, 20);
+#if ENGINE_HAS_SERVER
+  if (cmd == "serve") return engine::cli::cmd_serve(std::span(args).subspan(i + 1));
+#else
+  if (cmd == "serve") {
+    std::fprintf(stderr, "engine: built without the server (ENABLE_SERVER=OFF)\n");
+    return 2;
+  }
+#endif
   if (cmd == "benchmark") return not_implemented(cmd, 21);
   if (cmd == "list" || cmd == "stop" || cmd == "unload") return not_implemented(cmd, 22);
   if (cmd == "help") {

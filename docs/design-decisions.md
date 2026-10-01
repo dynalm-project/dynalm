@@ -503,3 +503,26 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   outliving the engine. `engine run` now uses this path.
 - **Tradeoffs:** Event queues are unbounded per request. A client that never reads holds
   at most its own request's text, bounded by `max_tokens`.
+
+## DD-035: cpp-httplib for HTTP, an in-house JSON parser, greedy-only decoding until Phase 26
+
+- **Decision:** The server uses cpp-httplib v0.18.3 as a single header, downloaded at
+  configure time with SHA256 verification, compiled only when `ENABLE_SERVER=ON`, kept
+  private to `server.cpp`, and included as SYSTEM so its warnings don't fail our build. JSON
+  is a small in-house parser and serializer with depth and size limits. The OpenAI layer
+  (`api/openai`) is pure functions, independent of HTTP.
+- **Reason:** HTTP/1.1 parsing on a listening socket is security-critical and easy to get
+  subtly wrong, so a widely used library beats new code there. JSON needs are narrow, and a
+  small parser is easy to audit and fuzz (20k mutated documents per test run under
+  ASAN/UBSAN). Spec §28: lightweight HTTP that never blocks the scheduler. Handlers only
+  relay a `RequestStream`.
+- **Compatibility choices:** Sampling fields (temperature, top_p, seed, penalties) are
+  accepted so standard clients work, but decoding is greedy until Phase 26. A one-time
+  warning is logged and the limitation is documented. Features we can't honor (tools,
+  n>1, logprobs, non-text content, response_format) are rejected with 400 rather than
+  ignored. Requests to a model without a chat template get a clear 400 on
+  /v1/chat/completions, and /v1/completions still works.
+- **Evidence:** test_server: parsing and validation, response and chunk shapes, an HTTP
+  end-to-end test on an ephemeral port (health/models/metrics, non-streaming and SSE
+  streaming equality, JSON errors without collateral damage, 6 concurrent clients, client
+  disconnect), plus a manual run with Qwen2.5-0.5B ("What is 7 times 6?" → "42").

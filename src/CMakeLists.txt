@@ -3,6 +3,8 @@ configure_file(common/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/common/
 # engine_core: everything except the executable entry points. Tests,
 # benchmarks, CLI and server all link against this one library.
 add_library(engine_core STATIC
+  api/json.cpp
+  api/openai.cpp
   backends/cpu/avx2/kernels_avx2.cpp
   backends/cpu/cpu_backend.cpp
   backends/cpu/generic/kernels_generic.cpp
@@ -13,6 +15,7 @@ add_library(engine_core STATIC
   logging/log.cpp
   memory/host_memory.cpp
   memory/storage.cpp
+  metrics/metrics.cpp
   model/arch_gemma.cpp
   model/arch_llama.cpp
   model/arch_phi.cpp
@@ -61,3 +64,28 @@ endif()
 
 add_executable(engine cli/main.cpp cli/inspect.cpp cli/run.cpp)
 target_link_libraries(engine PRIVATE engine_core)
+
+# HTTP server (cpp-httplib: pinned single header, verified by SHA256).
+if(ENABLE_SERVER)
+  set(_httplib_dir ${CMAKE_BINARY_DIR}/_deps/httplib)
+  if(NOT EXISTS ${_httplib_dir}/httplib.h)
+    file(DOWNLOAD https://raw.githubusercontent.com/yhirose/cpp-httplib/v0.18.3/httplib.h ${_httplib_dir}/httplib.h
+         EXPECTED_HASH SHA256=a0a0c13dc086663863dbe6730a19716f7d3744904b6205496e8301750814dbd5
+         TLS_VERIFY ON STATUS _dl)
+    list(GET _dl 0 _dl_code)
+    if(NOT _dl_code EQUAL 0)
+      message(FATAL_ERROR "failed to download cpp-httplib: ${_dl}")
+    endif()
+  endif()
+  add_library(engine_server STATIC server/server.cpp)
+  # SYSTEM: third-party header warnings must not fail our -Wall build.
+  target_include_directories(engine_server SYSTEM PRIVATE ${_httplib_dir})
+  target_link_libraries(engine_server PUBLIC engine_core)
+  if(WIN32)
+    target_link_libraries(engine_server PRIVATE ws2_32)
+  endif()
+  target_sources(engine PRIVATE cli/serve.cpp)
+  target_link_libraries(engine PRIVATE engine_server)
+  target_compile_definitions(engine PRIVATE ENGINE_HAS_SERVER=1)
+  set(ENGINE_HTTPLIB_DIR ${_httplib_dir} PARENT_SCOPE)
+endif()

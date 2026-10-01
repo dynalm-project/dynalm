@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Phase 20 — OpenAI-compatible API
+- `api/json`: strict JSON parser (depth/size limits, surrogate pairs) and serializer.
+- `api/openai`: chat/completions request parsing and validation, response/chunk/usage/error
+  builders, `/v1/models`.
+- `metrics/`: lock-free counters, gauges, histograms with Prometheus text output.
+- `server/`: cpp-httplib server (pinned, SHA256-verified). Endpoints `/health`, `/v1/models`,
+  `/metrics`, `/v1/chat/completions`, `/v1/completions` with SSE streaming
+  (`stream_options.include_usage`); client disconnect cancels the request; TTFT/ITL/E2E
+  histograms; KV, prefix-cache and scheduler gauges.
+- `engine serve <model> [--host --port --threads --ctx --batch --kv --http-threads --max-tokens]`.
+- Engine exposes an observability snapshot (`EngineStats`).
+- Tests: JSON (incl. 20k-case fuzz), API parsing/format, HTTP end-to-end.
+
 ### Phase 19 — Streaming
 - `runtime/text_stream`: `TextStreamer`, UTF-8-safe deltas with stop strings that are
   never emitted (minimal holdback).

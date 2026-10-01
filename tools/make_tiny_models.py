@@ -83,6 +83,9 @@ def make(arch, out_dir, rng):
     w.add_token_merges([])
     w.add_bos_token_id(256)
     w.add_eos_token_id(257)
+    if arch == "llama":  # lets API tests exercise chat formatting
+        w.add_chat_template("{% for m in messages %}<|im_start|>{{ m['role'] }}\n{{ m['content'] }}<|im_end|>\n"
+                            "{% endfor %}{% if add_generation_prompt %}<|im_start|>assistant\n{% endif %}")
 
     def t(name, *shape, scale=0.15, offset=0.0):
         w.add_tensor(name, (rng.standard_normal(shape) * scale + offset).astype(np.float16))

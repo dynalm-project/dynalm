@@ -23,7 +23,7 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
 - [x] Phase 17 — CPU SIMD optimization
 - [x] Phase 18 — Kernel optimization
 - [x] Phase 19 — Streaming
-- [ ] Phase 20 — OpenAI API
+- [x] Phase 20 — OpenAI API
 - [ ] Phase 21 — Benchmark framework
 - [ ] Phase 22 — Production hardening
 - [ ] Phase 23 — SafeTensors

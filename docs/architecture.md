@@ -6,7 +6,7 @@ what exists today. Implemented parts are marked ✅; everything else is planned.
 ## Layering
 
 ```
-CLI / API server            (cli/ ✅, server/, api/)
+CLI / API server            (cli/ ✅, server/ ✅ cpp-httplib, api/ ✅ OpenAI + JSON, metrics/ ✅)
       │
 Engine facade               (runtime/engine ✅: scheduler thread + RequestStream streaming)
       │

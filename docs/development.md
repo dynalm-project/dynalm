@@ -75,3 +75,16 @@ build/msvc-release/benchmarks/bench_foundation
 - SIMD intrinsics only in `src/backends/cpu/<isa>/*.cpp`.
 - No heap allocation per token. No logging per token above DEBUG.
 - Every phase ends with a green build, tests, benchmarks, updated docs, and a commit.
+
+## Serving
+
+```sh
+engine serve models/qwen2.5-0.5b-instruct-q4_k_m.gguf --port 8000
+curl http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"Hello"}],"max_tokens":64,"stream":true}'
+curl http://127.0.0.1:8000/metrics
+```
+
+Endpoints: `GET /health`, `GET /v1/models`, `GET /metrics` (Prometheus text),
+`POST /v1/chat/completions`, `POST /v1/completions` (both support `stream`).
+Sampling parameters are accepted, but decoding is greedy until Phase 26.

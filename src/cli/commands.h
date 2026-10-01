@@ -10,5 +10,6 @@ namespace engine::cli {
 
 int cmd_inspect(std::span<const std::string_view> args);
 int cmd_run(std::span<const std::string_view> args);
+int cmd_serve(std::span<const std::string_view> args);
 
 }  // namespace engine::cli

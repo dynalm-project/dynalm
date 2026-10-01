@@ -92,6 +92,14 @@ class RequestStream {
   std::function<void()> cancel_fn_;
 };
 
+// Observability snapshot, refreshed by the scheduler thread after each step.
+struct EngineStats {
+  SchedulerStats scheduler;
+  PrefixCacheStats prefix;
+  int32_t kv_blocks_used = 0;
+  int32_t kv_blocks_total = 0;
+};
+
 class Engine {
  public:
   static Result<std::unique_ptr<Engine>> create(EngineOptions opts);
@@ -111,8 +119,8 @@ class Engine {
   std::string backend_name() const { return std::string(backend_->name()); }
   int threads() const { return pool_->size(); }
   const KvGeometry& kv_geometry() const { return kv_->geometry(); }
-  // Snapshot of scheduler counters (taken on the scheduler thread).
-  SchedulerStats stats() const;
+  // Snapshot taken on the scheduler thread after its latest step.
+  EngineStats stats() const;
 
  private:
   Engine() = default;
@@ -139,7 +147,7 @@ class Engine {
   bool stop_ = false;
   std::vector<std::weak_ptr<RequestStream>> live_;  // open streams (guarded by wake_mu_), ended at shutdown
   mutable std::mutex stats_mu_;
-  SchedulerStats stats_;
+  EngineStats stats_;
 };
 
 }  // namespace engine
