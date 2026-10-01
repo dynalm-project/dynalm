@@ -21,8 +21,9 @@ class LlamaArchitecture final : public ModelArchitecture {
     c.norm = NormType::kRmsNorm;
     c.activation = Activation::kSilu;
     c.mlp = MlpType::kGated;
-    // GGUF conversion permutes Llama Q/K rows so RoPE rotates adjacent pairs.
-    c.rope.style = RopeStyle::kInterleaved;
+    // GGUF conversion permutes Llama Q/K rows so RoPE rotates adjacent pairs;
+    // unpermuted (Hugging Face) weights rotate halves.
+    c.rope.style = c.qk_rows_interleaved ? RopeStyle::kInterleaved : RopeStyle::kHalfSplit;
     c.attn_qkv_bias = w.has(TensorRole::kAttnQBias, 0);
     c.attn_output_bias = w.has(TensorRole::kAttnOutputBias, 0);
     c.tied_embeddings = !w.has(TensorRole::kOutput);

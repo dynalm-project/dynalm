@@ -44,12 +44,15 @@ Arrows point downward only. A lower layer never includes a higher one.
 | Backends | model families, requests |
 | API/server | kernels, SIMD, KV layout |
 
-## Model loading path (GGUF parsing ✅, IR next)
+## Model loading path ✅
 
 ```
 GGUF file ──► GGUF loader ─┐
-SafeTensors ► ST loader ───┴─► TensorRegistry + ModelConfig (IR) ─► ModelArchitecture adapter ─► runtime graph
+HF dir ─────► SafeTensors + HF loader ─┴─► TensorRegistry + ModelConfig (IR) ─► ModelArchitecture adapter ─► runtime graph
 ```
+
+Format conventions (Gemma's (1 + w) norms, Llama 3 RoPE factors, Llama Q/K row layout) are
+handled inside the loaders. Adapters and the runtime see one IR (DD-040).
 
 ## CPU kernel dispatch
 

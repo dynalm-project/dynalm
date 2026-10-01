@@ -1,5 +1,6 @@
 // Model management commands (spec §41):
-//   engine list [dir]                 GGUF models under dir (default $ENGINE_MODELS_DIR or ./models)
+//   engine list [dir]                 GGUF files and Hugging Face model directories under dir
+//                                     (default $ENGINE_MODELS_DIR or ./models)
 //   engine stop [--host H] [--port P] ask a running `engine serve` to drain and exit
 //
 // A server process serves exactly one model (DD-039), so `engine unload` is
@@ -16,6 +17,7 @@
 #include "cli/commands.h"
 #include "loader/gguf/gguf.h"
 #include "loader/gguf/gguf_model.h"
+#include "loader/hf/hf_model.h"
 #include "model/architecture.h"
 #if ENGINE_HAS_SERVER
 #include "server/server.h"
@@ -33,12 +35,17 @@ int cmd_list(std::span<const std::string_view> args) {
     std::fprintf(stderr, "list: '%s' is not a directory\n", dir.c_str());
     return 1;
   }
-  std::vector<fs::path> files;
+  std::vector<fs::path> files, hf_dirs;
   for (auto it = fs::recursive_directory_iterator(dir, fs::directory_options::skip_permission_denied, ec);
        !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
     if (it.depth() > 2) it.disable_recursion_pending();
     if (it->is_regular_file(ec) && it->path().extension() == ".gguf") files.push_back(it->path());
+    if (it->is_directory(ec) && hf::is_hf_model(it->path().string()) &&
+        hf::locate(it->path().string()).ok()) {
+      hf_dirs.push_back(it->path());
+    }
   }
+  std::sort(hf_dirs.begin(), hf_dirs.end());
   std::sort(files.begin(), files.end());
   std::printf("%-48s %-10s %-10s %9s %8s  %s\n", "MODEL", "ARCH", "QUANT", "SIZE MiB", "CONTEXT", "STATUS");
   for (const fs::path& p : files) {
@@ -61,7 +68,27 @@ int cmd_list(std::span<const std::string_view> args) {
                 static_cast<double>(f.file().size()) / (1024.0 * 1024.0), ctx.c_str(),
                 supported ? "ok" : "unsupported architecture");
   }
-  if (files.empty()) std::printf("(no .gguf files under %s)\n", dir.c_str());
+  // Hugging Face directories (config.json + safetensors).
+  for (const fs::path& p : hf_dirs) {
+    const std::string rel = fs::relative(p, dir, ec).generic_string() + "/";
+    double mib = 0;
+    if (auto f = hf::locate(p.string()); f.ok()) {
+      for (const std::string& w : f->weights) mib += static_cast<double>(fs::file_size(w, ec)) / (1024.0 * 1024.0);
+    }
+    auto cfg_json = hf::read_json_file((p / "config.json").string(), 4 << 20);
+    auto cfg = cfg_json.ok() ? hf::read_config(*cfg_json) : Result<ModelConfig>(cfg_json.status());
+    const json::Value* dt = cfg_json.ok() ? cfg_json->find("torch_dtype") : nullptr;
+    const std::string dtype = dt && dt->is_string() ? dt->as_string() : "?";
+    if (!cfg.ok()) {
+      std::printf("%-48s %-10s %-10s %9.1f %8s  %s\n", rel.c_str(), "-", dtype.c_str(), mib, "-",
+                  cfg.status().message().c_str());
+      continue;
+    }
+    std::printf("%-48s %-10s %-10s %9.1f %8lld  %s\n", rel.c_str(), cfg->architecture.c_str(), dtype.c_str(), mib,
+                static_cast<long long>(cfg->context_length),
+                find_architecture(cfg->architecture) ? "ok (safetensors)" : "unsupported architecture");
+  }
+  if (files.empty() && hf_dirs.empty()) std::printf("(no models under %s)\n", dir.c_str());
   return 0;
 }
 

@@ -19,7 +19,7 @@ constexpr double kMiB = 1024.0 * 1024.0;
 
 void usage() {
   std::fprintf(stderr,
-               "usage: engine run <model.gguf> -p <prompt> [options]\n"
+               "usage: engine run <model> -p <prompt> [options]\n"
                "  -p, --prompt TEXT     prompt text\n"
                "  -n, --max-tokens N    tokens to generate (default 128)\n"
                "  --chat                wrap the prompt in the model's chat template (default)\n"

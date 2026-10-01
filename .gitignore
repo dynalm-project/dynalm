@@ -21,3 +21,4 @@ __pycache__/
 /results/*/
 /results/*.log
 /results/*.md
+!tests/data/hf_tiny_*/model.safetensors

@@ -26,7 +26,7 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
 - [x] Phase 20 — OpenAI API
 - [x] Phase 21 — Benchmark framework
 - [x] Phase 22 — Production hardening
-- [ ] Phase 23 — SafeTensors
+- [x] Phase 23 — SafeTensors
 - [ ] Phase 24 — GPTQ/AWQ architecture preparation
 - [ ] Phase 25 — MoE support
 - [ ] Phase 26 — Advanced sampling
@@ -47,6 +47,7 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
 - AVX2 Q5_K/Q2_K/Q3_K/Q4_1/Q5_1 fused kernels (they use the chunked fallback today).
 - Cold-start TTFT: prefetch mmapped weights at load (first forward is page-fault bound).
 
+- HF Unigram/WordPiece tokenizers; multimodal Gemma 3 checkpoints (text tower only).
 - Jinja subset interpreter for chat templates that no family matches (DD-013).
 - Pre-tokenizers for DeepSeek-LLM/V3 and Tekken (Mistral Nemo).
 - YaRN and LongRoPE scaling (Qwen long-context, Phi-3-128k).

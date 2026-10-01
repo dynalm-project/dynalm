@@ -530,3 +530,25 @@ Lifecycle checks in the container:
 - `engine stop` drains and exits 0.
 - SIGTERM with one request in flight finishes it (96 tokens, 0 errors), then exits 0.
 - AUTO KV picked 65536 tokens (0.75 GB) with 5.85 GB free.
+
+## Phase 23 — SafeTensors (BF16) vs GGUF (F16), same model
+
+SmolLM2-135M-Instruct, 10 threads, in-process `engine benchmark`, prompt 128 / output 64:
+
+| format | conc | out tok/s | ITL p50 ms | TTFT p50 ms |
+|---|---|---|---|---|
+| GGUF F16 | 1 | 41.8 | 19.4 | 181 |
+| SafeTensors BF16 | 1 | 41.3 | 19.6 | 175 |
+| GGUF F16 | 4 | 91.9 | 28.7 | 397 |
+| SafeTensors BF16 | 4 | **120.0** | **23.1** | 363 |
+
+Row dequantization, 4096 elements (`bench_kernels`): BF16 generic 280 ns → AVX2 149 ns (1.9×).
+F16 needs a real conversion (F16C, 144 ns); BF16 is a shift. That is why BF16 batches decode
+faster than F16. Single-stream decode is memory-bound and the same for both.
+
+Load time (`engine run`, warm page cache): GGUF 58 ms, SafeTensors 170 ms. The difference is
+parsing the 2 MB `tokenizer.json`; the weights are memory-mapped in both cases.
+
+Accuracy: max |logit diff| 1.7e-5 between the BF16 checkpoint and its F16 GGUF conversion. The
+tiny fixtures are bit-exact (0) for 6 of 7 architectures, and Llama differs by 1.1e-6
+(RoPE pairing order).

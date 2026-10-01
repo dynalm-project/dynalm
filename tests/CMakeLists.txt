@@ -35,6 +35,7 @@ function(engine_add_test name)
   target_link_libraries(${name} PRIVATE engine_core GTest::gtest_main)
   target_compile_definitions(${name} PRIVATE
     ENGINE_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
+    ENGINE_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
     ENGINE_TEST_MODEL_PATH="${ENGINE_TEST_MODEL}"
     ENGINE_TEST_MODEL_QWEN_PATH="${ENGINE_TEST_MODEL_QWEN}"
     ENGINE_TEST_MODEL_QWEN_F16_PATH="${ENGINE_TEST_MODEL_QWEN_F16}"
@@ -111,3 +112,6 @@ engine_add_test(test_compat
 
 engine_add_test(test_hardening
   test_hardening.cpp)
+
+engine_add_test(test_safetensors
+  test_safetensors.cpp)

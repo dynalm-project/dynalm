@@ -38,6 +38,8 @@ Result<ModelConfig> read_model_config(const GgufFile& f) {
   ENGINE_ASSIGN_OR_RETURN(std::string_view arch_sv, f.get_string("general.architecture"));
   const std::string arch(arch_sv);
   c.architecture = arch;
+  // llama.cpp's converter permutes Llama Q/K rows for interleaved RoPE.
+  c.qk_rows_interleaved = arch == "llama";
   if (auto name = f.get_string("general.name"); name.ok()) c.name = std::string(*name);
 
   ENGINE_ASSIGN_OR_RETURN(int64_t hidden, arch_int(f, arch, "embedding_length"));

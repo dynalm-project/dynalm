@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Phase 23 — SafeTensors
+- `loader/safetensors`: memory-mapped, zero-copy SafeTensors reader with a strict header validator.
+- `loader/hf`: Hugging Face directory loading (single or sharded); `config.json` → ModelConfig
+  (llama, mistral, qwen2, qwen3, gemma, gemma2, gemma3_text, phi3); HF tensor names → roles;
+  Gemma (1 + w) norm folding and Llama 3 RoPE factors at load; `tokenizer.json` → TokenizerData
+  (byte-level BPE and SentencePiece-style BPE); chat template from `tokenizer_config.json`.
+- `ModelConfig::qk_rows_interleaved`: the Llama adapter picks the RoPE style from the weight layout
+  (GGUF permuted vs HF original), with no weight copies.
+- `engine inspect` and `engine list` understand HF directories; `inspect` reports real support status.
+- AVX2 BF16 row dequantization (1.9×); BF16 checkpoints decode as fast as F16.
+- `tools/make_tiny_hf.py`: HF exports of the tiny fixtures (committed in `tests/data/hf_tiny_*`).
+- Tests: `test_safetensors` (parser hardening, config/names/RoPE factors, bit-exact GGUF↔HF
+  equivalence for 7 architectures, sharding, tokenizer.json vs GGUF ids, real SmolLM2/Qwen2.5).
+
 ### Phase 22 — Production hardening
 - Configuration (DD-038): `config/` merges a config file (`--config`/`ENGINE_CONFIG`),
   `ENGINE_<OPTION>` env vars and CLI flags; `auto` values; KV capacity sized from free RAM by

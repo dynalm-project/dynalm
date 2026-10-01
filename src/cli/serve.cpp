@@ -30,7 +30,7 @@ constexpr OptionSpec kServeOptions[] = {
 
 void usage() {
   std::fprintf(stderr,
-               "usage: engine serve <model.gguf> [options]\n"
+               "usage: engine serve <model> [options]\n"
                "  --config FILE           read options from FILE (key = value lines)\n"
                "  --host ADDR             bind address (default 127.0.0.1)\n"
                "  --port N                port (default 8000)\n"

@@ -1,4 +1,5 @@
-// `engine inspect <model.gguf> [--metadata] [--tensors]`
+// `engine inspect <model> [--metadata] [--tensors]`: a GGUF file, or a Hugging
+// Face model directory / .safetensors file (spec §16).
 
 #include <cstdio>
 #include <map>
@@ -9,6 +10,9 @@
 #include "cli/commands.h"
 #include "loader/gguf/gguf.h"
 #include "loader/gguf/gguf_model.h"
+#include "loader/hf/hf_model.h"
+#include "loader/safetensors/safetensors.h"
+#include "model/architecture.h"
 #include "model_ir/model_config.h"
 #include "platform/cpu_info.h"
 #include "platform/isa.h"
@@ -44,6 +48,9 @@ std::string format_value(const gguf::Value& v) {
 
 }  // namespace
 
+void print_model(const ModelConfig& c, int64_t weight_bytes);
+int inspect_hf(const std::string& path, bool show_metadata, bool show_tensors);
+
 int cmd_inspect(std::span<const std::string_view> args) {
   std::string path;
   bool show_metadata = false, show_tensors = false;
@@ -60,9 +67,11 @@ int cmd_inspect(std::span<const std::string_view> args) {
     }
   }
   if (path.empty()) {
-    std::fprintf(stderr, "usage: engine inspect <model.gguf> [--metadata] [--tensors]\n");
+    std::fprintf(stderr, "usage: engine inspect <model> [--metadata] [--tensors]\n");
     return 1;
   }
+
+  if (hf::is_hf_model(path)) return inspect_hf(path, show_metadata, show_tensors);
 
   auto file = gguf::GgufFile::open(path);
   if (!file.ok()) {
@@ -109,7 +118,29 @@ int cmd_inspect(std::span<const std::string_view> args) {
   if (!cfg.ok()) {
     std::printf("\nModel config:  unreadable (%s)\n", cfg.status().to_string().c_str());
   } else {
-    const ModelConfig& c = *cfg;
+    print_model(*cfg, static_cast<int64_t>(g.total_tensor_bytes()));
+  }
+
+  if (show_metadata) {
+    std::printf("\nMetadata:\n");
+    for (const auto& kv : g.metadata()) {
+      std::printf("  %-45.*s %s\n", static_cast<int>(kv.key.size()), kv.key.data(),
+                  format_value(kv.value).c_str());
+    }
+  }
+  if (show_tensors) {
+    std::printf("\nTensors:\n");
+    for (const auto& t : g.tensors()) {
+      std::printf("  %-40.*s %-8.*s %-22s %10.2f MiB\n", static_cast<int>(t.name.size()), t.name.data(),
+                  static_cast<int>(gguf::ggml_type_name(t.ggml_type).size()),
+                  gguf::ggml_type_name(t.ggml_type).data(), t.shape.to_string().c_str(), t.nbytes / kMiB);
+    }
+  }
+  return 0;
+}
+
+void print_model(const ModelConfig& c, int64_t weight_bytes) {
+  {
     std::printf("\nModel:\n");
     std::printf("  Layers:        %d\n", c.num_layers);
     std::printf("  Hidden:        %lld\n", static_cast<long long>(c.hidden_size));
@@ -129,8 +160,7 @@ int cmd_inspect(std::span<const std::string_view> args) {
     const Status valid = c.validate();
     std::printf("  Valid:         %s\n", valid.ok() ? "yes" : valid.to_string().c_str());
 
-    const auto est = estimate_memory(c, static_cast<int64_t>(g.total_tensor_bytes()),
-                                     c.context_length, DType::kF16);
+    const auto est = estimate_memory(c, weight_bytes, c.context_length, DType::kF16);
     std::printf("\nEstimated RAM (full %lld-token context, f16 KV):\n",
                 static_cast<long long>(c.context_length));
     std::printf("  Weights:       %8.1f MiB (memory-mapped)\n", est.weight_bytes / kMiB);
@@ -138,23 +168,62 @@ int cmd_inspect(std::span<const std::string_view> args) {
                 static_cast<long long>(c.kv_bytes_per_token(DType::kF16)));
     std::printf("  Scratch:       %8.1f MiB\n", est.activation_bytes / kMiB);
     std::printf("  Total:         %8.1f MiB\n", est.total() / kMiB);
-    std::printf("\nSupported:     pending (architecture adapters arrive in phase 5)\n");
+    std::printf("\nSupported:     %s\n",
+                find_architecture(c.architecture) ? "YES" : "NO (no adapter for this architecture)");
     std::printf("Backend:       CPU/%s\n", std::string(isa_name(select_best_isa(cpu_info().features))).c_str());
   }
+}
 
-  if (show_metadata) {
-    std::printf("\nMetadata:\n");
-    for (const auto& kv : g.metadata()) {
-      std::printf("  %-45.*s %s\n", static_cast<int>(kv.key.size()), kv.key.data(),
-                  format_value(kv.value).c_str());
-    }
+int inspect_hf(const std::string& path, bool show_metadata, bool show_tensors) {
+  auto files = hf::locate(path);
+  if (!files.ok()) {
+    std::fprintf(stderr, "inspect: %s\n", files.status().to_string().c_str());
+    return 1;
   }
+  auto cfg_json = hf::read_json_file(files->dir + "/config.json", 4 << 20);
+  if (!cfg_json.ok()) {
+    std::fprintf(stderr, "inspect: %s\n", cfg_json.status().to_string().c_str());
+    return 1;
+  }
+  int64_t bytes = 0;
+  size_t count = 0;
+  std::map<std::string, double> by_dtype;
+  std::vector<std::unique_ptr<safetensors::SafeTensorsFile>> shards;
+  for (const std::string& w : files->weights) {
+    auto st = safetensors::SafeTensorsFile::open(w);
+    if (!st.ok()) {
+      std::fprintf(stderr, "inspect: %s: %s\n", w.c_str(), st.status().to_string().c_str());
+      return 1;
+    }
+    for (const auto& t : (*st)->tensors()) {
+      bytes += static_cast<int64_t>(t.nbytes);
+      by_dtype[t.dtype_name] += static_cast<double>(t.nbytes);
+      ++count;
+    }
+    shards.push_back(std::move(*st));
+  }
+  std::printf("Directory:     %s\n", files->dir.c_str());
+  std::printf("Format:        SafeTensors (%zu shard%s)\n", files->weights.size(),
+              files->weights.size() == 1 ? "" : "s");
+  if (const json::Value* mt = cfg_json->find("model_type"); mt && mt->is_string()) {
+    std::printf("model_type:    %s\n", mt->as_string().c_str());
+  }
+  std::printf("Tensors:       %zu (%.1f MiB)\n", count, static_cast<double>(bytes) / kMiB);
+  for (const auto& [name, b] : by_dtype) std::printf("  %-8s %10.1f MiB\n", name.c_str(), b / kMiB);
+  auto cfg = hf::read_config(*cfg_json);
+  if (!cfg.ok()) {
+    std::printf("\nModel config:  unsupported (%s)\n", cfg.status().to_string().c_str());
+  } else {
+    print_model(*cfg, bytes);
+  }
+  if (show_metadata) std::printf("\nconfig.json:\n%s\n", json::dump(*cfg_json).c_str());
   if (show_tensors) {
     std::printf("\nTensors:\n");
-    for (const auto& t : g.tensors()) {
-      std::printf("  %-40.*s %-8.*s %-22s %10.2f MiB\n", static_cast<int>(t.name.size()), t.name.data(),
-                  static_cast<int>(gguf::ggml_type_name(t.ggml_type).size()),
-                  gguf::ggml_type_name(t.ggml_type).data(), t.shape.to_string().c_str(), t.nbytes / kMiB);
+    for (const auto& sh : shards) {
+      for (const auto& t : sh->tensors()) {
+        std::printf("  %-55s %-6s %-22s %10.2f MiB\n", t.name.c_str(), t.dtype_name.c_str(),
+                    t.shape.to_string().c_str(), static_cast<double>(t.nbytes) / kMiB);
+      }
     }
   }
   return 0;

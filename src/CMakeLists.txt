@@ -29,6 +29,9 @@ add_library(engine_core STATIC
   loader/gguf/gguf.cpp
   loader/gguf/gguf_model.cpp
   loader/gguf/gguf_tokenizer.cpp
+  loader/hf/hf_model.cpp
+  loader/hf/hf_tokenizer.cpp
+  loader/safetensors/safetensors.cpp
   loader/mapped_file.cpp
   loader/model_loader.cpp
   platform/cpu_info.cpp

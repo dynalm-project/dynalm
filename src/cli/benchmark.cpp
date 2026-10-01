@@ -1,4 +1,4 @@
-// `engine benchmark <model.gguf> [options]`: load test the engine in-process
+// `engine benchmark <model> [options]`: load test the engine in-process
 // or any OpenAI-compatible server (--url), sweeping concurrency x prompt
 // length x output length, with P50/P90/P95/P99 latency.
 
@@ -22,7 +22,7 @@ namespace {
 
 void usage() {
   std::fprintf(stderr,
-               "usage: engine benchmark <model.gguf> [options]\n"
+               "usage: engine benchmark <model> [options]\n"
                "  --concurrency LIST    e.g. 1,4,16 (default 1,4)\n"
                "  --prompt LIST         prompt lengths in tokens (default 128,512)\n"
                "  --output LIST         output lengths in tokens (default 128)\n"

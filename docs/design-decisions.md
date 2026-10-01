@@ -699,3 +699,74 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   - Container runs: SIGTERM with one request in flight let it finish (96 tokens, no error)
     and then exited 0; `engine stop` drained and exited.
   - The gate runs all of these under ASAN/UBSAN and TSAN.
+
+## DD-040: SafeTensors and Hugging Face directories load into the same IR as GGUF
+
+- **Decision:** `load_model` accepts a GGUF file, a Hugging Face model directory
+  (`config.json`, `model.safetensors` or sharded `*.safetensors` with
+  `model.safetensors.index.json`, `tokenizer.json`, and optionally `tokenizer_config.json` and
+  `generation_config.json`), or one `.safetensors` file inside such a directory.
+  - **Weight files.** `loader/safetensors` memory-maps each file. Tensors are zero-copy views,
+    except that a tensor misaligned for its element size is copied. Headers are treated as
+    hostile: size cap, offsets inside the data section, byte size equal to dtype × shape,
+    no overlaps, and shard names that stay inside the directory.
+  - **HF layer.** `loader/hf` translates HF conventions into exactly what the GGUF loader
+    produces:
+    - `config.json` to `ModelConfig`, with `model_type` mapped to the adapter id;
+    - parameter names to `TensorRole`s (Gemma 2/3 "sandwich" norms are named differently);
+    - `tokenizer.json` to `TokenizerData`;
+    - the chat template from `tokenizer_config.json`.
+  - **GGUF converter conventions applied at load.** llama.cpp's converter applies these
+    offline; the HF loader applies them at load time:
+    - **Gemma norm offset.** Gemma RMSNorm weights are folded to (1 + w) as F32 copies of
+      the small norm vectors.
+    - **Llama 3 RoPE scaling.** `rope_scaling` becomes `rope_freqs` factors, using the same
+      formula as the converter.
+    - **Llama Q/K layout.** Llama Q/K rows are *not* permuted at load; instead the loader
+      records a format-neutral fact, `ModelConfig::qk_rows_interleaved`, from which the
+      Llama adapter picks the RoPE style (interleaved for GGUF, half-split for HF). This
+      avoids copying weights and keeps adapters free of format knowledge.
+  - **Tokenizer models.** Byte-level BPE is supported when its pre-tokenizer matches one we
+    implement (GPT-2, Llama 3, Qwen2 or SmolLM/StarCoder split; compared exactly).
+    SentencePiece-style BPE with byte fallback (Gemma, Llama 2, Mistral) maps to the SPM
+    tokenizer, with each piece's score = −(rank of the merge that creates it). Anything else
+    gets a clear error.
+  - **Weight dtypes.** F32, F16 and BF16 load directly. Integer and F8 tensors are rejected
+    only if the engine would use them.
+- **Reason:** Spec §5, phase 2: both loaders feed one Tensor Registry and Model IR, and the
+  runtime must not depend on the format. Most models are published as HF SafeTensors first,
+  and loading them directly skips a conversion step and its disk copy. Applying the
+  converter's conventions inside the loader keeps a single runtime path, which is
+  testable as exact equality.
+- **Alternatives:**
+  - Permuting Q/K rows at load: copies about 10% of the weights and loses zero-copy loading.
+  - Folding the Gemma offset into the norm kernel: puts a format concern in the runtime.
+  - Shelling out to `convert_hf_to_gguf.py`: needs Python and torch.
+  - Implementing the HF Unigram and WordPiece tokenizer models: not used by the tier-1
+    families.
+- **Tradeoffs:**
+  - BF16 and F16 weights are twice the size of Q8_0 and four times Q4. SafeTensors is the
+    exact path; GGUF quantization remains the fast one.
+  - Parsing `tokenizer.json` adds about 110 ms to load (SmolLM2: 170 vs 58 ms).
+  - Multimodal Gemma 3 checkpoints (`model_type` "gemma3") are rejected; text-only ones load.
+  - GPTQ/AWQ tensors are recognized only in Phase 24.
+- **Evidence:** `test_safetensors`.
+  - **Parser.** Valid files, and 10 kinds of hostile headers rejected.
+  - **Config and names.** Config translation (Mistral window ignored, Qwen2
+    `use_sliding_window: false`, Gemma 3 linear scaling, multimodal rejected), tensor
+    names, and Llama 3 factors (1 → 8, monotonic).
+  - **Tiny fixtures.** All 7 GGUF fixtures exported by `tools/make_tiny_hf.py` (Llama Q/K
+    un-permuted, Gemma norms as w − 1) load with identical logits: max |diff| 0 for six
+    architectures, 1.1e-6 for Llama (RoPE pairing order).
+  - **Sharding.** A sharded copy with an index file is identical to the single file. A shard
+    path escaping the directory is refused.
+  - **Tokenizers.** `tokenizer.json` gives the same ids as the GGUF tokenizer for Gemma 3
+    (262K, SPM path), Qwen2.5 and SmolLM2 on mixed text including emoji, CJK, whitespace
+    runs and specials.
+  - **Real checkpoints.** SmolLM2-135M SafeTensors (BF16) vs GGUF F16: identical tokenizer,
+    max |logit diff| 1.7e-5, same argmax. `engine run` gives the same text.
+  - **Qwen2.5-0.5B-Instruct.** SafeTensors loads, tokenizes identically to the official GGUF,
+    and answers "What is 7 times 6?" with 42. The official GGUF is *not* a twin of the HF
+    weights: its `general.version` is v0.1, and even its F32 norm vectors differ (by factors
+    of 1.8–2.5×), so logits are not compared for that pair. Comparing with a converter-made
+    twin is what proves layout equivalence, and the tiny fixtures and SmolLM2 do that.

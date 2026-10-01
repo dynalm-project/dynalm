@@ -86,6 +86,10 @@ struct ModelConfig {
   // 1M global).
   bool has_rope_local = false;
   RopeConfig rope_local;
+  // Weight-layout fact set by the loader: Q/K rows within each head are
+  // permuted so RoPE rotates adjacent pairs (the llama.cpp GGUF convention
+  // for Llama). Original Hugging Face weights rotate the two halves.
+  bool qk_rows_interleaved = false;
 
   bool attn_qkv_bias = false;     // Qwen2
   bool attn_output_bias = false;

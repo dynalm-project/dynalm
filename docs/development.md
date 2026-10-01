@@ -89,6 +89,18 @@ Endpoints: `GET /health` (503 `draining` during shutdown), `GET /v1/models`,
 `GET /metrics` (Prometheus text), `POST /v1/chat/completions`, `POST /v1/completions` (both
 support `stream`), and `POST /admin/shutdown` (loopback only; `--disable-admin` turns it off).
 
+### Model formats
+
+Every command that takes a model accepts a GGUF file or a Hugging Face model directory
+(SafeTensors):
+
+```sh
+engine inspect models/st/qwen2.5-0.5b-instruct     # config, dtypes, RAM estimate, support
+engine run models/st/smollm2-135m-instruct -p "Hi"
+engine serve models/st/qwen2.5-0.5b-instruct --port 8000
+PYTHONUTF8=1 python tools/make_tiny_hf.py tests/data   # regenerate HF test fixtures
+```
+
 ### Configuration
 
 Options come from three sources; later ones win: config file < `ENGINE_<OPTION>`

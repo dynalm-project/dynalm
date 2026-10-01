@@ -125,6 +125,17 @@ void dequant_f16(const void* w, float* out, int64_t n) {
   for (; i < n; ++i) out[i] = fp16_to_fp32(a[i]);
 }
 
+// BF16 is the top half of an fp32: widen and shift.
+void dequant_bf16(const void* w, float* out, int64_t n) {
+  const auto* a = static_cast<const uint16_t*>(w);
+  int64_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    const __m256i v = _mm256_cvtepu16_epi32(_mm_loadu_si128(reinterpret_cast<const __m128i*>(a + i)));
+    _mm256_storeu_ps(out + i, _mm256_castsi256_ps(_mm256_slli_epi32(v, 16)));
+  }
+  for (; i < n; ++i) out[i] = bf16_to_fp32(a[i]);
+}
+
 // 4 weight rows x 2 activation rows per pass over k: 8 accumulators, and
 // each loaded vector feeds several FMAs (x: 4, w: 2).
 void gemm_panel(const float* w, int nr, const float* x, int64_t x_stride, int64_t m, int64_t k, float* y,
@@ -400,6 +411,7 @@ bool register_avx2_kernels(CpuKernels& k) {
   k.vec_dot[static_cast<size_t>(DType::kQ4_K)] = vec_dot_q4_K;
   k.vec_dot[static_cast<size_t>(DType::kQ6_K)] = vec_dot_q6_K;
   k.dequant[static_cast<size_t>(DType::kF16)] = dequant_f16;
+  k.dequant[static_cast<size_t>(DType::kBF16)] = dequant_bf16;
   k.dequant[static_cast<size_t>(DType::kQ8_0)] = dequant_q8_0;
   k.dequant[static_cast<size_t>(DType::kQ4_0)] = dequant_q4_0;
   k.dequant[static_cast<size_t>(DType::kQ5_0)] = dequant_q5_0;
