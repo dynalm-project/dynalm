@@ -24,7 +24,7 @@ int main() {
   std::vector<float> x(kN);
   for (auto& v : x) v = static_cast<float>(rng() % 1000) / 1000.0f - 0.5f;
   std::printf("%-6s %14s %14s %9s %12s\n", "type", "generic ns", "avx2 ns", "speedup", "avx2 GB/s");
-  for (DType t : {DType::kF32, DType::kF16, DType::kBF16, DType::kQ8_0, DType::kQ4_0, DType::kQ5_0, DType::kQ4_K,
+  for (DType t : {DType::kF32, DType::kF16, DType::kBF16, DType::kQ8_0, DType::kQ4_0, DType::kQ4_1, DType::kQ5_0, DType::kQ4_K,
                   DType::kQ5_K, DType::kQ6_K}) {
     const int64_t bytes = dtype_row_bytes(t, kN);
     std::vector<uint8_t> w(static_cast<size_t>(bytes));
@@ -54,7 +54,7 @@ int main() {
   // Row dequantization (the batched-matmul expand path), one 4096-element row.
   std::printf("\ndequant row (%lld elements):\n%-6s %14s %14s %9s\n", static_cast<long long>(kN), "type",
               "generic ns", "avx2 ns", "speedup");
-  for (DType t : {DType::kF16, DType::kBF16, DType::kQ8_0, DType::kQ4_0, DType::kQ5_0, DType::kQ4_K, DType::kQ6_K}) {
+  for (DType t : {DType::kF16, DType::kBF16, DType::kQ8_0, DType::kQ4_0, DType::kQ4_1, DType::kQ5_0, DType::kQ4_K, DType::kQ6_K}) {
     std::vector<uint8_t> w(static_cast<size_t>(dtype_row_bytes(t, kN)));
     for (auto& b : w) b = static_cast<uint8_t>(rng() & 0x3F);
     std::vector<float> out(kN);

@@ -208,6 +208,11 @@ int inspect_hf(const std::string& path, bool show_metadata, bool show_tensors) {
   if (const json::Value* mt = cfg_json->find("model_type"); mt && mt->is_string()) {
     std::printf("model_type:    %s\n", mt->as_string().c_str());
   }
+  if (auto q = hf::read_quantization(*cfg_json); !q.ok()) {
+    std::printf("Quantization:  unsupported (%s)\n", q.status().message().c_str());
+  } else if (q->has_value()) {
+    std::printf("Quantization:  %s (repacked at load to Q4_0/Q4_1/Q8_0/F16, DD-041)\n", (*q)->describe().c_str());
+  }
   std::printf("Tensors:       %zu (%.1f MiB)\n", count, static_cast<double>(bytes) / kMiB);
   for (const auto& [name, b] : by_dtype) std::printf("  %-8s %10.1f MiB\n", name.c_str(), b / kMiB);
   auto cfg = hf::read_config(*cfg_json);

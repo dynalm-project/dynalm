@@ -552,3 +552,20 @@ parsing the 2 MB `tokenizer.json`; the weights are memory-mapped in both cases.
 Accuracy: max |logit diff| 1.7e-5 between the BF16 checkpoint and its F16 GGUF conversion. The
 tiny fixtures are bit-exact (0) for 6 of 7 architectures, and Llama differs by 1.1e-6
 (RoPE pairing order).
+
+## Phase 24 — GPTQ / AWQ checkpoints (repacked at load)
+
+Qwen2.5-0.5B-Instruct, 10 threads, in-process `engine benchmark`, prompt 128 / output 64:
+
+| checkpoint | runs as | load ms | c=1 out tok/s | c=1 ITL p50 ms | c=4 out tok/s | c=4 ITL p50 ms |
+|---|---|---|---|---|---|---|
+| GGUF Q4_K_M | Q4_K/Q5_0/Q6_K | 162 | 25.4 | 29.0 | 46.2 | 49.8 |
+| HF GPTQ-Int4 (sym, g128) | Q4_0 (bit-exact) | 2052 | 24.2 | 31.0 | 46.3 | 50.2 |
+| HF AWQ (zero point, g128), generic Q4_1 | Q4_1 | 2357 | 11.0 | 77.6 | 32.2 | 84.7 |
+| HF AWQ, with AVX2 Q4_1 (this phase) | Q4_1 | 2357 | **23.4** | **33.4** | **49.5** | **50.2** |
+
+Kernels, one 4096-element row (`bench_kernels`): Q4_1 dot 2533 → 487 ns (5.2×); Q4_1 dequant
+1707 → 537 ns (3.2×).
+
+Load time is spent unpacking and repacking every linear layer on one thread (once per
+layer). GGUF loads are memory-maps only.

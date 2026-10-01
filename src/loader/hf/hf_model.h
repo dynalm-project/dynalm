@@ -13,6 +13,7 @@
 // F32 copy; Llama 3 RoPE scaling becomes per-dimension frequency factors.
 // Llama Q/K rows stay unpermuted (config.qk_rows_interleaved = false).
 
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -21,6 +22,7 @@
 #include "common/status.h"
 #include "model_ir/model_config.h"
 #include "model_ir/tensor_registry.h"
+#include "quant/gptq_awq.h"
 
 namespace engine::hf {
 
@@ -46,6 +48,16 @@ bool parse_tensor_name(std::string_view name, std::string_view arch, TensorRole&
 // Llama 3 "rope_scaling" -> rope_freqs factors (head_dim / 2 values), the same
 // values llama.cpp's converter stores. Empty if the config has no such scaling.
 Result<std::vector<float>> llama3_rope_factors(const json::Value& config, int32_t rope_dim, float base);
+
+// config.json "quantization_config" -> packed-weight scheme (GPTQ / AWQ GEMM),
+// nullopt for unquantized checkpoints, kUnsupported for other methods
+// (bitsandbytes, fp8, compressed-tensors, ...) so they fail clearly.
+Result<std::optional<quant::PackedScheme>> read_quantization(const json::Value& config);
+
+// Splits "model.layers.0.mlp.up_proj.qweight" into the linear's weight name
+// ("model.layers.0.mlp.up_proj.weight") and component ("qweight"); false for
+// names that are not packed-weight components.
+bool split_packed_name(std::string_view name, std::string& weight_name, std::string& component);
 
 // Applies HF-specific weight conventions after mapping (Gemma norm fold,
 // Llama 3 rope factors).

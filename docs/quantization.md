@@ -8,7 +8,7 @@ Separate concepts, tracked independently per tensor/op:
 
 | Concept | Today | Later |
 |---|---|---|
-| weight dtype | per tensor: F32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q2_K–Q6_K | IQ*, GPTQ/AWQ (Phase 24) |
+| weight dtype | per tensor: F32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q2_K–Q6_K; GPTQ/AWQ repacked into these at load | IQ*, native packed kernels |
 | activation dtype | F32 | Q8_0/Q8_K-quantized activations for integer dot products (Phase 17/18) |
 | accumulator dtype | F32 | int32 inside integer dot products |
 | KV dtype | F16 (default) or F32 | Q8 KV |
@@ -42,3 +42,24 @@ quantized bytes and then writes and re-reads fp32. Phase 17/18 add fused kernels
 skip the fp32 round trip: activations are quantized to Q8, then integer dot products
 with AVX2 (`maddubs`/AVX-VNNI on this machine), with scales applied per block.
 Every optimized kernel is tested against `dequantize_q*`.
+
+## GPTQ and AWQ (Phase 24, DD-041)
+
+`quant/gptq_awq.{h,cpp}` describes packed checkpoints with `PackedScheme` (method, bits,
+group size, symmetry, act-order, GPTQ v1 zero offset), unpacks them exactly, and repacks each
+linear layer into a layout the kernels run:
+
+| packed weights | engine layout | fidelity |
+|---|---|---|
+| GPTQ int4, symmetric, groups of 32k | Q4_0 | bit-exact |
+| GPTQ int8, symmetric, groups of 32k | Q8_0 | bit-exact |
+| GPTQ/AWQ int4, asymmetric | Q4_1 | min rounded to fp16 (≤ 2.4e-4 on the fixtures) |
+| act-order, other group sizes, 8-bit asymmetric | F16 | fp16 rounding |
+
+Detection comes from `config.json` `quantization_config` (`hf::read_quantization`). Methods the
+engine cannot run fail at load with a message naming the method. Weight, activation,
+accumulator and KV types stay separate: a GPTQ model runs Q4_0 weights × fp32 activations →
+fp32 accumulators, with f16 KV.
+
+Fixtures: `tools/make_tiny_quant_hf.py` writes five packed variants of the tiny Llama, each
+with an independent NumPy-dequantized F32 twin (`tests/data/hf_tiny_llama_*`).

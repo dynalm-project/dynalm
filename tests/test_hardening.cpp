@@ -7,6 +7,8 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <fstream>
+#include <iterator>
 #include <random>
 #include <string>
 #include <thread>
@@ -130,6 +132,22 @@ TEST(Hardening, RequestLargerThanKvPoolIsRejectedUpFront) {
   EXPECT_EQ(ev.error.code(), StatusCode::kInvalidArgument);
   EXPECT_NE(ev.error.message().find("KV cache capacity"), std::string::npos);
   EXPECT_EQ(ev.completion_tokens, 0);  // never started generating
+}
+
+TEST(Hardening, FailedCreateCleansUp) {
+  // A model that fails to load must leave no half-built engine behind
+  // (UBSAN caught a null dereference in ~Engine on this path).
+  const std::string path = ::testing::TempDir() + "truncated.gguf";
+  {
+    std::ifstream in(std::string(ENGINE_TEST_DATA_DIR) + "/tiny_llama.gguf", std::ios::binary);
+    std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::ofstream(path, std::ios::binary).write(bytes.data(), static_cast<std::streamsize>(bytes.size() / 2));
+  }
+  EngineOptions o;
+  o.model_path = path;
+  EXPECT_FALSE(Engine::create(o).ok());
+  o.model_path = "/nonexistent/model.gguf";
+  EXPECT_FALSE(Engine::create(o).ok());
 }
 
 TEST(Hardening, ShutdownWithRequestsInFlight) {

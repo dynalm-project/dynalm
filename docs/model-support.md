@@ -15,7 +15,7 @@ Formats:
 - Hugging Face SafeTensors ✅ (Phase 23, DD-040). Pass a model directory (`config.json` +
   `model.safetensors`, or sharded files with `model.safetensors.index.json` + `tokenizer.json`),
   or one `.safetensors` file inside it.
-  - Weights: F32, F16, BF16.
+  - Weights: F32, F16, BF16, plus GPTQ (4/8-bit) and AWQ (4-bit GEMM) repacked at load (DD-041).
   - `model_type`: llama, mistral, qwen2, qwen3, gemma, gemma2, gemma3_text, phi3.
   - Verified: SmolLM2-135M-Instruct (BF16), Qwen2.5-0.5B-Instruct (BF16), and every tiny
     fixture (bit-exact against GGUF).

@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Phase 24 — GPTQ/AWQ
+- `quant/gptq_awq`: `PackedScheme`, exact GPTQ (v1/v2, 4/8-bit, act-order) and AWQ (GEMM,
+  4-bit) unpacking and reference dequantization; load-time repack to Q4_0 / Q8_0 (bit-exact for
+  symmetric weights), Q4_1 (asymmetric) or F16 (act-order) (DD-041).
+- `hf::read_quantization` (clear errors for bitsandbytes, fp8, other packings);
+  `hf::split_packed_name`; the HF loader gathers packed components across shards, validates
+  dtypes and shapes, and repacks them.
+- `engine inspect` reports the packed scheme; the load summary reports the repack targets.
+- AVX2 Q4_1 dot product and dequantization (5.2× / 3.2×): AWQ decode 77.6 → 33.4 ms/token.
+- Fix: `~Engine` dereferenced a null control block when `Engine::create` failed part-way
+  (found by UBSAN on a truncated download); regression test `Hardening.FailedCreateCleansUp`.
+- Verified on Qwen's official Qwen2.5-0.5B-Instruct GPTQ-Int4 (→ Q4_0) and AWQ (→ Q4_1).
+- `tools/make_tiny_quant_hf.py` + five packed tiny fixtures with NumPy references.
+- Tests: `test_gptq_awq` (config parsing, hand-packed layouts, corrupt `g_idx`, five variants
+  vs reference weights and logits).
+
 ### Phase 23 — SafeTensors
 - `loader/safetensors`: memory-mapped, zero-copy SafeTensors reader with a strict header validator.
 - `loader/hf`: Hugging Face directory loading (single or sharded); `config.json` → ModelConfig

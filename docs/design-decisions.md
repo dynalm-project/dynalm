@@ -770,3 +770,69 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
     weights: its `general.version` is v0.1, and even its F32 norm vectors differ (by factors
     of 1.8–2.5×), so logits are not compared for that pair. Comparing with a converter-made
     twin is what proves layout equivalence, and the tiny fixtures and SmolLM2 do that.
+
+## DD-041: GPTQ/AWQ are repacked at load into the block formats the kernels already run
+
+- **Decision:** HF checkpoints with `quantization_config` of `quant_method` gptq (4 or 8 bit;
+  `checkpoint_format` gptq/v1 or gptq_v2) or awq (4 bit, GEMM packing) are loaded by
+  `quant/gptq_awq`. It unpacks codes and zero points exactly as AutoGPTQ/GPTQModel and AutoAWQ
+  pack them:
+  - GPTQ packs along the input dimension, and v1 stores zero − 1.
+  - AWQ packs along the output dimension in the nibble order {0,2,4,6,1,3,5,7}.
+
+  Each linear layer is converted once to an existing executable layout:
+
+  | packed weights | engine layout | fidelity |
+  |---|---|---|
+  | 4-bit, zero = 8, contiguous groups of 32k | Q4_0 (d = scale, value d·(q − 8)) | bit-exact |
+  | 8-bit, zero = 128, contiguous groups of 32k | Q8_0 (d = scale, q − 128) | bit-exact |
+  | 4-bit asymmetric, contiguous groups of 32k | Q4_1 (d = scale, m = −scale·zero) | m rounded to fp16 |
+  | act-order `g_idx`, other group sizes, 8-bit asymmetric | F16 | rounding to fp16 |
+
+  Symmetry is verified on the actual zero points; the config's `sym` flag is not trusted.
+  Other methods (bitsandbytes, fp8, compressed-tensors, …), 2/3-bit GPTQ and AWQ GEMV are
+  rejected with a clear error.
+- **Reason:** Spec §6 makes quantization a subsystem with format detection, scales, zero
+  points, group size and layout, and keeps it out of model code. Repacking at load:
+  - keeps the runtime unchanged: adapters and kernels only ever see `DType`s;
+  - reuses AVX2 kernels that are already tested against references;
+  - is exact for the most common published configuration (int4, symmetric, group 128, as in
+    Qwen's official GPTQ-Int4 releases).
+
+  GPTQ's scale is fp16, and Q4_0/Q8_0 store an fp16 `d`, so the mapping loses nothing.
+- **Alternatives:**
+  - Native GPTQ/AWQ kernels (int4 × fp32 with per-group zeros, or exllama-style).
+    Potentially faster for asymmetric weights (no fp16 min rounding), but a second family of
+    kernels to maintain and test, and the gain on CPU is unmeasured. This is the natural GPU
+    path (Marlin-style) and can be added behind the same `PackedScheme` later.
+  - Dequantizing everything to F16: simple, but 4× the memory.
+  - Requantizing to K-quants: lossy twice.
+- **Tradeoffs:**
+  - Load time: each layer is unpacked once on the CPU (twice today, once to choose the
+    target; this can be fused later).
+  - Act-order models (`desc_act` with a permuted `g_idx`) run as F16, because 32-wide blocks
+    cannot mix groups. Permuting input channels together with the previous layer's output
+    could restore 4-bit storage; that is TODO.
+  - Q4_1 needed AVX2 kernels to be competitive. They were added in this phase:
+    `vec_dot_q4_1` = d·(q·x) + m·Σx, plus `dequant_q4_1`.
+- **Evidence:** `test_gptq_awq`. `tools/make_tiny_quant_hf.py` packs the tiny Llama in five
+  variants and writes an F32 reference computed independently in NumPy.
+  - **Config.** GPTQ/AWQ parsing, and clear errors for bitsandbytes, fp8, 3-bit, AWQ GEMV
+    and Marlin formats.
+  - **Hand-built unpack.** A hand-packed layer for both layouts, and out-of-range `g_idx`
+    rejected as corrupt.
+  - **Fixtures:**
+
+    | variant | layout | max \|w − ref\| | max \|logit − ref\| |
+    |---|---|---|---|
+    | GPTQ int4 sym g32 | Q4_0 | 0 | 0 |
+    | GPTQ int8 sym g32 | Q8_0 | 0 | 0 |
+    | GPTQ int4 asym g64 (v2) | Q4_1 | 2.4e-4 | 4.5e-3 |
+    | AWQ int4 g32 | Q4_1 | 2.4e-4 | 3.7e-3 |
+    | GPTQ int4 act-order g32 | F16 | 2.4e-4 | 1.5e-3 |
+
+  - **Real checkpoints.** Qwen's official Qwen2.5-0.5B-Instruct-GPTQ-Int4 → Q4_0 ×168 and
+    -AWQ → Q4_1 ×168. Both answer "7 × 6" with 42 and "capital of France" with Paris.
+    Decode ITL p50, 10 threads: GPTQ 31.0 ms, AWQ 33.4 ms, GGUF Q4_K_M 29.0 ms.
+  - **Load time.** Load is 2.0–2.4 s, against 0.16 s for GGUF (repacking on load). A first
+    version took 5.3 s because it unpacked each layer twice with strided writes.

@@ -246,6 +246,61 @@ bool parse_tensor_name(std::string_view name, std::string_view arch, TensorRole&
   return false;
 }
 
+Result<std::optional<quant::PackedScheme>> read_quantization(const json::Value& cfg) {
+  const json::Value* qc = field(cfg, "quantization_config");
+  if (!qc) return std::optional<quant::PackedScheme>{};
+  if (!qc->is_object()) return Corrupt("config.json: quantization_config is not an object");
+  const json::Value* m = field(*qc, "quant_method");
+  const std::string method = m && m->is_string() ? m->as_string() : "";
+  auto flag = [&](std::string_view key, bool fallback) {
+    const json::Value* v = field(*qc, key);
+    return v && v->is_bool() ? v->as_bool() : fallback;
+  };
+  quant::PackedScheme s;
+  if (method == "gptq") {
+    s.method = quant::PackedMethod::kGptq;
+    ENGINE_ASSIGN_OR_RETURN(int64_t bits, get_int_or(*qc, "bits", 4));
+    ENGINE_ASSIGN_OR_RETURN(int64_t group, get_int_or(*qc, "group_size", 128));
+    s.bits = static_cast<int>(bits);
+    s.group_size = static_cast<int>(group);
+    s.sym = flag("sym", true);
+    s.desc_act = flag("desc_act", false);
+    const json::Value* fmt = field(*qc, "checkpoint_format");
+    const std::string f = fmt && fmt->is_string() ? fmt->as_string() : "gptq";
+    if (f != "gptq" && f != "gptq_v2") return Unsupported("GPTQ checkpoint_format '" + f + "'");
+    s.zero_minus_one = f == "gptq";
+  } else if (method == "awq") {
+    s.method = quant::PackedMethod::kAwq;
+    ENGINE_ASSIGN_OR_RETURN(int64_t bits, get_int_or(*qc, "bits", 4));
+    ENGINE_ASSIGN_OR_RETURN(int64_t group, get_int_or(*qc, "group_size", 128));
+    s.bits = static_cast<int>(bits);
+    s.group_size = static_cast<int>(group);
+    s.sym = !flag("zero_point", true);
+    s.zero_minus_one = false;
+    const json::Value* ver = field(*qc, "version");
+    const std::string v = ver && ver->is_string() ? ver->as_string() : "gemm";
+    if (v != "gemm" && v != "GEMM") {
+      return Unsupported("AWQ version '" + v + "' (only the GEMM packing is supported)");
+    }
+  } else {
+    return Unsupported("quantization method '" + method +
+                       "' is not supported (GPTQ and AWQ are; GGUF quantizations are always supported)");
+  }
+  ENGINE_RETURN_IF_ERROR(quant::packed_shapes(s, 32, 32).status());  // validates bits / group size
+  return std::optional<quant::PackedScheme>(s);
+}
+
+bool split_packed_name(std::string_view name, std::string& weight_name, std::string& component) {
+  for (std::string_view c : {"qweight", "qzeros", "scales", "g_idx"}) {
+    if (name.size() > c.size() + 1 && name.ends_with(c) && name[name.size() - c.size() - 1] == '.') {
+      weight_name = std::string(name.substr(0, name.size() - c.size())) + "weight";
+      component = std::string(c);
+      return true;
+    }
+  }
+  return false;
+}
+
 Result<std::vector<float>> llama3_rope_factors(const json::Value& cfg, int32_t rope_dim, float base) {
   const json::Value* rs = field(cfg, "rope_scaling");
   if (!rs || !rs->is_object()) return std::vector<float>{};

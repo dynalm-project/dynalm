@@ -116,7 +116,7 @@ Engine::~Engine() {
   }
   wake_cv_.notify_all();
   if (thread_.joinable()) thread_.join();
-  {
+  if (core_) {  // null when create() failed part-way (e.g. a corrupt model file)
     std::lock_guard<std::mutex> lock(core_->mu);
     core_->sched = nullptr;  // streams' cancel() becomes a no-op
   }

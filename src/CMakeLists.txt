@@ -40,6 +40,7 @@ add_library(engine_core STATIC
   platform/isa.cpp
   platform/process_stats.cpp
   quant/dequant.cpp
+  quant/gptq_awq.cpp
   quant/quant_formats.cpp
   runtime/engine.cpp
   runtime/generator.cpp

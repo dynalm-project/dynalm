@@ -115,3 +115,6 @@ engine_add_test(test_hardening
 
 engine_add_test(test_safetensors
   test_safetensors.cpp)
+
+engine_add_test(test_gptq_awq
+  test_gptq_awq.cpp)

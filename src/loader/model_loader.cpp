@@ -88,6 +88,74 @@ Result<std::unique_ptr<LoadedModel>> load_gguf(const std::string& path) {
   return m;
 }
 
+// The tensors making up one GPTQ/AWQ linear layer.
+struct PackedParts {
+  TensorRole role = TensorRole::kCount;
+  int layer = -1;
+  std::map<std::string, const safetensors::TensorInfo*> parts;  // qweight, scales, qzeros, g_idx
+};
+
+// Validates and repacks every packed layer into the registry (DD-041).
+// Returns a summary such as "Q4_0 x168".
+Result<std::string> repack_packed_layers(const quant::PackedScheme& s, const std::map<std::string, PackedParts>& layers,
+                                         const std::vector<std::unique_ptr<safetensors::SafeTensorsFile>>& shards,
+                                         LoadedModel& m) {
+  auto data_of = [&](const safetensors::TensorInfo* t) -> const void* {
+    for (const auto& sh : shards) {
+      if (!sh->tensors().empty() && t >= sh->tensors().data() && t < sh->tensors().data() + sh->tensors().size()) {
+        return sh->file().data() + t->offset;
+      }
+    }
+    return nullptr;
+  };
+  std::map<std::string, int> counts;
+  const int per = 32 / s.bits;
+  for (const auto& [name, p] : layers) {
+    auto part = [&](const char* c) -> const safetensors::TensorInfo* {
+      auto it = p.parts.find(c);
+      return it == p.parts.end() ? nullptr : it->second;
+    };
+    const auto *qw = part("qweight"), *sc = part("scales"), *qz = part("qzeros"), *gi = part("g_idx");
+    if (!qw || !sc || !qz) return Corrupt("packed layer '" + name + "' needs qweight, scales and qzeros");
+    if (p.layer >= m.config.num_layers) return Corrupt("packed layer '" + name + "' has an out-of-range layer");
+    if (qw->dtype_name != "I32" || qz->dtype_name != "I32" || sc->dtype_name != "F16" || (gi && gi->dtype_name != "I32") ||
+        qw->shape.rank() != 2 || sc->shape.rank() != 2 || qz->shape.rank() != 2 || (gi && gi->shape.rank() != 1)) {
+      return Corrupt("packed layer '" + name + "': unexpected component dtypes or ranks");
+    }
+    quant::PackedLinear w;
+    if (s.method == quant::PackedMethod::kGptq) {
+      w.in = qw->shape[0] * per;
+      w.out = qw->shape[1];
+    } else {
+      w.in = qw->shape[0];
+      w.out = qw->shape[1] * per;
+    }
+    ENGINE_ASSIGN_OR_RETURN(quant::PackedShapes shp, quant::packed_shapes(s, w.in, w.out));
+    if (qw->shape[0] != shp.qweight_rows || qw->shape[1] != shp.qweight_cols || sc->shape[0] != shp.groups ||
+        sc->shape[1] != w.out || qz->shape[0] != shp.groups || qz->shape[1] != shp.qzeros_cols ||
+        (gi && gi->shape[0] != w.in)) {
+      return Corrupt("packed layer '" + name + "': component shapes do not match " + s.describe());
+    }
+    w.qweight = static_cast<const int32_t*>(data_of(qw));
+    w.scales = static_cast<const uint16_t*>(data_of(sc));
+    w.qzeros = static_cast<const int32_t*>(data_of(qz));
+    w.g_idx = gi ? static_cast<const int32_t*>(data_of(gi)) : nullptr;
+    if (!w.qweight || !w.scales || !w.qzeros || (gi && !w.g_idx)) return Internal("packed component not mapped");
+    quant::RepackTarget target;
+    ENGINE_ASSIGN_OR_RETURN(Tensor t, quant::repack(s, w, &target));
+    m.weight_bytes += static_cast<int64_t>(dtype_row_bytes(t.dtype(), w.in)) * w.out;
+    ++counts[std::string(quant::repack_target_name(target))];
+    ENGINE_RETURN_IF_ERROR(m.weights.add(p.role, p.layer, std::move(t)));
+  }
+  std::string summary;
+  for (const auto& [target, n] : counts) summary += (summary.empty() ? "" : ", ") + target + " x" + std::to_string(n);
+  if (counts.count("F16")) {
+    LOG_WARN("{} packed layer(s) use act-order or a group size that is not a multiple of 32; they run as F16",
+             counts["F16"]);
+  }
+  return summary.empty() ? std::string("no packed layers") : summary;
+}
+
 Result<std::unique_ptr<LoadedModel>> load_safetensors(const std::string& path) {
   namespace fs = std::filesystem;
   ENGINE_ASSIGN_OR_RETURN(hf::ModelFiles files, hf::locate(path));
@@ -100,14 +168,28 @@ Result<std::unique_ptr<LoadedModel>> load_safetensors(const std::string& path) {
   ENGINE_ASSIGN_OR_RETURN(m->config, hf::read_config(cfg));
   ENGINE_RETURN_IF_ERROR(find_adapter(*m));
 
+  ENGINE_ASSIGN_OR_RETURN(std::optional<quant::PackedScheme> scheme, hf::read_quantization(cfg));
+
   // Map every shard's tensors; the tensors keep their mapped file alive.
+  // GPTQ/AWQ components are gathered per linear layer and repacked below.
   m->weights = TensorRegistry(m->config.num_layers);
   std::map<std::string, int64_t> bytes_by_dtype;
+  std::map<std::string, PackedParts> packed;  // by linear weight name
+  std::vector<std::unique_ptr<safetensors::SafeTensorsFile>> shards;
   for (const std::string& shard : files.weights) {
     ENGINE_ASSIGN_OR_RETURN(auto st, safetensors::SafeTensorsFile::open(shard));
     for (const safetensors::TensorInfo& info : st->tensors()) {
       TensorRole role;
       int layer;
+      std::string weight_name, component;
+      if (scheme && hf::split_packed_name(info.name, weight_name, component) &&
+          hf::parse_tensor_name(weight_name, m->config.architecture, role, layer)) {
+        PackedParts& p = packed[weight_name];
+        p.role = role;
+        p.layer = layer;
+        p.parts[component] = &info;
+        continue;
+      }
       if (!hf::parse_tensor_name(info.name, m->config.architecture, role, layer)) {
         m->unmapped_tensors.push_back(info.name);
         continue;
@@ -121,10 +203,15 @@ Result<std::unique_ptr<LoadedModel>> load_safetensors(const std::string& path) {
       m->weight_bytes += static_cast<int64_t>(info.nbytes);
       bytes_by_dtype[info.dtype_name] += static_cast<int64_t>(info.nbytes);
     }
+    shards.push_back(std::move(st));
   }
   // Reported "quantization": the dominant weight dtype (F32 / F16 / BF16).
   for (const auto& [name, bytes] : bytes_by_dtype) {
     if (m->quantization.empty() || bytes > bytes_by_dtype[m->quantization]) m->quantization = name;
+  }
+  if (scheme) {
+    ENGINE_ASSIGN_OR_RETURN(std::string summary, repack_packed_layers(*scheme, packed, shards, *m));
+    m->quantization = scheme->describe() + " -> " + summary;
   }
   ENGINE_RETURN_IF_ERROR(hf::apply_conventions(cfg, m->config, m->weights));
 

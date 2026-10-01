@@ -198,6 +198,22 @@ float vec_dot_q8_0(const void* w, const float* x, int64_t n) {
   return hsum(acc);
 }
 
+// Q4_1: value = d * q + m (q in 0..15), so dot = d * (q . x) + m * sum(x).
+float vec_dot_q4_1(const void* w, const float* x, int64_t n) {
+  const auto* b = static_cast<const BlockQ4_1*>(w);
+  const __m128i low4 = _mm_set1_epi8(0x0F);
+  alignas(32) int8_t q[32];
+  __m256 acc = _mm256_setzero_ps();
+  for (int64_t i = 0; i < n / kQK; ++i, x += kQK) {
+    const __m128i bytes = _mm_loadu_si128(reinterpret_cast<const __m128i*>(b[i].qs));
+    _mm_store_si128(reinterpret_cast<__m128i*>(q), _mm_and_si128(bytes, low4));
+    _mm_store_si128(reinterpret_cast<__m128i*>(q + 16), _mm_and_si128(_mm_srli_epi16(bytes, 4), low4));
+    acc = _mm256_fmadd_ps(_mm256_set1_ps(fp16_to_fp32(b[i].d)), dot32_i8(q, x), acc);
+    acc = _mm256_fmadd_ps(_mm256_set1_ps(fp16_to_fp32(b[i].m)), sum32(x), acc);
+  }
+  return hsum(acc);
+}
+
 float vec_dot_q4_0(const void* w, const float* x, int64_t n) {
   const auto* b = static_cast<const BlockQ4_0*>(w);
   const __m128i low4 = _mm_set1_epi8(0x0F), eight = _mm_set1_epi8(8);
@@ -326,6 +342,18 @@ void dequant_q4_0(const void* w, float* out, int64_t n) {
   }
 }
 
+void dequant_q4_1(const void* w, float* out, int64_t n) {
+  const auto* b = static_cast<const BlockQ4_1*>(w);
+  const __m128i low4 = _mm_set1_epi8(0x0F);
+  alignas(32) int8_t q[32];
+  for (int64_t i = 0; i < n / kQK; ++i, out += kQK) {
+    const __m128i bytes = _mm_loadu_si128(reinterpret_cast<const __m128i*>(b[i].qs));
+    _mm_store_si128(reinterpret_cast<__m128i*>(q), _mm_and_si128(bytes, low4));
+    _mm_store_si128(reinterpret_cast<__m128i*>(q + 16), _mm_and_si128(_mm_srli_epi16(bytes, 4), low4));
+    store_scaled(q, kQK, fp16_to_fp32(b[i].d), fp16_to_fp32(b[i].m), out);
+  }
+}
+
 void dequant_q5_0(const void* w, float* out, int64_t n) {
   const auto* b = static_cast<const BlockQ5_0*>(w);
   const __m128i low4 = _mm_set1_epi8(0x0F);
@@ -414,6 +442,8 @@ bool register_avx2_kernels(CpuKernels& k) {
   k.dequant[static_cast<size_t>(DType::kBF16)] = dequant_bf16;
   k.dequant[static_cast<size_t>(DType::kQ8_0)] = dequant_q8_0;
   k.dequant[static_cast<size_t>(DType::kQ4_0)] = dequant_q4_0;
+  k.dequant[static_cast<size_t>(DType::kQ4_1)] = dequant_q4_1;
+  k.vec_dot[static_cast<size_t>(DType::kQ4_1)] = vec_dot_q4_1;
   k.dequant[static_cast<size_t>(DType::kQ5_0)] = dequant_q5_0;
   k.dequant[static_cast<size_t>(DType::kQ4_K)] = dequant_q4_K;
   k.dequant[static_cast<size_t>(DType::kQ6_K)] = dequant_q6_K;
