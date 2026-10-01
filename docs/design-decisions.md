@@ -429,3 +429,21 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   than hash, and 2.5× faster lookups (26 µs vs 64 µs for 8K tokens).
 - **Tradeoffs:** A partial hit costs one block copy and one extra block. When the pool
   has no free block the partial reuse is skipped (it's an optimization).
+
+## DD-031: SIMD kernels keep fp32 activations; batch results match to float rounding
+
+- **Decision:** Phase 17 kernels (AVX2/FMA/F16C) dequantize weights in registers and FMA
+  with fp32 activations, accumulating in fp32. Only the summation order differs from
+  the reference. The matmul uses fused dequantize-dot for small row counts (decode) and
+  expands each weight row once for 4+ rows (prefill). Because the chosen path depends on
+  batch size, batched outputs now match sequential ones to float rounding (~1e-6
+  relative), no longer bit for bit (DD-025 tightened to a tolerance).
+- **Reason:** Spec §37 requires reproducibility "within expected numerical tolerance".
+  Bit-exact batch invariance would force one algorithm across decode and prefill, and it
+  would conflict with the tiled GEMM planned next. Runs stay deterministic for the same
+  schedule, and every golden test kept its original tolerance.
+- **Evidence:** All 13 weight types checked per tier against the dequantize reference
+  (test_kernels). All real-model goldens unchanged (SmolLM2 Q8_0 still 1e-5 vs its
+  reference). Speedups in docs/benchmarks.md.
+- **Tradeoffs:** Activation quantization (int8 dot products) would be faster still but
+  changes numerics. It gets separate accuracy tests in Phase 18.

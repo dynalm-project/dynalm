@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <numeric>
 #include <random>
 
@@ -46,7 +47,7 @@ class Batching : public ::testing::TestWithParam<std::string> {
   std::unique_ptr<Transformer> tf;
 };
 
-TEST_P(Batching, MixedBatchEqualsSequentialBitExact) {
+TEST_P(Batching, MixedBatchMatchesSequential) {
   const int32_t vocab = static_cast<int32_t>(model->config.vocab_size);
   // Four sequences with different histories, then one mixed step: two decode
   // rows, one prefill chunk of 5 and one prefill chunk of 3 without logits.
@@ -94,7 +95,11 @@ TEST_P(Batching, MixedBatchEqualsSequentialBitExact) {
   ASSERT_TRUE(tf->forward_batch(batch, *pool, got).ok());
   for (size_t s = 0; s < want.size(); ++s) {
     for (int32_t i = 0; i < vocab; ++i) {
-      ASSERT_EQ(got[s * static_cast<size_t>(vocab) + static_cast<size_t>(i)], want[s][static_cast<size_t>(i)])
+      // Rows are mathematically independent; the matmul may pick a different
+      // (equally exact) summation order for large batches (DD-031), so batched
+      // results match sequential ones to float rounding, not bit for bit.
+      const float w = want[s][static_cast<size_t>(i)];
+      ASSERT_NEAR(got[s * static_cast<size_t>(vocab) + static_cast<size_t>(i)], w, 1e-5f * (std::abs(w) + 1.0f))
           << GetParam() << " seq " << s << " logit " << i;
     }
   }

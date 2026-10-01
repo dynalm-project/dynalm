@@ -1,0 +1,54 @@
+#pragma once
+
+// Innermost CPU primitives, selected once per ISA tier.
+//
+// Every entry has a portable generic implementation; ISA tiers (AVX2 today)
+// override the entries they accelerate. All kernels keep fp32 activations
+// and fp32 accumulation, so tiers differ only in summation order (tested
+// against the generic tier and the dequantize reference).
+//
+// SIMD code lives only in backends/cpu/<isa>/*.cpp, compiled with per-file
+// ISA flags (DD-003); nothing here may be inlined into generic code.
+
+#include <array>
+#include <cstdint>
+
+#include "dtype/dtype.h"
+#include "platform/isa.h"
+
+namespace engine {
+
+// Dot product of one weight row (`n` elements of the slot's dtype, packed
+// blocks for quantized types) with fp32 activations.
+using VecDotFn = float (*)(const void* w, const float* x, int64_t n);
+// Row conversion of `n` elements of the slot's dtype to fp32.
+using DequantFn = void (*)(const void* w, float* out, int64_t n);
+
+struct CpuKernels {
+  CpuIsa isa = CpuIsa::kGeneric;
+  float (*dot_f32)(const float* a, const float* b, int64_t n) = nullptr;
+  // y += a * x
+  void (*axpy_f32)(float a, const float* x, float* y, int64_t n) = nullptr;
+  // fp16 KV helpers used by attention.
+  float (*dot_f16_f32)(const uint16_t* a, const float* b, int64_t n) = nullptr;
+  void (*axpy_f16)(float a, const uint16_t* x, float* y, int64_t n) = nullptr;
+
+  // Per weight dtype; every supported dtype has both entries after
+  // registration of the generic tier.
+  std::array<VecDotFn, static_cast<size_t>(DType::kCount)> vec_dot{};
+  std::array<DequantFn, static_cast<size_t>(DType::kCount)> dequant{};
+
+  VecDotFn vec_dot_for(DType t) const { return vec_dot[static_cast<size_t>(t)]; }
+  DequantFn dequant_for(DType t) const { return dequant[static_cast<size_t>(t)]; }
+};
+
+// Fills every entry with the portable implementation.
+void register_generic_kernels(CpuKernels& k);
+// Overrides entries with AVX2/FMA/F16C versions. Returns false (and changes
+// nothing) when the AVX2 tier was not compiled in.
+bool register_avx2_kernels(CpuKernels& k);
+
+// Best available table for `isa` (falls back to lower tiers).
+CpuKernels make_cpu_kernels(CpuIsa isa);
+
+}  // namespace engine

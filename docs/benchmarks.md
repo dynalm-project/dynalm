@@ -303,3 +303,58 @@ Lookup latency for an 8192-token fully cached prompt (512 blocks):
 Radix reuses the partially matching block (500 = 31×16 + 4), so it computes 11% fewer rows
 and halves median TTFT. Its lookups are 2.5× faster (a per-block child lookup instead of
 per-token chained mixing). Radix is the default.
+
+## Phase 17 — CPU SIMD (AVX2 + FMA + F16C)
+
+### Fused dequantize-dot per weight type (`bench_kernels`, one 4096-element row)
+
+| type | generic ns | AVX2 ns | speedup | AVX2 GB/s of weights |
+|---|---|---|---|---|
+| f32 | 484 | 127 | 3.8× | 129.2 (L1-resident) |
+| f16 | 3433 | 277 | 12.4× | 29.6 |
+| bf16 | 854 | 537 | 1.6× | 15.3 |
+| q8_0 | 1595 | 234 | 6.8× | 18.6 |
+| q4_0 | 1662 | 351 | 4.7× | 6.6 |
+| q5_0 | 3096 | 432 | 7.2× | 6.5 |
+| q4_K | 2062 | 412 | 5.0× | 5.6 |
+| q5_K | 1238 | 1267 | 1.0× (no AVX2 kernel yet) | 2.2 |
+| q6_K | 3661 | 406 | 9.0× | 8.3 |
+
+(An earlier run fed f32/bf16 rows of tiny byte patterns, which are denormal floats and
+pathologically slow. The benchmark now uses real values.)
+
+### End to end (`engine run ... -n 64 -t 10`, Linux container) — Phase 8 → Phase 17
+
+| model | weights | prefill tok/s | decode tok/s (was) | ITL p50 / p99 ms |
+|---|---|---|---|---|
+| SmolLM2-135M | f16 | 28.4 | **53.1** (18.5) | 17.2 / 30.1 |
+| SmolLM2-135M | Q8_0 | 51.6 | **95.3** (42.3) | 9.9 / 25.2 |
+| Qwen2.5-0.5B | f16 | 12.7 | **16.3** (5.8) | 56.2 / 138.1 |
+| Qwen2.5-0.5B | Q8_0 | 15.9 | **22.9** (16.5) | 43.2 / 68.1 |
+| Qwen2.5-0.5B | Q4_K_M | 23.5 | **28.6** (8.5) | 30.0 / 101.7 |
+
+### Decode vs context (`bench_decode_context`, SmolLM2 Q8_0, f16 KV) — p50 ms/token
+
+| context | Phase 9 | Phase 17 |
+|---|---|---|
+| 64 | 14.8 | 16.3 |
+| 256 | 17.6 | 10.9 |
+| 1024 | 39.7 | 15.0 |
+| 2048 | 59.3 | 17.4 |
+| 4096 | 93.2 | 27.0 |
+
+### Batched decode (`bench_batch_decode`, SmolLM2 Q8_0) — aggregate tok/s
+
+| seqs | 1 | 2 | 4 | 8 | 16 | 32 |
+|---|---|---|---|---|---|---|
+| Phase 11 | 68.3 | 95.5 | 124.3 | 151.3 | 124.6 | 131.3 |
+| Phase 17 | 100.9 | 184.1 | 258.7 | 326.2 | **355.1** | 302.6 |
+
+Takeaways:
+- Decode is 1.4–3.4× faster. Qwen2.5 Q8_0 decode (22.9 tok/s × 675 MB ≈ 15.5 GB/s) is now
+  close to this laptop's practical memory bandwidth under WSL: bandwidth-bound, as decode
+  should be.
+- f16 KV attention via F16C made long-context decode 3.4× faster at 4K.
+- Prefill barely moved (it runs the same per-row dots for every activation row). The first
+  Phase 18 target is a tiled GEMM that keeps weight tiles in cache across rows, followed by
+  int8 activation quantization (AVX-VNNI is available) and split-K decode attention.

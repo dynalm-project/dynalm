@@ -1,23 +1,17 @@
 #pragma once
 
-// CPU backend: generic kernels today, ISA-specific variants selected at
-// construction through CpuKernels (Phase 17 adds AVX2/AVX-512 entries).
+// CPU backend: ops over TensorViews, with the innermost primitives taken
+// from a CpuKernels table selected once for the running CPU (generic / AVX2).
 
 #include <memory>
 
 #include "backends/backend.h"
+#include "backends/cpu/cpu_kernels.h"
 #include "platform/isa.h"
 #include "runtime/thread_pool.h"
 
 namespace engine {
 
-// Innermost primitives that ISA variants override.
-struct CpuKernels {
-  CpuIsa isa = CpuIsa::kGeneric;
-  float (*dot_f32)(const float* a, const float* b, int64_t n) = nullptr;
-};
-
-CpuKernels select_cpu_kernels(CpuIsa isa);
 
 class CpuBackend final : public Backend {
  public:

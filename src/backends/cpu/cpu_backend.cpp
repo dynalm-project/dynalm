@@ -7,27 +7,9 @@
 #include <vector>
 
 #include "dtype/fp16.h"
-#include "quant/dequant.h"
 
 namespace engine {
 namespace {
-
-// --- generic primitives ------------------------------------------------------
-
-float dot_f32_generic(const float* a, const float* b, int64_t n) {
-  // Four independent accumulators: lets the compiler vectorize/pipeline and
-  // keeps rounding behaviour fixed regardless of optimization level.
-  float s0 = 0, s1 = 0, s2 = 0, s3 = 0;
-  int64_t i = 0;
-  for (; i + 4 <= n; i += 4) {
-    s0 += a[i] * b[i];
-    s1 += a[i + 1] * b[i + 1];
-    s2 += a[i + 2] * b[i + 2];
-    s3 += a[i + 3] * b[i + 3];
-  }
-  for (; i < n; ++i) s0 += a[i] * b[i];
-  return (s0 + s1) + (s2 + s3);
-}
 
 // Pointer to row r of a 2-D view (strides are bytes).
 template <typename T>
@@ -59,37 +41,24 @@ inline float apply_act(Activation a, float x) {
   return x;
 }
 
-// KV element load/store for the supported cache dtypes.
-inline float kv_load(const void* base, int64_t idx, DType t) {
-  if (t == DType::kF16) return fp16_to_fp32(static_cast<const uint16_t*>(base)[idx]);
-  return static_cast<const float*>(base)[idx];
-}
 
 }  // namespace
 
-CpuKernels select_cpu_kernels(CpuIsa isa) {
-  CpuKernels k;
-  k.isa = CpuIsa::kGeneric;  // ISA-specific kernels arrive in Phase 17
-  k.dot_f32 = dot_f32_generic;
-  (void)isa;
-  return k;
-}
-
 CpuBackend::CpuBackend(ThreadPool& pool, CpuIsa isa)
-    : pool_(pool), k_(select_cpu_kernels(isa)), name_("CPU/" + std::string(isa_name(k_.isa))) {}
+    : pool_(pool), k_(make_cpu_kernels(isa)), name_("CPU/" + std::string(isa_name(k_.isa))) {}
 
 Result<std::shared_ptr<Storage>> CpuBackend::allocate(size_t bytes) { return Storage::allocate_host(bytes); }
 
 void CpuBackend::copy(void* dst, const void* src, size_t bytes) { std::memcpy(dst, src, bytes); }
 
-bool CpuBackend::supports_weight_type(DType type) const { return dequant_supported(type); }
+bool CpuBackend::supports_weight_type(DType type) const { return k_.vec_dot_for(type) != nullptr; }
 
 void CpuBackend::embedding(const TensorView& table, std::span<const int32_t> ids, const TensorView& out) {
   const int64_t dim = cols(table);
   const int64_t row_bytes = dtype_row_bytes(table.dtype(), dim);
   const auto* base = static_cast<const std::byte*>(table.data());
   for (size_t i = 0; i < ids.size(); ++i) {
-    dequantize_row(table.dtype(), base + ids[i] * row_bytes, row_ptr<float>(out, static_cast<int64_t>(i)), dim);
+    k_.dequant_for(table.dtype())(base + ids[i] * row_bytes, row_ptr<float>(out, static_cast<int64_t>(i)), dim);
   }
 }
 
@@ -100,25 +69,28 @@ void CpuBackend::matmul(const TensorView& x, const TensorView& w, const TensorVi
   const int64_t w_row_bytes = dtype_row_bytes(wt, k);
   const auto* wbase = static_cast<const std::byte*>(w.data());
   const float* b = bias ? bias->data_as<const float>() : nullptr;
+  const VecDotFn vec_dot = k_.vec_dot_for(wt);
+  const DequantFn dequant = k_.dequant_for(wt);
   const auto dot = k_.dot_f32;
+  // Few activation rows (decode): fused dequantize-dot straight from the
+  // packed weights. Many rows (prefill): expand each weight row once and
+  // reuse it for every activation row.
+  constexpr int64_t kExpandThreshold = 4;
+  const bool expand = wt != DType::kF32 && m >= kExpandThreshold;
 
-  // Parallel over output features: each weight row is converted once and
-  // reused for every activation row.
   pool_.parallel_for(static_cast<size_t>(n), grain_for(static_cast<size_t>(n), pool_.size(), 4),
                      [&](size_t begin, size_t end) {
     thread_local std::vector<float> wrow;
-    if (wt != DType::kF32) wrow.resize(static_cast<size_t>(k));
+    if (expand) wrow.resize(static_cast<size_t>(k));
     for (size_t j = begin; j < end; ++j) {
       const std::byte* src = wbase + static_cast<int64_t>(j) * w_row_bytes;
-      const float* wr;
-      if (wt == DType::kF32) {
-        wr = reinterpret_cast<const float*>(src);
-      } else {
-        dequantize_row(wt, src, wrow.data(), k);
-        wr = wrow.data();
-      }
       const float bj = b ? b[j] : 0.0f;
-      for (int64_t i = 0; i < m; ++i) row_ptr<float>(y, i)[j] = dot(row_ptr<const float>(x, i), wr, k) + bj;
+      if (expand) {
+        dequant(src, wrow.data(), k);
+        for (int64_t i = 0; i < m; ++i) row_ptr<float>(y, i)[j] = dot(row_ptr<const float>(x, i), wrow.data(), k) + bj;
+      } else {
+        for (int64_t i = 0; i < m; ++i) row_ptr<float>(y, i)[j] = vec_dot(src, row_ptr<const float>(x, i), k) + bj;
+      }
     }
   });
 }
@@ -226,10 +198,12 @@ void CpuBackend::attention(const AttentionParams& p) {
   const size_t m = p.positions.size();
   const DType kt = g.dtype;
   const auto dot = k_.dot_f32;
+  const auto dot_f16 = k_.dot_f16_f32;
+  const auto axpy = k_.axpy_f32;
+  const auto axpy_f16 = k_.axpy_f16;
 
   pool_.parallel_for(m * static_cast<size_t>(p.num_heads), 1, [&](size_t begin, size_t end) {
-    thread_local std::vector<float> scores, kbuf;
-    kbuf.resize(static_cast<size_t>(std::max(hd, hdv)));
+    thread_local std::vector<float> scores;
     for (size_t job = begin; job < end; ++job) {
       const size_t r = job / static_cast<size_t>(p.num_heads);
       const int32_t h = static_cast<int32_t>(job % static_cast<size_t>(p.num_heads));
@@ -245,14 +219,9 @@ void CpuBackend::attention(const AttentionParams& p) {
       float mx = -INFINITY;
       for (int64_t t = 0; t < n; ++t) {
         const int64_t off = kv.k_offset(lo + t, kvh);
-        const float* kr;
-        if (kt == DType::kF32) {
-          kr = static_cast<const float*>(kv.k) + off;
-        } else {
-          for (int32_t i = 0; i < hd; ++i) kbuf[static_cast<size_t>(i)] = kv_load(kv.k, off + i, kt);
-          kr = kbuf.data();
-        }
-        float s = dot(q, kr, hd) * p.scale;
+        float s = (kt == DType::kF32 ? dot(q, static_cast<const float*>(kv.k) + off, hd)
+                                     : dot_f16(static_cast<const uint16_t*>(kv.k) + off, q, hd)) *
+                  p.scale;
         if (p.softcap > 0) s = p.softcap * std::tanh(s / p.softcap);
         scores[static_cast<size_t>(t)] = s;
         mx = std::max(mx, s);
@@ -269,10 +238,9 @@ void CpuBackend::attention(const AttentionParams& p) {
         const float w = scores[static_cast<size_t>(t)] * inv;
         const int64_t off = kv.v_offset(lo + t, kvh);
         if (kt == DType::kF32) {
-          const float* vr = static_cast<const float*>(kv.v) + off;
-          for (int32_t i = 0; i < hdv; ++i) out[i] += w * vr[i];
+          axpy(w, static_cast<const float*>(kv.v) + off, out, hdv);
         } else {
-          for (int32_t i = 0; i < hdv; ++i) out[i] += w * kv_load(kv.v, off + i, kt);
+          axpy_f16(w, static_cast<const uint16_t*>(kv.v) + off, out, hdv);
         }
       }
     }

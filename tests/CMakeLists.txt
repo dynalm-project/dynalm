@@ -83,3 +83,6 @@ engine_add_test(test_scheduler
 
 engine_add_test(test_prefix_cache
   test_prefix_cache.cpp)
+
+engine_add_test(test_kernels
+  test_kernels.cpp)

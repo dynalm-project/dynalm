@@ -3,7 +3,9 @@ configure_file(common/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/common/
 # engine_core: everything except the executable entry points. Tests,
 # benchmarks, CLI and server all link against this one library.
 add_library(engine_core STATIC
+  backends/cpu/avx2/kernels_avx2.cpp
   backends/cpu/cpu_backend.cpp
+  backends/cpu/generic/kernels_generic.cpp
   chat_template/chat_template.cpp
   common/status.cpp
   dtype/dtype.cpp
@@ -49,6 +51,11 @@ target_compile_definitions(engine_core PUBLIC
   ENGINE_HAS_AVX2=$<BOOL:${ENABLE_AVX2}>
   ENGINE_HAS_AVX512=$<BOOL:${ENABLE_AVX512}>
   ENGINE_HAS_AMX=$<BOOL:${ENABLE_AMX}>)
+
+# SIMD tiers: per-file ISA flags only (DD-003).
+if(ENABLE_AVX2)
+  engine_set_isa(AVX2 backends/cpu/avx2/kernels_avx2.cpp)
+endif()
 
 add_executable(engine cli/main.cpp cli/inspect.cpp cli/run.cpp)
 target_link_libraries(engine PRIVATE engine_core)

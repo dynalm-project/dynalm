@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Phase 17 — CPU SIMD optimization
+- `backends/cpu/cpu_kernels.h`: `CpuKernels` table (dot/axpy f32 and f16, per-dtype fused
+  `vec_dot` and `dequant`), generic tier (fused scalar kernels + chunked fallback for every
+  type) and AVX2/FMA/F16C tier (f32, f16, bf16, Q8_0, Q4_0, Q5_0, Q4_K, Q6_K), with runtime
+  selection. Per-file ISA flags only.
+- CpuBackend matmul: fused path for decode, expand-once path for prefill. Attention reads f16
+  KV through F16C dot/axpy.
+- `test_kernels`: every tier × 13 weight types vs the dequantize reference.
+- Batched-vs-sequential test now uses a float-rounding tolerance (DD-031).
+- Decode 1.4–3.4× faster; 4K-context decode 3.4×; batched decode 355 tok/s aggregate.
+
 ### Phase 16 — Radix prefix cache
 - `PrefixCache` is now an interface: `make_hash_prefix_cache` (Phase 15) and
   `make_radix_prefix_cache` (block-edged radix tree with token-granular partial-block reuse
