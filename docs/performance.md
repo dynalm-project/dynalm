@@ -27,3 +27,19 @@ at E-core speed unless the work is partitioned unevenly or restricted to P-cores
 - Planned order (Phase 17/18): AVX2+F16C dot kernels → quantized dot kernels → tiled
   GEMM for prefill → attention over contiguous block runs → operator fusion where
   measured.
+
+## Current profile (Phase 21)
+
+Qwen2.5-0.5B Q4_K_M at 10 threads, served over HTTP (docs/benchmarks.md, Phase 21):
+
+- **Single stream:** about 30 ms per token decode, and roughly 200 tok/s prefill through the
+  server (TTFT 2.7 s at 512 tokens). This is at parity with llama.cpp in the same container.
+- **Under concurrency:** throughput is at parity or up to 25% ahead of llama.cpp, and TTFT is
+  2–3× lower (chunked prefill).
+- **Gap:** per-step decode cost at 4–16 sequences (TPOT 66 vs 51 ms at c=4).
+- **Matmul path selection (DD-036):** batched matmuls expand weight panels from 2 rows
+  (fused dequantize-dot only for m=1). Dequantization is AVX2 for the common formats.
+- **Next levers, in expected-gain order:**
+  - a multi-row fused decode kernel (weights decoded once per batch, no fp32 panel);
+  - GQA-grouped decode attention;
+  - int8 activations with VNNI for prefill (DD-033).

@@ -425,3 +425,89 @@ GQA KV head is read once per query head (3×). Grouped GQA attention is the next
 
 Faster prefill shrinks the per-step stall, so throughput, TTFT and the ITL tail all improve at
 the same time: 4× throughput and 4.7× lower TTFT at 16 requests.
+
+## Phase 21 — serving benchmarks (`engine benchmark`, DD-037)
+
+All rows come from the same closed-loop client (`engine benchmark --url`, streaming
+`/v1/completions`, `ignore_eos`, temperature 0). Every request has a unique prompt of exact
+length, and prompts are never reused across points. Each point runs 2 × concurrency requests
+(at least 4) after one warm-up request. Model: Qwen2.5-0.5B-Instruct Q4_K_M; 10 threads; the
+i7-1255U laptop. Servers run one at a time in the same `engine-dev`-style Docker environment
+(`tools/compare_baselines.sh`); llama.cpp is `ghcr.io/ggml-org/llama.cpp:server` with
+`-t 10 -tb 10 -c 32768 -np 16`. Latencies are in ms. A laptop under sustained load throttles,
+so differences under ~10% are noise.
+
+### Prompt 128, output 128
+
+| target | conc | out tok/s | TTFT p50 | TTFT p99 | ITL p50 | ITL p99 | TPOT p50 | E2E p99 |
+|---|---|---|---|---|---|---|---|---|
+| engine | 1 | **27.3** | **501** | 549 | 30.3 | 87.6 | 31.1 | 5104 |
+| llama.cpp | 1 | 25.5 | 647 | 792 | 28.6 | 109.3 | 30.6 | 5540 |
+| engine | 4 | 51.5 | **1260** | 1840 | 53.0 | 268.0 | 65.7 | 10578 |
+| llama.cpp | 4 | 53.3 | 2808 | 2974 | 46.2 | 125.4 | 51.2 | 9798 |
+| engine | 16 | **77.7** | **1953** | 11589 | 127.2 | 520.6 | 185.7 | 35549 |
+| llama.cpp | 16 | 61.9 | 11512 | 12371 | 150.4 | 388.8 | 163.3 | 33108 |
+
+### Prompt 512, output 128
+
+| target | conc | out tok/s | TTFT p50 | TTFT p99 | ITL p50 | ITL p99 | TPOT p50 | E2E p99 |
+|---|---|---|---|---|---|---|---|---|
+| engine | 1 | 15.1 | **2658** | 3260 | 34.6 | 114.3 | 37.2 | 11405 |
+| llama.cpp | 1 | 15.1 | 3012 | 3446 | 33.4 | 140.7 | 35.7 | 9746 |
+| engine | 4 | **28.6** | **5401** | 10684 | 56.5 | 407.5 | 93.2 | 22815 |
+| llama.cpp | 4 | 24.4 | 12297 | 13922 | 54.0 | 207.0 | 71.7 | 21475 |
+| engine | 16 | **33.3** | **8058** | 50001 | 392.5 | **638.1** | 377.3 | 102124 |
+| llama.cpp | 16 | 27.8 | 24251 | 53155 | 162.9 | 12574.6 | 377.7 | 101120 |
+
+How to read this:
+- **Throughput and TTFT.** Throughput is at parity or better in every cell. TTFT p50 is
+  1.1–3× lower under concurrency, because chunked prefill admits new requests within one
+  step.
+- **Inter-token latency.** llama.cpp has the lower ITL p50, because it decodes without
+  interleaving prefill. It pays for that with multi-second stalls: an ITL p99 of 12.6 s at
+  c=16 / 512, where every running stream waits for a newcomer's whole prompt. We spread the
+  prefill over steps (64-token budget), so each step is slower but no stream stalls (p99
+  638 ms). This is the TTFT ↔ ITL tradeoff from DD-027 and DD-028. TPOT ends up equal at c=16.
+- **Remaining gap.** At c=4, decode TPOT is 66 vs 51 ms (prompt 128). The next kernel steps
+  are a multi-row fused decode kernel and GQA-grouped attention (TODO).
+
+### The regression the first run exposed (DD-036)
+
+The first baseline run (before DD-036, `results/baselines-pre-dd036.jsonl`) had prompts reused
+across points, which flattered both servers' TTFT on later points. It showed us at
+**34.5 vs 64.4 out tok/s at c=4**: batched decode re-read every weight per sequence.
+Expanding weights from 2 rows, plus AVX2 row dequantization, fixed it:
+
+| Q4_K_M, in-process, prompt 128 / output 64 | fused (old m < 4) | expand ≥ 4 | expand ≥ 2 (new) |
+|---|---|---|---|
+| c=2 ITL p50 ms | 47.1–48.3 | 46.4–46.7 | **34.8–37.5** |
+| c=4 ITL p50 ms | 87.1–91.0 | 48.4–49.8 | **42.7–47.0** |
+
+Row dequantization, 4096 elements (`bench_kernels`), in ns:
+
+| type | generic | AVX2 | speedup |
+|---|---|---|---|
+| f16 | 10819 | 348 | 31.1× |
+| q8_0 | 1235 | 667 | 1.9× |
+| q4_0 | 4419 | 1080 | 4.1× |
+| q5_0 | 9043 | 1794 | 5.0× |
+| q4_K | 1594 | 1397 | 1.1× |
+| q6_K | 11178 | 1146 | 9.8× |
+
+### Ollama 0.34.2 (native Windows, same GGUF via `ollama create`; `tools/bench_ollama.sh`)
+
+| conc | prompt | out tok/s | mean output tokens | TTFT p50 | ITL p50 | E2E p99 |
+|---|---|---|---|---|---|---|
+| 1 | 128 | 10.3 | 13.5 | 976 | 25.3 | 1320 |
+| 4 | 128 | 20.5 | 41.8 | 4781 | 25.0 | 8193 |
+| 1 | 512 | 16.7 | 122.5 | 3690 | 28.4 | 7633 |
+| 4 | 512 | 17.0 | 128 | 26271 | 27.1 | 30115 |
+
+These rows are not directly comparable:
+- **Output length.** Ollama ignores `ignore_eos`, so outputs are shorter and vary.
+- **Environment.** It runs natively, outside the Docker VM, with its own thread count.
+- **Parallelism.** It ran with its default `OLLAMA_NUM_PARALLEL`. TTFT growing with
+  concurrency while ITL stays flat indicates requests were served one at a time.
+
+The comparable signal is single-stream ITL: 25–28 ms natively vs our 30–35 ms and
+llama.cpp's 29–33 ms in the container. Some of that difference is likely the VM boundary.

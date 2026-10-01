@@ -52,6 +52,9 @@ CpuBackend::CpuBackend(ThreadPool& pool, CpuIsa isa)
     const long v = std::strtol(kc, nullptr, 10);
     gemm_kc_ = v > 0 ? v / 256 * 256 : 0;
   }
+  if (const char* em = std::getenv("ENGINE_MATMUL_EXPAND_MIN")) {
+    expand_min_rows_ = std::max<long>(1, std::strtol(em, nullptr, 10));
+  }
 }
 
 Result<std::shared_ptr<Storage>> CpuBackend::allocate(size_t bytes) { return Storage::allocate_host(bytes); }
@@ -82,14 +85,13 @@ void CpuBackend::matmul(const TensorView& x, const TensorView& w, const TensorVi
   // Few activation rows (decode): fused dequantize-dot straight from the
   // packed weights. Many rows (prefill): expand each weight row once and
   // reuse it for every activation row.
-  constexpr int64_t kExpandThreshold = 4;
-  const bool expand = wt != DType::kF32 && m >= kExpandThreshold;
+  const bool expand = wt != DType::kF32 && m >= expand_min_rows_;
 
   // Prefill path: panels of kPanel weight rows are expanded to fp32 once and
   // multiplied against all activation rows by the register-blocked kernel.
   constexpr int64_t kPanel = 4;
   const bool x_dense = x.stride(0) == k * static_cast<int64_t>(sizeof(float));
-  const bool f32_panel = wt == DType::kF32 && m >= kExpandThreshold && x_dense;
+  const bool f32_panel = wt == DType::kF32 && m >= expand_min_rows_ && x_dense;
   if ((expand || f32_panel) && x_dense) {
     const size_t panels = static_cast<size_t>((n + kPanel - 1) / kPanel);
     const int64_t y_stride = y.stride(0) / static_cast<int64_t>(sizeof(float));

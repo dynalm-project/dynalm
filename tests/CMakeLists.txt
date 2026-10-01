@@ -99,3 +99,6 @@ if(ENABLE_SERVER)
   target_include_directories(test_server SYSTEM PRIVATE ${ENGINE_HTTPLIB_DIR})
   target_link_libraries(test_server PRIVATE engine_server)
 endif()
+
+engine_add_test(test_bench
+  test_bench.cpp)

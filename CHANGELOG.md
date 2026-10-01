@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Phase 21 — Benchmark framework
+- `bench/loadgen`: closed-loop load generator. Exact-length prompts, unique per request and
+  per point, fixed output lengths, a warm-up request. Reports TTFT/ITL/TPOT/E2E at
+  P50/P90/P95/P99, tokens/s, errors, and peak RSS / CPU use for in-process runs.
+- Targets: in-process engine, or any OpenAI-compatible server over HTTP (`bench/http_target`,
+  streaming SSE with usage).
+- `engine benchmark <model> [--concurrency --prompt --output --requests --url --model-name
+  -t -c --out]`; JSON-lines output.
+- `platform/process_stats`: RSS, peak RSS and CPU seconds (Windows, Linux).
+- API: `ignore_eos` request extension (needed for fixed-length benchmarking).
+- `tools/bench_report.py` (Markdown tables) and `tools/compare_baselines.sh` (engine vs
+  llama.cpp `llama-server`, same container environment).
+- Fix found by the baselines (DD-036): AVX2 row dequantization for Q8_0/Q4_0/Q5_0/Q4_K/Q6_K,
+  and batched matmuls expand weights from 2 rows (was 4). Q4_K_M decode ITL at 4
+  concurrent requests drops from ~89 ms to ~45 ms.
+- `bench_kernels` dequant section; `bench_matmul` m sweep.
+- Tests: percentiles, prompt lengths/uniqueness, run_point accounting, no cross-point prefix reuse.
+
 ### Phase 20 — OpenAI-compatible API
 - `api/json`: strict JSON parser (depth/size limits, surrogate pairs) and serializer.
 - `api/openai`: chat/completions request parsing and validation, response/chunk/usage/error

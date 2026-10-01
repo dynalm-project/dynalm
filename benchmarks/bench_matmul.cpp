@@ -30,11 +30,11 @@ int main() {
 
   std::printf("%8s %6s %5s %12s %10s\n", "weights", "m", "thr", "p50 ms", "GFLOPS");
   for (const Tensor* w : {&*wq, &*wf}) {
-    for (int64_t m : {256, 1}) {
+    for (int64_t m : {1, 2, 4, 8, 16, 32, 64, 256}) {
       auto x = Tensor::empty(DType::kF32, {m, kK});
       auto y = Tensor::empty(DType::kF32, {m, kN});
       for (int64_t i = 0; i < m * kK; ++i) x->data_as<float>()[i] = static_cast<float>(rng() % 2000) / 1000.0f - 1.0f;
-      for (int threads : {1, 2, 4, 10}) {
+      for (int threads : {10}) {
         ThreadPool pool(threads);
         CpuBackend be(pool, select_best_isa(cpu_info().features));
         const auto s = bench::run([&] { be.matmul(*x, *w, nullptr, *y); },

@@ -48,6 +48,10 @@ class CpuBackend final : public Backend {
   ThreadPool& pool_;
   CpuKernels k_;
   int64_t gemm_kc_ = 1024;  // GEMM K-slice width (multiple of 256; 0 = no K-blocking)
+  // Rows at or above which matmul expands weight panels and runs the GEMM
+  // kernel instead of per-row fused dequantize-dot, which re-reads the
+  // weights for every row (DD-036). ENGINE_MATMUL_EXPAND_MIN overrides.
+  int64_t expand_min_rows_ = 2;
   std::vector<float> split_scratch_;  // split-K attention partials (scheduler thread only)
 
   void attend_range(const AttentionParams& p, size_t r, int32_t h, int64_t t0, int64_t t1, float* acc, float& mx_out,

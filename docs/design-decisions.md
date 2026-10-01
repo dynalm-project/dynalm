@@ -526,3 +526,83 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   end-to-end test on an ephemeral port (health/models/metrics, non-streaming and SSE
   streaming equality, JSON errors without collateral damage, 6 concurrent clients, client
   disconnect), plus a manual run with Qwen2.5-0.5B ("What is 7 times 6?" → "42").
+
+## DD-036: Batched matmuls expand weights from two rows up, with AVX2 row dequantization
+
+- **Decision:** `CpuBackend::matmul` uses the fused dequantize-dot kernel only for a single
+  activation row. From two rows up (`expand_min_rows_ = 2`, override
+  `ENGINE_MATMUL_EXPAND_MIN`), it expands 4-row weight panels to fp32 once and runs the
+  register-blocked GEMM. Row dequantization has AVX2 kernels for Q8_0, Q4_0, Q5_0, Q4_K
+  and Q6_K (F16 already had one). They reuse the dot kernels' unpacking but store scaled
+  floats.
+- **Reason:** The first head-to-head run against llama.cpp (DD-037) showed us 1.9× slower
+  at 4 concurrent requests, while matching it at 1. The fused kernel is per row: a decode
+  batch of m sequences re-reads and re-decodes every weight m times, so m=4 cost about 4× a
+  single row (Q4_K_M ITL 87–91 ms vs 27 ms). The expand path reads weights once per batch,
+  but its scalar dequantization had made it slower than fused below m≈8.
+- **Alternatives:** (a) Raise the threshold. That only trades which batch sizes are slow.
+  (b) A multi-row fused kernel that dots each decoded weight block against up to 4
+  activation rows in registers. It avoids the fp32 panel write and is the better long-term
+  decode kernel, so it is listed in TODO. (c) int8 activations with VNNI (DD-033), deferred.
+- **Evidence:**
+  - `bench_kernels` dequant row speedups: Q6_K 9.8×, Q5_0 5.0×, Q4_0 4.1×, Q8_0 1.9×,
+    Q4_K 1.1×.
+  - End-to-end threshold sweep, `engine benchmark` in-process, Qwen2.5-0.5B Q4_K_M,
+    10 threads, prompt 128, output 64. Two alternating repetitions, ITL p50 in ms:
+
+    | rows (c) | fused | expand ≥ 4 | expand ≥ 2 |
+    |---|---|---|---|
+    | 2 | 47.1–48.3 | 46.4–46.7 | 34.8–37.5 |
+    | 4 | 87.1–91.0 | 48.4–49.8 | 42.7–47.0 |
+
+  - On Q8_0 at c=4, expand gives 48.9 vs 68 ms fused, and 75 vs 129 ms at c=8.
+  - `test_kernels` checks every tier's dequant entry against the reference.
+  - The batch tests (DD-031 tolerance) pass with the new threshold.
+- **Tradeoffs:** Expanding writes an fp32 panel per weight panel (L1/L2 resident, 4 rows ×
+  K). At m=2 the GEMM's 4×2 microkernel is half used. Q4_K dequantization gained little,
+  because its generic code was already table-free, so Q4_K small batches gain mostly from
+  reading weights once. Decode at m=1 is unchanged.
+
+## DD-037: Benchmark framework: one closed-loop load generator for every target
+
+- **Decision:** `engine benchmark` drives a closed-loop load generator (`bench/loadgen`).
+  For each point (concurrency × prompt length × output length), C client threads issue
+  requests back to back.
+  - Prompts are generated to an exact token count, with a unique leading text per request,
+    and are never reused across points.
+  - Outputs are fixed length (`ignore_eos`).
+  - Before each point, one uncounted warm-up request runs.
+  - Reported per point: TTFT, inter-token latency (gap between streamed deltas), TPOT and
+    end-to-end latency, as nearest-rank P50/P90/P95/P99 plus the mean. Also output and
+    input tokens/s, error count, and, in-process, peak RSS and CPU utilization.
+  - Targets: the engine in-process, or any OpenAI-compatible server (`--url`, streaming
+    `/v1/completions` with `stream_options.include_usage`). The same client measures this
+    engine's server, llama.cpp's `llama-server` and Ollama.
+  - Results are JSON lines. `tools/bench_report.py` renders them, and
+    `tools/compare_baselines.sh` runs the head-to-head in containers.
+- **Reason:** Spec §21 asks for P50–P99 and baselines against llama.cpp and Ollama.
+  Comparisons are only meaningful when every target sees the identical workload and
+  measurement. Each tool's own benchmark measures different things (for example,
+  llama-bench has no queueing or HTTP).
+  - Fixed output lengths remove the "who stopped first" bias.
+  - Unique prompts per request and per point keep prefix caches (ours and llama.cpp's
+    `cache_prompt`) from turning a throughput test into a cache test. The first framework
+    version reused prompt indices across points, and the second point's TTFT dropped to
+    66 ms on 128-token prompts. A test now guards this.
+- **Alternatives:**
+  - An open-loop (Poisson arrival) generator. It is better for latency-under-load curves,
+    but needs a target rate per system; closed loop at fixed concurrency is what both
+    baselines' docs report. Open loop is listed in TODO.
+  - External tools (vegeta, locust): no per-token streaming timing, and Python is not
+    allowed on hot paths.
+  - Server-reported timings: not comparable across implementations.
+- **Tradeoffs:**
+  - ITL is measured between streamed text deltas. A delta held back for UTF-8 or a stop
+    string merges two tokens into one gap; TPOT (e2e − TTFT)/(n − 1) is reported alongside.
+  - HTTP targets report no server RSS or CPU, because the client runs in its own container.
+  - Ollama ignores `ignore_eos`, so its rows report the mean completion length actually
+    produced.
+  - Containers on a laptop share one thermally limited CPU, and servers run one at a time.
+- **Evidence:** `test_bench`: percentile ranks, exact prompt lengths, unique prefixes,
+  fixed output lengths through the scheduler, no cross-point prefix reuse. Results are in
+  `docs/benchmarks.md` (Phase 21).

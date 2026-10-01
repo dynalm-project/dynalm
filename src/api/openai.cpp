@@ -41,6 +41,10 @@ Status read_common(const json::Value& body, int32_t default_max_tokens, Completi
     }
   }
 
+  // llama.cpp-compatible extension used by benchmarks: keep generating
+  // through end-of-generation tokens up to max_tokens.
+  if (const json::Value* ie = body.find("ignore_eos"); ie && ie->is_bool()) r.params.stop_at_eog = !ie->as_bool();
+
   if (const json::Value* s = body.find("stream"); s && !s->is_null()) {
     if (!s->is_bool()) return bad("'stream' must be a boolean");
     r.stream = s->as_bool();

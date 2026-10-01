@@ -27,7 +27,7 @@ void print_usage() {
       "  inspect <model>      show model metadata, config and memory estimate\n"
       "  run <model> -p TEXT  generate from a prompt (engine run for options)\n"
       "  serve <model>        OpenAI-compatible HTTP server (engine serve for options)\n"
-      "  benchmark <model>    run the benchmark suite        (phase 21)\n"
+      "  benchmark <model>    load test (in-process or --url server), P50-P99 latency\n"
       "  list | stop | unload model management               (phase 22)\n");
 }
 
@@ -146,7 +146,7 @@ int main(int argc, char** argv) {
     return 2;
   }
 #endif
-  if (cmd == "benchmark") return not_implemented(cmd, 21);
+  if (cmd == "benchmark") return engine::cli::cmd_benchmark(std::span(args).subspan(i + 1));
   if (cmd == "list" || cmd == "stop" || cmd == "unload") return not_implemented(cmd, 22);
   if (cmd == "help") {
     print_usage();

@@ -6,6 +6,7 @@ add_library(engine_core STATIC
   api/json.cpp
   api/openai.cpp
   backends/cpu/avx2/kernels_avx2.cpp
+  bench/loadgen.cpp
   backends/cpu/cpu_backend.cpp
   backends/cpu/generic/kernels_generic.cpp
   chat_template/chat_template.cpp
@@ -33,6 +34,7 @@ add_library(engine_core STATIC
   prefix_cache/hash_prefix_cache.cpp
   prefix_cache/radix_prefix_cache.cpp
   platform/isa.cpp
+  platform/process_stats.cpp
   quant/dequant.cpp
   quant/quant_formats.cpp
   runtime/engine.cpp
@@ -62,7 +64,7 @@ if(ENABLE_AVX2)
   engine_set_isa(AVX2 backends/cpu/avx2/kernels_avx2.cpp)
 endif()
 
-add_executable(engine cli/main.cpp cli/inspect.cpp cli/run.cpp)
+add_executable(engine cli/main.cpp cli/benchmark.cpp cli/inspect.cpp cli/run.cpp)
 target_link_libraries(engine PRIVATE engine_core)
 
 # HTTP server (cpp-httplib: pinned single header, verified by SHA256).
@@ -77,7 +79,7 @@ if(ENABLE_SERVER)
       message(FATAL_ERROR "failed to download cpp-httplib: ${_dl}")
     endif()
   endif()
-  add_library(engine_server STATIC server/server.cpp)
+  add_library(engine_server STATIC server/server.cpp bench/http_target.cpp)
   # SYSTEM: third-party header warnings must not fail our -Wall build.
   target_include_directories(engine_server SYSTEM PRIVATE ${_httplib_dir})
   target_link_libraries(engine_server PUBLIC engine_core)

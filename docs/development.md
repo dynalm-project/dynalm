@@ -88,3 +88,21 @@ curl http://127.0.0.1:8000/metrics
 Endpoints: `GET /health`, `GET /v1/models`, `GET /metrics` (Prometheus text),
 `POST /v1/chat/completions`, `POST /v1/completions` (both support `stream`).
 Sampling parameters are accepted, but decoding is greedy until Phase 26.
+The `"ignore_eos": true` request extension (also accepted by llama.cpp) disables stopping on
+end-of-generation tokens. It is used for fixed-length benchmarking.
+
+## Benchmarking
+
+```sh
+# In-process: concurrency x prompt x output sweep, JSON lines appended to --out.
+engine benchmark models/qwen2.5-0.5b-instruct-q4_k_m.gguf -t 10 \
+  --concurrency 1,4,16 --prompt 128,512 --output 128 --out results/run.jsonl
+# Any OpenAI-compatible server. The model file supplies the tokenizer used to size prompts.
+engine benchmark models/qwen2.5-0.5b-instruct-q4_k_m.gguf --url http://127.0.0.1:8000
+# Head to head with llama.cpp in identical containers, then render tables.
+bash tools/compare_baselines.sh qwen2.5-0.5b-instruct-q4_k_m.gguf 10 results/baselines.jsonl
+PYTHONUTF8=1 python tools/bench_report.py results/baselines.jsonl
+```
+
+Tuning knobs for experiments (not for production): `ENGINE_GEMM_KC` (GEMM K-slice) and
+`ENGINE_MATMUL_EXPAND_MIN` (rows from which matmul expands weights, DD-036).

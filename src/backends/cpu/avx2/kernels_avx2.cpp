@@ -288,6 +288,100 @@ float vec_dot_q6_K(const void* w, const float* x, int64_t n) {
   return hsum(acc);
 }
 
+// --- quantized dequantization (expand path for batched matmuls) ----------------
+// Same SIMD unpacking as the dot kernels, but stores scale * q (+ offset).
+
+// out[0..n) = d * q[0..n) + mn, n a multiple of 8.
+inline void store_scaled(const int8_t* q, int n, float d, float mn, float* out) {
+  const __m256 vd = _mm256_set1_ps(d), vm = _mm256_set1_ps(mn);
+  for (int i = 0; i < n; i += 8) _mm256_storeu_ps(out + i, _mm256_fmadd_ps(load_i8x8(q + i), vd, vm));
+}
+
+void dequant_q8_0(const void* w, float* out, int64_t n) {
+  const auto* b = static_cast<const BlockQ8_0*>(w);
+  for (int64_t i = 0; i < n / kQK; ++i, out += kQK) store_scaled(b[i].qs, kQK, fp16_to_fp32(b[i].d), 0.0f, out);
+}
+
+void dequant_q4_0(const void* w, float* out, int64_t n) {
+  const auto* b = static_cast<const BlockQ4_0*>(w);
+  const __m128i low4 = _mm_set1_epi8(0x0F), eight = _mm_set1_epi8(8);
+  alignas(32) int8_t q[32];
+  for (int64_t i = 0; i < n / kQK; ++i, out += kQK) {
+    const __m128i bytes = _mm_loadu_si128(reinterpret_cast<const __m128i*>(b[i].qs));
+    _mm_store_si128(reinterpret_cast<__m128i*>(q), _mm_sub_epi8(_mm_and_si128(bytes, low4), eight));
+    _mm_store_si128(reinterpret_cast<__m128i*>(q + 16),
+                    _mm_sub_epi8(_mm_and_si128(_mm_srli_epi16(bytes, 4), low4), eight));
+    store_scaled(q, kQK, fp16_to_fp32(b[i].d), 0.0f, out);
+  }
+}
+
+void dequant_q5_0(const void* w, float* out, int64_t n) {
+  const auto* b = static_cast<const BlockQ5_0*>(w);
+  const __m128i low4 = _mm_set1_epi8(0x0F);
+  alignas(32) int8_t q[32];
+  for (int64_t i = 0; i < n / kQK; ++i, out += kQK) {
+    uint32_t qh;
+    std::memcpy(&qh, b[i].qh, 4);
+    const __m128i bytes = _mm_loadu_si128(reinterpret_cast<const __m128i*>(b[i].qs));
+    __m256i v = _mm256_set_m128i(_mm_and_si128(_mm_srli_epi16(bytes, 4), low4), _mm_and_si128(bytes, low4));
+    v = _mm256_or_si256(v, _mm256_and_si256(bytes_from_bits_32(qh), _mm256_set1_epi8(0x10)));
+    _mm256_store_si256(reinterpret_cast<__m256i*>(q), _mm256_sub_epi8(v, _mm256_set1_epi8(16)));
+    store_scaled(q, kQK, fp16_to_fp32(b[i].d), 0.0f, out);
+  }
+}
+
+void dequant_q4_K(const void* w, float* out, int64_t n) {
+  const auto* b = static_cast<const BlockQ4_K*>(w);
+  const __m256i low4 = _mm256_set1_epi8(0x0F);
+  alignas(32) int8_t lo[32], hi[32];
+  for (int64_t i = 0; i < n / kQK_K; ++i) {
+    const float d = fp16_to_fp32(b[i].d), dmin = fp16_to_fp32(b[i].dmin);
+    const uint8_t* qs = b[i].qs;
+    for (int is = 0; is < 8; is += 2, qs += 32, out += 64) {
+      const __m256i bytes = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(qs));
+      _mm256_store_si256(reinterpret_cast<__m256i*>(lo), _mm256_and_si256(bytes, low4));
+      _mm256_store_si256(reinterpret_cast<__m256i*>(hi), _mm256_and_si256(_mm256_srli_epi16(bytes, 4), low4));
+      uint8_t sc, m;
+      get_scale_min_k4(is, b[i].scales, sc, m);
+      store_scaled(lo, 32, d * sc, -dmin * m, out);
+      get_scale_min_k4(is + 1, b[i].scales, sc, m);
+      store_scaled(hi, 32, d * sc, -dmin * m, out + 32);
+    }
+  }
+}
+
+void dequant_q6_K(const void* w, float* out, int64_t n) {
+  const auto* b = static_cast<const BlockQ6_K*>(w);
+  const __m256i low4 = _mm256_set1_epi8(0x0F), low2 = _mm256_set1_epi8(0x03), k32 = _mm256_set1_epi8(32);
+  alignas(32) int8_t q[4][32];
+  for (int64_t i = 0; i < n / kQK_K; ++i) {
+    const float d = fp16_to_fp32(b[i].d);
+    const uint8_t* ql = b[i].ql;
+    const uint8_t* qh = b[i].qh;
+    const int8_t* sc = b[i].scales;
+    for (int part = 0; part < 2; ++part, ql += 64, qh += 32, sc += 8, out += 128) {
+      const __m256i l0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ql));
+      const __m256i l1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ql + 32));
+      const __m256i h = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(qh));
+      auto hbits = [&](int shift) {
+        return _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(h, shift), low2), 4);
+      };
+      _mm256_store_si256(reinterpret_cast<__m256i*>(q[0]),
+                         _mm256_sub_epi8(_mm256_or_si256(_mm256_and_si256(l0, low4), hbits(0)), k32));
+      _mm256_store_si256(reinterpret_cast<__m256i*>(q[1]),
+                         _mm256_sub_epi8(_mm256_or_si256(_mm256_and_si256(l1, low4), hbits(2)), k32));
+      _mm256_store_si256(reinterpret_cast<__m256i*>(q[2]),
+                         _mm256_sub_epi8(_mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(l0, 4), low4), hbits(4)), k32));
+      _mm256_store_si256(reinterpret_cast<__m256i*>(q[3]),
+                         _mm256_sub_epi8(_mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(l1, 4), low4), hbits(6)), k32));
+      for (int g = 0; g < 4; ++g) {
+        store_scaled(q[g], 16, d * sc[2 * g], 0.0f, out + 32 * g);
+        store_scaled(q[g] + 16, 16, d * sc[2 * g + 1], 0.0f, out + 32 * g + 16);
+      }
+    }
+  }
+}
+
 }  // namespace
 
 bool register_avx2_kernels(CpuKernels& k) {
@@ -306,6 +400,11 @@ bool register_avx2_kernels(CpuKernels& k) {
   k.vec_dot[static_cast<size_t>(DType::kQ4_K)] = vec_dot_q4_K;
   k.vec_dot[static_cast<size_t>(DType::kQ6_K)] = vec_dot_q6_K;
   k.dequant[static_cast<size_t>(DType::kF16)] = dequant_f16;
+  k.dequant[static_cast<size_t>(DType::kQ8_0)] = dequant_q8_0;
+  k.dequant[static_cast<size_t>(DType::kQ4_0)] = dequant_q4_0;
+  k.dequant[static_cast<size_t>(DType::kQ5_0)] = dequant_q5_0;
+  k.dequant[static_cast<size_t>(DType::kQ4_K)] = dequant_q4_K;
+  k.dequant[static_cast<size_t>(DType::kQ6_K)] = dequant_q6_K;
   return true;
 }
 
