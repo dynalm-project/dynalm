@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Phase 28 — GPU backend architecture (no GPU code)
+- Backend memory contract (DD-045): `upload`, `download`, `host_accessible`, all scratch and
+  KV through `allocate`, KV copy-on-write through `copy`. New data-movement ops `fill`,
+  `gather_rows` and `scatter_add_rows` replace the Transformer's direct memory access (logits
+  gather, MoE permutation and combine); the CPU path stays zero-copy.
+- `DeviceType`: CUDA/HIP/Metal/Vulkan/Simulated. `backends/backend_registry`: `BackendKind`,
+  `create_backend` (CPU built; GPU kinds give a clear "not built"), `EngineOptions::backend`,
+  `--backend` on `run`/`serve`.
+- `docs/gpu-backend.md`: the interface contract and a CUDA implementation sketch, with spec
+  §47 extension points mapped to code.
+- `test_device_backend`: a memory-guarded (`mprotect`) simulated device backend runs every
+  architecture, the scheduler with prefix-cache COW, and speculative decoding with results
+  bit-identical to CPU; a death test shows any host access faults.
+
 ### Phase 27 — Speculative decoding
 - `SeqBatch::logits_last`: one forward pass returns logits for the last N tokens of a sequence.
 - `Sampler::sample_speculative`: verification with the target's own sampling pipeline (greedy:

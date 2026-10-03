@@ -95,7 +95,7 @@ Result<std::unique_ptr<Engine>> Engine::create(EngineOptions opts) {
   const ModelConfig& c = e->model_->config;
   const int threads = opts.threads > 0 ? opts.threads : cpu_info().physical_cores;
   e->pool_ = std::make_unique<ThreadPool>(threads);
-  e->backend_ = std::make_unique<CpuBackend>(*e->pool_, select_best_isa(cpu_info().features));
+  ENGINE_ASSIGN_OR_RETURN(e->backend_, create_backend(opts.backend, *e->pool_));
   const int64_t kv_tokens = opts.kv_tokens > 0 ? opts.kv_tokens
                                                : auto_kv_tokens(c, opts.kv_dtype, e->model_->weight_bytes,
                                                                 memory_info().available_bytes);

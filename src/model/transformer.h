@@ -105,6 +105,9 @@ class Transformer {
   Status init(const TensorRegistry& weights, int32_t max_batch);
   // fp32 copy of a small vector weight (norms, biases), owned by the model.
   Result<TensorView> f32_vector(const Tensor& t);
+  // Weights and scratch in backend memory (DD-045).
+  Result<TensorView> device_weight(const Tensor& host);
+  Result<Tensor> device_scratch(int64_t rows, int64_t cols);
   void norm(const TensorView& x, const TensorView& w, const TensorView& b, const TensorView& y);
 
   ModelConfig config_;
@@ -123,6 +126,9 @@ class Transformer {
   std::vector<std::vector<std::pair<int32_t, float>>> expert_rows_;  // per expert: (row, weight)
   std::vector<std::pair<float, int32_t>> route_scratch_;
   std::vector<Backend::MatmulJob> up_jobs_, down_jobs_;
+  std::vector<int32_t> gather_idx_;  // host-side row indices for gather/scatter ops
+  std::vector<float> scatter_w_, router_host_;
+  Tensor logits_dev_;                // device logits rows (non-host-accessible backends)
   // Per-call batch metadata (reused, capacity max_batch).
   std::vector<TokenId> batch_tokens_;
   std::vector<int32_t> batch_pos_, batch_seq_, logit_rows_;

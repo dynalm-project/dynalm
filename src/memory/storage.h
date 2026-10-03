@@ -15,7 +15,11 @@
 
 namespace engine {
 
-enum class DeviceType : uint8_t { kCpu = 0 };  // GPU device types: future phases
+// Where a Storage lives. Only kCpu is implemented; GPU types are reserved so
+// the interfaces carry them from day one (DD-045). kSimulated is host memory
+// that only its backend may touch (tests prove the runtime never dereferences
+// device memory directly).
+enum class DeviceType : uint8_t { kCpu = 0, kCuda, kHip, kMetal, kVulkan, kSimulated };
 
 struct Device {
   DeviceType type = DeviceType::kCpu;

@@ -6,6 +6,9 @@
 #include <thread>
 
 #include "loader/model_loader.h"
+#include "backends/cpu/cpu_backend.h"
+#include "platform/cpu_info.h"
+#include "platform/isa.h"
 #include "runtime/engine.h"
 #include "runtime/generator.h"
 #include "runtime/text_stream.h"

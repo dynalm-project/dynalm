@@ -65,6 +65,9 @@ handled inside the loaders. Adapters and the runtime see one IR (DD-040).
 - The choice is made once. Kernels never re-check features per call.
 - Future GPU backends add a device dimension beside this. They do not change the
   scheduler, model, or KV interfaces.
+- Device memory is owned and touched only by the backend (`upload`, `allocate`, `copy`,
+  `download`, plus gather/scatter/fill ops). A memory-guarded test backend enforces this
+  for every model and runtime path (DD-045; contract in `docs/gpu-backend.md`).
 
 ## Forward pass (✅)
 

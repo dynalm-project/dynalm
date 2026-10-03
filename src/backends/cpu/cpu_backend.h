@@ -31,6 +31,12 @@ class CpuBackend final : public Backend {
   void embedding(const TensorView& table, std::span<const int32_t> ids, const TensorView& out) override;
   void matmul(const TensorView& x, const TensorView& w, const TensorView* bias, const TensorView& y) override;
   void matmul_many(std::span<const MatmulJob> jobs) override;
+  Result<Tensor> upload(const Tensor& host) override { return host; }  // zero-copy
+  void download(const TensorView& src, std::span<float> dst) override;
+  void fill(const TensorView& x, float value) override;
+  void gather_rows(const TensorView& src, std::span<const int32_t> rows, const TensorView& dst) override;
+  void scatter_add_rows(const TensorView& src, std::span<const int32_t> rows, std::span<const float> weights,
+                        const TensorView& dst) override;
   void rms_norm(const TensorView& x, const TensorView& weight, float eps, const TensorView& y) override;
   void layer_norm(const TensorView& x, const TensorView& weight, const TensorView* bias, float eps,
                   const TensorView& y) override;

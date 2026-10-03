@@ -46,10 +46,21 @@ class Backend {
   virtual std::string_view name() const = 0;
   virtual Device device() const = 0;
 
-  // --- memory ---
+  // --- memory (DD-045) ---
+  // Device memory; the runtime never dereferences it directly unless
+  // host_accessible().
   virtual Result<std::shared_ptr<Storage>> allocate(size_t bytes) = 0;
+  // Device-to-device copy within this backend's memory.
   virtual void copy(void* dst, const void* src, size_t bytes) = 0;
   virtual void synchronize() = 0;
+  // True if device memory is ordinary host memory (CPU): the runtime may then
+  // skip uploads/downloads (zero-copy weights, logits written in place).
+  virtual bool host_accessible() const { return device().type == DeviceType::kCpu; }
+  // A device copy of a host tensor (weights, converted vectors). CPU returns
+  // the tensor itself (zero-copy, e.g. straight from the mmapped file).
+  virtual Result<Tensor> upload(const Tensor& host) = 0;
+  // Copies fp32 rows of a device tensor [rows, cols] to dense host memory.
+  virtual void download(const TensorView& src, std::span<float> dst) = 0;
 
   // Whether matmul/embedding accept this weight dtype.
   virtual bool supports_weight_type(DType type) const = 0;
@@ -92,6 +103,13 @@ class Backend {
   virtual void scale(const TensorView& x, float s) = 0;
   // x = cap * tanh(x / cap)
   virtual void softcap(const TensorView& x, float cap) = 0;
+  // x[:] = value
+  virtual void fill(const TensorView& x, float value) = 0;
+  // dst[i, :] = src[rows[i], :]
+  virtual void gather_rows(const TensorView& src, std::span<const int32_t> rows, const TensorView& dst) = 0;
+  // dst[rows[i], :] += weights[i] * src[i, :]   (rows may repeat; applied in order)
+  virtual void scatter_add_rows(const TensorView& src, std::span<const int32_t> rows, std::span<const float> weights,
+                                const TensorView& dst) = 0;
 };
 
 }  // namespace engine

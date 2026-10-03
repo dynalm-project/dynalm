@@ -25,7 +25,7 @@
 #include <thread>
 #include <vector>
 
-#include "backends/cpu/cpu_backend.h"
+#include "backends/backend_registry.h"
 #include "chat_template/chat_template.h"
 #include "common/status.h"
 #include "kv_cache/kv_cache.h"
@@ -42,6 +42,7 @@ struct EngineOptions {
   std::string model_path;
   int threads = 0;              // 0 = physical cores
   int64_t kv_tokens = 0;        // KV capacity in tokens; 0 = auto (auto_kv_tokens)
+  BackendKind backend = BackendKind::kCpu;  // DD-045: only CPU is built
   DType kv_dtype = DType::kF16;
   int32_t max_batch_tokens = 256;
   SchedulerConfig scheduler;
@@ -154,7 +155,7 @@ class Engine {
 
   std::unique_ptr<LoadedModel> model_;
   std::unique_ptr<ThreadPool> pool_;
-  std::unique_ptr<CpuBackend> backend_;
+  std::unique_ptr<Backend> backend_;
   std::unique_ptr<KvBlockPool> kv_;
   std::unique_ptr<Transformer> transformer_;
   std::unique_ptr<Scheduler> scheduler_;

@@ -37,7 +37,7 @@ int cmd_version() {
   std::printf("build:    %s, %s %s\n", ENGINE_BUILD_TYPE, ENGINE_COMPILER_ID, ENGINE_COMPILER_VERSION);
   std::printf("kernels:  generic%s%s%s\n", ENGINE_HAS_AVX2 ? " avx2" : "",
               ENGINE_HAS_AVX512 ? " avx512" : "", ENGINE_HAS_AMX ? " amx" : "");
-  std::printf("backends: cpu\n");
+  std::printf("backends: cpu (built); cuda, hip, metal, vulkan: designed, not built (DD-045)\n");
   return 0;
 }
 

@@ -9,6 +9,7 @@
 #include <string>
 #include <thread>
 
+#include "backends/backend_registry.h"
 #include "cli/commands.h"
 #include "config/config.h"
 #include "logging/log.h"
@@ -26,7 +27,7 @@ extern "C" void on_signal(int) { g_signals.fetch_add(1); }
 constexpr OptionSpec kServeOptions[] = {
     {"model"},        {"host"},        {"port"},           {"model-id"},         {"threads"},
     {"ctx"},          {"batch"},       {"kv"},             {"http-threads"},     {"max-tokens"},
-    {"max-active"},   {"request-timeout"}, {"temperature"}, {"shutdown-timeout"}, {"disable-admin", false},
+    {"max-active"},   {"request-timeout"}, {"temperature"}, {"backend"}, {"shutdown-timeout"}, {"disable-admin", false},
 };
 
 void usage() {
@@ -40,6 +41,7 @@ void usage() {
                "  -c, --ctx N|auto        KV cache capacity in tokens (auto: from free RAM)\n"
                "  --batch N|auto          max tokens per forward pass (auto: 256)\n"
                "  --kv f16|f32            KV cache dtype (default f16)\n"
+               "  --backend cpu           compute backend (GPU backends are not built yet)\n"
                "  --max-active N          concurrent requests before 503 (default 64)\n"
                "  --http-threads N|auto   HTTP workers (auto: max-active + 8)\n"
                "  --max-tokens N          default max_tokens per request (default 1024)\n"
@@ -99,7 +101,11 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
     else if (a == "--request-timeout") ok = parse_int(value(), request_timeout_s);
     else if (a == "--shutdown-timeout") ok = parse_int(value(), shutdown_timeout_s);
     else if (a == "--disable-admin") so.enable_admin = false;
-    else if (a == "--kv") {
+    else if (a == "--backend") {
+      auto k = parse_backend_kind(value());
+      ok = k.ok();
+      if (ok) eo.backend = *k;
+    } else if (a == "--kv") {
       const std::string_view v = value();
       ok = v == "f16" || v == "f32";
       eo.kv_dtype = v == "f32" ? DType::kF32 : DType::kF16;

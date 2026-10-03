@@ -47,7 +47,8 @@ class KvBlockPool {
     return refs_[static_cast<size_t>(block)].load(std::memory_order_acquire);
   }
 
-  // Copies K and V of every layer from src to dst.
+  // Copies K and V of every layer from src to dst (through the backend:
+  // KV may live in device memory, DD-045).
   void copy_block(int32_t dst, int32_t src);
 
   KvLayerView layer_view(int32_t layer, std::span<const int32_t> block_table) const {
@@ -59,6 +60,7 @@ class KvBlockPool {
   KvBlockPool() = default;
 
   KvGeometry geom_;
+  Backend* backend_ = nullptr;
   std::vector<std::shared_ptr<Storage>> k_, v_;
   std::unique_ptr<std::atomic<int32_t>[]> refs_;
   mutable std::mutex free_mu_;

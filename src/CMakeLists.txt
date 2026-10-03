@@ -7,6 +7,7 @@ add_library(engine_core STATIC
   api/openai.cpp
   backends/cpu/avx2/kernels_avx2.cpp
   bench/loadgen.cpp
+  backends/backend_registry.cpp
   backends/cpu/cpu_backend.cpp
   backends/cpu/generic/kernels_generic.cpp
   chat_template/chat_template.cpp

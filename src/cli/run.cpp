@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <string>
 
+#include "backends/backend_registry.h"
 #include "cli/commands.h"
 #include "common/timer.h"
 #include "logging/log.h"
@@ -34,6 +35,7 @@ void usage() {
                "  -c, --ctx N           KV cache capacity in tokens (default 4096)\n"
                "  --batch N             max tokens per forward pass (default 256)\n"
                "  --kv f16|f32          KV cache dtype (default f16)\n"
+               "  --backend cpu         compute backend (GPU backends are not built yet)\n"
                "  --no-stream           print only the final text\n"
                "sampling (default: greedy):\n"
                "  --temp T              temperature (0 = greedy)\n"
@@ -201,7 +203,11 @@ int cmd_run(std::span<const std::string_view> args) {
       params.sampling.seed = static_cast<uint64_t>(seed);
       params.sampling.has_seed = true;
     }
-    else if (a == "--kv") {
+    else if (a == "--backend") {
+      auto k = parse_backend_kind(value());
+      ok = k.ok();
+      if (ok) opts.backend = *k;
+    } else if (a == "--kv") {
       const std::string_view v = value();
       ok = v == "f16" || v == "f32";
       opts.kv_dtype = v == "f32" ? DType::kF32 : DType::kF16;

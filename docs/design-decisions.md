@@ -1009,3 +1009,54 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   - mismatched draft vocabularies are rejected.
 
   `bench_speculative` results are in docs/benchmarks.md.
+
+## DD-045: GPU-ready backend boundary, proven with a memory-guarded test backend
+
+- **Decision:** Phase 28 makes the backend the only party that touches tensor memory, and
+  adds what device backends need. No GPU code is written (spec: "Do not implement CUDA").
+  - **Memory ops:**
+    - `upload` places weights (zero-copy on CPU);
+    - `allocate` provides all scratch and KV cache;
+    - `copy` does KV copy-on-write (it was a raw `memcpy`);
+    - `download` is the explicit device→host point (logits, MoE router logits, the
+      shared-expert gate);
+    - `host_accessible()` lets the CPU skip both upload and download, so the CPU path does
+      not pay for the abstraction.
+  - **Data-movement ops:** `fill`, `gather_rows` and `scatter_add_rows` replace the
+    Transformer's direct `memset`/`memcpy` (logits-row gather, MoE token permutation and
+    weighted combine).
+  - **Kinds:** `DeviceType` and `BackendKind` carry CUDA/HIP/Metal/Vulkan.
+    `create_backend(kind)` builds CPU and reports the others as not built. `EngineOptions`
+    and `--backend` select the kind.
+  - **Guide:** `docs/gpu-backend.md` is the implementation guide.
+- **Reason:** Spec §45: a backend interface with allocate/free/memcpy/gemm/attention/
+  rmsnorm/rope/synchronize, implemented by CpuBackend and later by CUDABackend. Spec §46:
+  no CUDA-specific assumptions in the model or scheduler. Such a boundary is only real if
+  something checks it. The guard works like this:
+  - `GuardedBackend` (tests) allocates pages with `mprotect(PROT_NONE)` and unprotects them
+    only inside its own ops.
+  - Any direct host access by the runtime faults.
+  - A death test proves the guard is armed.
+- **Alternatives:**
+  - Code review only: misses the next `memcpy` someone adds.
+  - Implementing a real device backend now: excluded by the spec.
+  - A wrapper that copies every tensor to "device" per op: proves nothing about access
+    discipline.
+- **Tradeoffs:**
+  - Routing (MoE top-k) and sampling stay host-side. That costs one small download per layer
+    or step on a GPU; fused device ops can replace them behind the same interfaces later.
+  - Small per-step metadata (ids, positions, block tables) is passed as host spans, as
+    launch arguments.
+  - The CPU path is unchanged in cost: Granite-MoE decode 29.1 → 27.8 ms/token (noise), Qwen
+    prefill unchanged.
+- **Evidence:** `test_device_backend`:
+  - registry behaviour (CPU built; GPU kinds give clear kUnsupported; unknown names
+    rejected);
+  - the guard faults on host access (death test);
+  - all 11 tiny architectures (7 dense, 4 MoE) generate identical tokens and bit-identical
+    logits on the guarded backend vs CPU;
+  - continuous batching with shared prefixes (prefix cache, partial-block copy-on-write) and
+    speculative decoding (multi-row logits, KV rollback) run on the guarded backend with
+    results identical to CPU.
+
+  352 tests pass.

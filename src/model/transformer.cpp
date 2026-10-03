@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <numeric>
 #include <string>
 
 #include "common/timer.h"
@@ -44,13 +45,35 @@ Result<std::unique_ptr<Transformer>> Transformer::create(const ModelConfig& conf
 }
 
 Result<TensorView> Transformer::f32_vector(const Tensor& t) {
-  if (t.dtype() == DType::kF32) return t.view();
-  ENGINE_ASSIGN_OR_RETURN(Tensor f, Tensor::empty(DType::kF32, {t.numel()}));
-  if (!dequantize_row(t.dtype(), t.data(), f.data_as<float>(), t.numel())) {
-    return Unsupported("cannot convert " + std::string(dtype_name(t.dtype())) + " vector to f32");
+  Tensor f = t;
+  if (t.dtype() != DType::kF32) {
+    ENGINE_ASSIGN_OR_RETURN(f, Tensor::empty(DType::kF32, {t.numel()}));
+    if (!dequantize_row(t.dtype(), t.data(), f.data_as<float>(), t.numel())) {
+      return Unsupported("cannot convert " + std::string(dtype_name(t.dtype())) + " vector to f32");
+    }
   }
-  owned_.push_back(f);
-  return f.view();
+  return device_weight(f);
+}
+
+// A weight in backend memory: zero-copy on host-accessible backends, an
+// upload otherwise (DD-045). The Transformer keeps the device copy alive.
+Result<TensorView> Transformer::device_weight(const Tensor& host) {
+  if (backend_.host_accessible()) {
+    owned_.push_back(host);
+    return host.view();
+  }
+  ENGINE_ASSIGN_OR_RETURN(Tensor dev, backend_.upload(host));
+  owned_.push_back(dev);
+  return dev.view();
+}
+
+// Uninitialized fp32 scratch [rows, cols] in backend memory.
+Result<Tensor> Transformer::device_scratch(int64_t rows, int64_t cols) {
+  ENGINE_ASSIGN_OR_RETURN(TensorLayout layout, TensorLayout::contiguous(DType::kF32, {rows, cols}));
+  ENGINE_ASSIGN_OR_RETURN(auto storage, backend_.allocate(static_cast<size_t>(layout.span_bytes())));
+  ENGINE_ASSIGN_OR_RETURN(Tensor t, Tensor::from_storage(storage, TensorView(storage->data(), layout, backend_.device())));
+  backend_.fill(t.view(), 0.0f);
+  return t;
 }
 
 Status Transformer::init(const TensorRegistry& w, int32_t max_batch) {
@@ -64,7 +87,7 @@ Status Transformer::init(const TensorRegistry& w, int32_t max_batch) {
       return Unsupported("backend " + std::string(backend_.name()) + " cannot run " +
                          std::string(dtype_name(t->dtype())) + " weight " + std::string(tensor_role_name(role)));
     }
-    out = t->view();
+    ENGINE_ASSIGN_OR_RETURN(out, device_weight(*t));
     return Status::Ok();
   };
   auto vec = [&](TensorRole role, int layer, TensorView& out) -> Status {
@@ -149,7 +172,7 @@ Status Transformer::init(const TensorRegistry& w, int32_t max_batch) {
   const int64_t v_dim = static_cast<int64_t>(c.num_kv_heads) * c.head_dim_v;
   const int64_t o_dim = static_cast<int64_t>(c.num_heads) * c.head_dim_v;
   auto scratch = [&](int64_t cols, Tensor& t) -> Status {
-    ENGINE_ASSIGN_OR_RETURN(t, Tensor::zeros(DType::kF32, {max_batch, cols}));
+    ENGINE_ASSIGN_OR_RETURN(t, device_scratch(max_batch, cols));
     return Status::Ok();
   };
   ENGINE_RETURN_IF_ERROR(scratch(c.hidden_size, x_));
@@ -164,7 +187,7 @@ Status Transformer::init(const TensorRegistry& w, int32_t max_batch) {
     // Packed routed rows: up to max_batch * experts_per_token (>= max_batch for the shared expert).
     const int64_t packed = static_cast<int64_t>(max_batch) * std::max(1, c.moe.experts_per_token);
     auto packed_scratch = [&](int64_t cols, Tensor& t) -> Status {
-      ENGINE_ASSIGN_OR_RETURN(t, Tensor::zeros(DType::kF32, {packed, cols}));
+      ENGINE_ASSIGN_OR_RETURN(t, device_scratch(packed, cols));
       return Status::Ok();
     };
     ENGINE_RETURN_IF_ERROR(scratch(c.moe.num_experts, router_));
@@ -182,12 +205,12 @@ Status Transformer::init(const TensorRegistry& w, int32_t max_batch) {
   return Status::Ok();
 }
 
-// Routed mixture of experts (CPU-side routing; a device backend would add a
-// fused route/gather/scatter op behind the same Layer data, DD-042).
+// Routed mixture of experts (DD-042). Routing decisions are host-side; all
+// tensor data moves through backend ops (gather/scatter/matmul), so device
+// backends run it unchanged (DD-045).
 void Transformer::moe_mlp(const Layer& L, const TensorView& xn, const TensorView& out, int64_t m) {
   const ModelConfig& c = config_;
   const int32_t ne = c.moe.num_experts, k = c.moe.experts_per_token;
-  const int64_t d = c.hidden_size;
   const auto row = [](const TensorView& t, int64_t r) {
     return reinterpret_cast<float*>(static_cast<std::byte*>(t.data()) + r * t.stride(0));
   };
@@ -195,9 +218,17 @@ void Transformer::moe_mlp(const Layer& L, const TensorView& xn, const TensorView
   // 1. Router logits -> softmax -> top-k (ties: lower expert id) -> weights.
   const TensorView logits = rows_of(router_, m);
   backend_.matmul(xn, L.router, nullptr, logits);
+  // Routing decisions are made on the host: m * experts floats come back
+  // (a device backend downloads them; a fused device top-k is a later op).
+  router_host_.resize(static_cast<size_t>(m * ne));
+  if (backend_.host_accessible()) {
+    for (int64_t r = 0; r < m; ++r) std::copy_n(row(logits, r), ne, router_host_.data() + r * ne);
+  } else {
+    backend_.download(logits, router_host_);
+  }
   for (auto& v : expert_rows_) v.clear();
   for (int64_t r = 0; r < m; ++r) {
-    const float* lg = row(logits, r);
+    const float* lg = router_host_.data() + r * ne;
     float mx = lg[0];
     for (int32_t e = 1; e < ne; ++e) mx = std::max(mx, lg[e]);
     double sum = 0;
@@ -223,7 +254,7 @@ void Transformer::moe_mlp(const Layer& L, const TensorView& xn, const TensorView
   //    activation over all packed rows, every down projection as one batch,
   //    then scatter-add with the routing weights. Each active expert reads
   //    its weights once per step however many rows it serves.
-  for (int64_t r = 0; r < m; ++r) std::memset(row(out, r), 0, static_cast<size_t>(d) * sizeof(float));
+  backend_.fill(out, 0.0f);
   const int64_t fe = c.moe.expert_intermediate_size;
   int64_t total = 0;
   for (const auto& rows : expert_rows_) total += static_cast<int64_t>(rows.size());
@@ -234,13 +265,16 @@ void Transformer::moe_mlp(const Layer& L, const TensorView& xn, const TensorView
   };
   up_jobs_.clear();
   down_jobs_.clear();
+  gather_idx_.clear();
+  scatter_w_.clear();
   int64_t off = 0;
   for (int32_t e = 0; e < ne; ++e) {
     const auto& rows = expert_rows_[static_cast<size_t>(e)];
     if (rows.empty()) continue;
     const auto cnt = static_cast<int64_t>(rows.size());
-    for (int64_t i = 0; i < cnt; ++i) {
-      std::memcpy(row(xp, off + i), row(xn, rows[static_cast<size_t>(i)].first), static_cast<size_t>(d) * sizeof(float));
+    for (const auto& [r, wgt] : rows) {
+      gather_idx_.push_back(r);
+      scatter_w_.push_back(wgt);
     }
     const auto& W = L.experts[static_cast<size_t>(e)];
     const TensorView xe = slice(xp, off, cnt), ae = slice(ap, off, cnt), be = slice(bp, off, cnt);
@@ -249,19 +283,13 @@ void Transformer::moe_mlp(const Layer& L, const TensorView& xn, const TensorView
     down_jobs_.push_back({cols_of(be, 0, fe), W[2], slice(yp, off, cnt)});
     off += cnt;
   }
+  backend_.gather_rows(xn, gather_idx_, xp);
   mark(ForwardOp::kMoeScatter);
   backend_.matmul_many(up_jobs_);
   backend_.act_mul(c.activation, cols_of(ap, 0, fe), cols_of(ap, fe, fe), cols_of(bp, 0, fe));
   backend_.matmul_many(down_jobs_);
   mark(ForwardOp::kMoeExperts);
-  off = 0;
-  for (int32_t e = 0; e < ne; ++e) {
-    for (const auto& [r, wgt] : expert_rows_[static_cast<size_t>(e)]) {
-      float* o = row(out, r);
-      const float* y = row(yp, off++);
-      for (int64_t j = 0; j < d; ++j) o[j] += wgt * y[j];
-    }
-  }
+  backend_.scatter_add_rows(yp, gather_idx_, scatter_w_, out);
   mark(ForwardOp::kMoeScatter);
 
   // 3. Shared expert (all rows), optionally scaled by sigmoid(x . w_router).
@@ -273,14 +301,21 @@ void Transformer::moe_mlp(const Layer& L, const TensorView& xn, const TensorView
     backend_.matmul(xn, L.sh_up, nullptr, up);
     backend_.act_mul(c.activation, gate, up, act);
     backend_.matmul(act, L.sh_down, nullptr, ys);
-    const TensorView g = rows_of(sh_gate_, m);
-    if (present(L.sh_router)) backend_.matmul(xn, L.sh_router, nullptr, g);
-    for (int64_t r = 0; r < m; ++r) {
-      const float s = present(L.sh_router) ? 1.0f / (1.0f + std::exp(-row(g, r)[0])) : 1.0f;
-      float* o = row(out, r);
-      const float* y = row(ys, r);
-      for (int64_t j = 0; j < d; ++j) o[j] += s * y[j];
+    // Gate sigmoid(x . w) per row, computed from m downloaded scalars.
+    gather_idx_.resize(static_cast<size_t>(m));
+    scatter_w_.assign(static_cast<size_t>(m), 1.0f);
+    std::iota(gather_idx_.begin(), gather_idx_.end(), 0);
+    if (present(L.sh_router)) {
+      const TensorView g = rows_of(sh_gate_, m);
+      backend_.matmul(xn, L.sh_router, nullptr, g);
+      if (backend_.host_accessible()) {
+        for (int64_t r = 0; r < m; ++r) scatter_w_[static_cast<size_t>(r)] = row(g, r)[0];
+      } else {
+        backend_.download(g, scatter_w_);
+      }
+      for (float& w : scatter_w_) w = 1.0f / (1.0f + std::exp(-w));
     }
+    backend_.scatter_add_rows(ys, gather_idx_, scatter_w_, out);
   }
 }
 
@@ -480,17 +515,22 @@ Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& c
   if (!logit_rows_.empty()) {
     const auto n_out = static_cast<int64_t>(logit_rows_.size());
     const TensorView gathered = rows_of(o_, n_out);  // o_ is free after the last layer
-    for (int64_t i = 0; i < n_out; ++i) {
-      std::memcpy(static_cast<std::byte*>(gathered.data()) + i * gathered.stride(0),
-                  static_cast<const std::byte*>(x.data()) + logit_rows_[static_cast<size_t>(i)] * x.stride(0),
-                  static_cast<size_t>(c.hidden_size) * sizeof(float));
-    }
+    backend_.gather_rows(x, logit_rows_, gathered);
     const TensorView normed = rows_of(xn_, n_out);
     norm(gathered, output_norm_, output_norm_b_, normed);
-    const TensorView out = view2d(logits.data(), n_out, c.vocab_size, c.vocab_size * 4);
+    // Host-accessible backends write logits in place; device backends write
+    // to device scratch and download (the sampler runs on the host).
+    TensorView out = view2d(logits.data(), n_out, c.vocab_size, c.vocab_size * 4);
+    if (!backend_.host_accessible()) {
+      if (logits_dev_.shape().rank() == 0 || logits_dev_.shape()[0] < n_out) {
+        ENGINE_ASSIGN_OR_RETURN(logits_dev_, device_scratch(n_out, c.vocab_size));
+      }
+      out = rows_of(logits_dev_, n_out);
+    }
     backend_.matmul(normed, lm_head_, nullptr, out);
     if (c.logit_scale != 1.0f) backend_.scale(out, 1.0f / c.logit_scale);
     if (c.final_logit_softcap > 0) backend_.softcap(out, c.final_logit_softcap);
+    if (!backend_.host_accessible()) backend_.download(out, logits);
     mark(ForwardOp::kLmHead);
   }
   return Status::Ok();

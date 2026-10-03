@@ -128,3 +128,6 @@ engine_add_test(test_sampling
 
 engine_add_test(test_speculative
   test_speculative.cpp)
+
+engine_add_test(test_device_backend
+  test_device_backend.cpp)

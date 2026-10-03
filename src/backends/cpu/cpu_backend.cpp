@@ -72,6 +72,36 @@ void CpuBackend::embedding(const TensorView& table, std::span<const int32_t> ids
   }
 }
 
+void CpuBackend::download(const TensorView& src, std::span<float> dst) {
+  const int64_t r = rows(src), c = cols(src);
+  assert(dst.size() >= static_cast<size_t>(r * c));
+  for (int64_t i = 0; i < r; ++i) {
+    std::memcpy(dst.data() + i * c, row_ptr<const float>(src, i), static_cast<size_t>(c) * sizeof(float));
+  }
+}
+
+void CpuBackend::fill(const TensorView& x, float value) {
+  for (int64_t i = 0; i < rows(x); ++i) std::fill_n(row_ptr<float>(x, i), cols(x), value);
+}
+
+void CpuBackend::gather_rows(const TensorView& src, std::span<const int32_t> idx, const TensorView& dst) {
+  const auto bytes = static_cast<size_t>(cols(src)) * sizeof(float);
+  for (size_t i = 0; i < idx.size(); ++i) {
+    std::memcpy(row_ptr<float>(dst, static_cast<int64_t>(i)), row_ptr<const float>(src, idx[i]), bytes);
+  }
+}
+
+void CpuBackend::scatter_add_rows(const TensorView& src, std::span<const int32_t> idx, std::span<const float> weights,
+                                  const TensorView& dst) {
+  const int64_t c = cols(src);
+  for (size_t i = 0; i < idx.size(); ++i) {
+    float* d = row_ptr<float>(dst, idx[i]);
+    const float* s = row_ptr<const float>(src, static_cast<int64_t>(i));
+    const float w = weights[i];
+    for (int64_t j = 0; j < c; ++j) d[j] += w * s[j];
+  }
+}
+
 void CpuBackend::matmul_many(std::span<const MatmulJob> jobs) {
   // Jobs with several rows (MoE prefill) get the full GEMM path one by one.
   // Few-row jobs (decode) are small: one parallel region over all jobs'

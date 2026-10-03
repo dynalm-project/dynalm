@@ -19,6 +19,7 @@ Result<std::unique_ptr<KvBlockPool>> KvBlockPool::create(const KvGeometry& geom,
   }
   auto pool = std::unique_ptr<KvBlockPool>(new KvBlockPool());
   pool->geom_ = geom;
+  pool->backend_ = &backend;
   const auto elem = static_cast<size_t>(dtype_block_bytes(geom.dtype));
   const size_t k_bytes = static_cast<size_t>(geom.k_block_elems() * geom.num_blocks) * elem;
   const size_t v_bytes = static_cast<size_t>(geom.v_block_elems() * geom.num_blocks) * elem;
@@ -73,8 +74,8 @@ void KvBlockPool::copy_block(int32_t dst, int32_t src) {
   for (int32_t l = 0; l < geom_.num_layers; ++l) {
     auto* k = static_cast<std::byte*>(k_[static_cast<size_t>(l)]->data());
     auto* v = static_cast<std::byte*>(v_[static_cast<size_t>(l)]->data());
-    std::memcpy(k + static_cast<size_t>(dst) * kb, k + static_cast<size_t>(src) * kb, kb);
-    std::memcpy(v + static_cast<size_t>(dst) * vb, v + static_cast<size_t>(src) * vb, vb);
+    backend_->copy(k + static_cast<size_t>(dst) * kb, k + static_cast<size_t>(src) * kb, kb);
+    backend_->copy(v + static_cast<size_t>(dst) * vb, v + static_cast<size_t>(src) * vb, vb);
   }
 }
 
