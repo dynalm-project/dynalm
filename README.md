@@ -31,8 +31,8 @@ dynalm serve models/qwen2.5-0.5b-instruct-q4_k_m.gguf --port 8000
 
 | Platform | Command | Status |
 |---|---|---|
-| Linux (x86-64, ARM64) | `./scripts/install.sh` | ✅ tested |
-| macOS (Apple Silicon, Intel) | `./scripts/install.sh` | ⚠️ supported in code; verified by the CI job on GitHub (`macos-14`), not yet run |
+| Linux (x86-64, ARM64) | `./scripts/install.sh` | ✅ tested (in CI) |
+| macOS (Apple Silicon, Intel) | `./scripts/install.sh` | ✅ tested (Apple Silicon, in CI) |
 | Windows 10/11 (x64) | `powershell -ExecutionPolicy Bypass -File scripts\install.ps1 -AddToPath` | ✅ tested |
 | Docker (amd64, arm64) | `docker build -t dynalm .` | ✅ tested |
 
