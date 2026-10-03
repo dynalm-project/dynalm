@@ -35,8 +35,6 @@
 namespace engine {
 namespace {
 
-std::string data(const std::string& f) { return std::string(ENGINE_TEST_DATA_DIR) + "/" + f; }
-
 TEST(BackendRegistry, CpuBuiltGpuKindsReportedClearly) {
   ThreadPool pool(1);
   auto cpu = create_backend(BackendKind::kCpu, pool);
@@ -55,6 +53,8 @@ TEST(BackendRegistry, CpuBuiltGpuKindsReportedClearly) {
 }
 
 #if defined(__linux__)
+
+std::string data(const std::string& f) { return std::string(ENGINE_TEST_DATA_DIR) + "/" + f; }
 
 class GuardedBackend final : public Backend {
  public:

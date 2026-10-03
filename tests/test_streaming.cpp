@@ -188,8 +188,18 @@ TEST_F(EngineTest, ConsumerCancellation) {
   (*s)->cancel();
   auto [text, last] = drain(**s);
   EXPECT_TRUE(last.done);
-  EXPECT_EQ(last.finish, StreamFinish::kCancelled);
-  EXPECT_LT(last.completion_tokens, 100);
+  // The tiny model can finish all 100 tokens before the cancel reaches the
+  // scheduler thread (seen on fast CI machines), so either outcome is valid;
+  // what must hold is that the stream ends exactly once and a cancelled one
+  // stopped early. Deterministic cancellation is covered at the scheduler
+  // level (SchedulerTest.CancellationReleasesKvAndOthersContinue).
+  if (last.finish == StreamFinish::kCancelled) {
+    EXPECT_LT(last.completion_tokens, 100);
+  } else {
+    EXPECT_EQ(last.finish, StreamFinish::kLength);
+    EXPECT_EQ(last.completion_tokens, 100);
+  }
+  EXPECT_FALSE((*s)->next(ev, std::chrono::milliseconds(1)));  // nothing after the final event
 }
 
 TEST_F(EngineTest, InvalidRequestReportedOnStream) {

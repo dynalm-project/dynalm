@@ -113,6 +113,10 @@ if(ENABLE_SERVER)
   # SYSTEM: third-party header warnings must not fail our -Wall build.
   target_include_directories(engine_server SYSTEM PRIVATE ${_httplib_dir})
   target_link_libraries(engine_server PUBLIC engine_core)
+  # cpp-httplib's default listen backlog is 5: macOS (unlike Linux) refuses
+  # connections beyond it, so a burst of new clients gets connection errors
+  # instead of a response or a 503. Admission control happens per request.
+  target_compile_definitions(engine_server PRIVATE CPPHTTPLIB_LISTEN_BACKLOG=1024)
   if(WIN32)
     target_link_libraries(engine_server PRIVATE ws2_32)
   endif()
