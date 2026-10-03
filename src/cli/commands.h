@@ -12,6 +12,7 @@ int cmd_inspect(std::span<const std::string_view> args);
 int cmd_run(std::span<const std::string_view> args);
 int cmd_serve(std::span<const std::string_view> args);
 int cmd_benchmark(std::span<const std::string_view> args);
+int cmd_pull(std::span<const std::string_view> args);
 int cmd_list(std::span<const std::string_view> args);
 int cmd_stop(std::span<const std::string_view> args);
 

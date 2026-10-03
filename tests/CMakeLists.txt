@@ -64,6 +64,7 @@ engine_add_test(test_tensor
 
 engine_add_test(test_loader
   test_gguf.cpp
+  test_model_source.cpp
   test_model_ir.cpp)
 
 engine_add_test(test_tokenizer

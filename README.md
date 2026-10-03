@@ -57,6 +57,7 @@ docker run --rm -p 8000:8000 -v "$PWD/models:/models" dynalm serve /models/model
 ## Use
 
 ```sh
+dynalm pull Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q4_k_m.gguf   # download into ./models
 dynalm list                                   # models in ./models (GGUF and Hugging Face folders)
 dynalm inspect models/model.gguf              # architecture, quantization, memory estimate, support
 dynalm run models/model.gguf -p "Hi" --temp 0.7 --top-p 0.9
@@ -75,6 +76,20 @@ from openai import OpenAI
 client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="unused")
 print(client.chat.completions.create(model="any", messages=[{"role": "user", "content": "Hi"}]).choices[0].message.content)
 ```
+
+## Getting models
+
+Models are not part of the repository. Download a `.gguf` file from Hugging Face with `dynalm pull`, using
+its link (page or download link) or the short form `<owner>/<repo>/<file>.gguf`:
+
+```sh
+dynalm pull https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/blob/main/qwen2.5-0.5b-instruct-q4_k_m.gguf
+```
+
+- It checks the architecture first and refuses models DynaLM cannot run, before downloading gigabytes.
+- Interrupted downloads resume; gated models (e.g. Llama) need their license accepted and `HF_TOKEN` set.
+- Pick `Q4_K_M` for a good size/quality balance, `Q8_0` for higher quality.
+- `pull` uses `curl` (built into Windows 10+, macOS and Linux).
 
 ## Supported models
 

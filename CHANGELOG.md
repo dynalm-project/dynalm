@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Model downloads
+- `dynalm pull <link>` downloads a GGUF into `./models` (or `-o DIR`, `$DYNALM_MODELS_DIR`) from a Hugging Face
+  file link (page or download form), the short form `<owner>/<repo>/<file>.gguf`, or any http(s) URL.
+  - Reads the first 256 KiB first and refuses unsupported architectures before the full download (`--force` overrides).
+  - Resumable (`<file>.part`), retried, gated models via `HF_TOKEN`; verifies every tensor type afterwards.
+  - Uses the system `curl` (DD-047).
+- `dynalm list` names the blocker: `unsupported architecture 'qwen35'` or `unsupported tensor types: iq3_s, ...`.
+- CI: all 11 jobs green (Linux x64 gcc/clang/ASAN/TSAN, Linux ARM64, macOS, Windows, three installers, Docker).
+
 ### DynaLM: name, installs, CI, NEON
 - Renamed to **DynaLM**:
   - the command `engine` → `dynalm`;

@@ -60,7 +60,11 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
 - Pre-tokenizers for DeepSeek-LLM/V3 and Tekken (Mistral Nemo).
 - YaRN and LongRoPE scaling (Qwen long-context, Phi-3-128k).
 
-- Push to GitHub and get the CI matrix green (macOS has not run yet); measure NEON on real ARM hardware.
+- Measure NEON on real ARM hardware (CI runs it on GitHub's arm64 runners; all 11 jobs green).
+- `qwen35` (Qwen3.5/3.8): Gated-DeltaNet layers need per-sequence recurrent state next to the paged KV cache
+  (scheduler, prefix cache and speculative rollback all assume KV-only state), plus M-RoPE and the attention output gate.
+- IQ quant kernels (iq1_s/m, iq2_xxs/xs/s, iq3_xxs/s, iq4_nl/xs): needed by most imatrix GGUFs of large models.
+- `dynalm pull`: Hugging Face repo browsing (pick a quantization from a repo link), sharded GGUF (-00001-of-0000N).
 - Homebrew formula / winget manifest / signed Windows releases once tagged releases exist.
 - NEON kernels for Q5_K/Q2_K/Q3_K and int8 dot products (SDOT).
 - Measure P-core-only vs. all-core threading on hybrid CPUs (DD-004).

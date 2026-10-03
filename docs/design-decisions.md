@@ -1120,3 +1120,36 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   - **Windows.** `install.ps1` built and installed a static-runtime `dynalm.exe`, which
     answered "capital of France" natively at 33.9 tok/s (Qwen2.5-0.5B Q4_K_M).
   - **Linux install.** `install.sh` installs into a fresh container.
+
+## DD-047: `dynalm pull` downloads with the system curl and pre-checks the header
+
+- **Decision:** `dynalm pull <link>` resolves Hugging Face links to download URLs, fetches the first 256 KiB
+  with a range request, and refuses a GGUF whose `general.architecture` DynaLM has no adapter for. It then
+  downloads to `<file>.part` with resume and retries, renames it into place, and checks every tensor type.
+  Transfers run the system `curl` as a child process (no shell). `HF_TOKEN` is passed through a temporary
+  owner-only header file, and only to huggingface.co.
+- **Reason:**
+  - Users copy model links from Hugging Face; without a pull command they needed curl, wget or Python.
+  - A real case: an 11 GB `qwen35` GGUF was downloaded and then listed as unsupported. The header check
+    now refuses it after 256 KiB.
+  - `curl` ships with Windows 10 (1803+), macOS and every Linux distribution, and brings TLS, proxies,
+    redirects, resume and retries.
+- **Alternatives:**
+  - cpp-httplib with OpenSSL: adds OpenSSL to every static build on three OSes; no resume or proxy logic.
+  - libcurl linked in: a large build dependency for one command.
+  - Platform APIs (WinHTTP, NSURLSession): three implementations to maintain.
+  - `huggingface_hub` (Python): DynaLM has no Python at runtime.
+- **Tradeoffs:**
+  - Needs `curl` on PATH (a clear error says so if missing).
+  - The pre-check sees only header metadata. Tensor types are listed after the tokenizer arrays, so
+    IQ-quantized files of a supported architecture are only reported after the download.
+  - Single files only. No repo browsing or sharded GGUFs yet (TODO).
+- **Evidence:**
+  - Windows, real Hugging Face:
+    - the `ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF` IQ3_S link was refused in about 1 s
+      ("architecture 'qwen35' is not supported");
+    - a repo-only link got the hint to pick a file;
+    - `SmolLM2-135M-Instruct-Q8_0.gguf` downloaded and verified "ok", and a second run skipped it;
+    - a missing file reported the HTTP error with the gated-model hint.
+  - Unit tests (`ModelSource.*`, 5): link forms, the header peek on truncated and HTML input, and the
+    support verdict on synthetic GGUFs with an unknown architecture and an iq3_s tensor.

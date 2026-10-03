@@ -1,6 +1,7 @@
 // Model management commands (spec §41):
 //   dynalm list [dir]                 GGUF files and Hugging Face model directories under dir
 //                                     (default $DYNALM_MODELS_DIR or ./models)
+//   dynalm pull <link>                download a GGUF model (cli/pull.cpp)
 //   dynalm stop [--host H] [--port P] ask a running `dynalm serve` to drain and exit
 //
 // A server process serves exactly one model (DD-039), so `dynalm unload` is
@@ -18,6 +19,7 @@
 #include "loader/gguf/gguf.h"
 #include "loader/gguf/gguf_model.h"
 #include "loader/hf/hf_model.h"
+#include "loader/model_source.h"
 #include "model/architecture.h"
 #if ENGINE_HAS_SERVER
 #include "server/server.h"
@@ -63,10 +65,9 @@ int cmd_list(std::span<const std::string_view> args) {
     if (auto ft = f.get_uint("general.file_type"); ft.ok()) quant = std::string(gguf::file_type_name(static_cast<uint32_t>(*ft)));
     std::string ctx = "?";
     if (auto c = f.get_uint(arch_s + ".context_length"); c.ok()) ctx = std::to_string(*c);
-    const bool supported = arch.ok() && find_architecture(*arch) != nullptr;
     std::printf("%-48s %-10s %-10s %9.1f %8s  %s\n", rel.c_str(), arch_s.c_str(), quant.c_str(),
                 static_cast<double>(f.file().size()) / (1024.0 * 1024.0), ctx.c_str(),
-                supported ? "ok" : "unsupported architecture");
+                gguf_support_status(f).c_str());
   }
   // Hugging Face directories (config.json + safetensors).
   for (const fs::path& p : hf_dirs) {

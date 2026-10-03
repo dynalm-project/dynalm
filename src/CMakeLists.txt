@@ -36,6 +36,7 @@ add_library(engine_core STATIC
   loader/safetensors/safetensors.cpp
   loader/mapped_file.cpp
   loader/model_loader.cpp
+  loader/model_source.cpp
   platform/cpu_info.cpp
   prefix_cache/hash_prefix_cache.cpp
   prefix_cache/radix_prefix_cache.cpp
@@ -73,7 +74,7 @@ if(ENABLE_AVX2)
   engine_set_isa(AVX2 backends/cpu/avx2/kernels_avx2.cpp)
 endif()
 
-add_executable(dynalm cli/main.cpp cli/benchmark.cpp cli/inspect.cpp cli/manage.cpp cli/run.cpp)
+add_executable(dynalm cli/main.cpp cli/benchmark.cpp cli/inspect.cpp cli/manage.cpp cli/pull.cpp cli/run.cpp)
 target_link_libraries(dynalm PRIVATE engine_core)
 
 # HTTP server (cpp-httplib: pinned single header, verified by SHA256).

@@ -12,6 +12,7 @@
 | Qwen2-MoE / Qwen1.5-MoE, Qwen3-MoE | QwenArchitecture (`qwen2moe`, `qwen3moe`) | ✅ tiny goldens (shared expert, raw vs renormalized gating) |
 | IBM Granite / Granite-MoE | LlamaArchitecture (`granite`, `granitemoe`) | ✅ tiny golden; Granite-3.1-1B-A400M real golden |
 | DeepSeek-MoE / V2 / V3, OLMoE | — | not yet (mixed dense/MoE layers, MLA attention; clear error) |
+| Qwen3.5 / Qwen3.8 dense (`qwen35`) | — | not yet: hybrid Gated-DeltaNet (linear attention with recurrent SSM state) + gated full attention every 4th layer, M-RoPE, MTP head; published GGUFs also use IQ1–IQ4 types. `dynalm pull` refuses it before downloading |
 
 Formats:
 - GGUF v2/v3 ✅.
