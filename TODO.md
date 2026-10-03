@@ -30,7 +30,7 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
 - [x] Phase 24 — GPTQ/AWQ architecture preparation
 - [x] Phase 25 — MoE support
 - [x] Phase 26 — Advanced sampling
-- [ ] Phase 27 — Speculative decoding preparation
+- [x] Phase 27 — Speculative decoding preparation
 - [ ] Phase 28 — GPU backend architecture
 
 ## Open items
@@ -47,6 +47,7 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
   MLA attention for DeepSeek-V2/V3; OLMoE (full-width QK-norm); parallel gather/scatter and
   concurrent expert GEMMs for MoE prefill.
 - Sampling: logprobs/top_logprobs in the API, n > 1, logit_bias, grammar/JSON-constrained decoding.
+- Speculative decoding in the scheduler (1 + k decode rows per entry) and the API; tree drafts; stochastic draft proposals.
 - Open-loop (Poisson arrival) mode for the load generator (DD-037).
 - Token-authenticated admin endpoint for deployments behind a same-host proxy (DD-039).
 - CPU affinity / thread pinning / NUMA placement (spec §32), measured against the baselines.

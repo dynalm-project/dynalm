@@ -101,6 +101,17 @@ engine serve models/st/qwen2.5-0.5b-instruct --port 8000
 PYTHONUTF8=1 python tools/make_tiny_hf.py tests/data   # regenerate HF test fixtures
 ```
 
+### Speculative decoding (single sequence)
+
+```sh
+engine run models/qwen2.5-1.5b-instruct-q4_k_m.gguf -p "..." --spec ngram          # prompt lookup
+engine run models/qwen2.5-1.5b-instruct-q4_k_m.gguf -p "..." --spec models/qwen2.5-0.5b-instruct-q4_k_m.gguf --spec-k 4
+bench_speculative <target.gguf> [draft.gguf|-] [threads] [k]
+```
+
+Greedy output matches plain greedy decoding; with sampling, outputs follow the target's
+distribution (DD-044).
+
 ### Configuration
 
 Options come from three sources; later ones win: config file < `ENGINE_<OPTION>`

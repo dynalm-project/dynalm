@@ -125,3 +125,6 @@ engine_add_test(test_gptq_awq
 
 engine_add_test(test_sampling
   test_sampling.cpp)
+
+engine_add_test(test_speculative
+  test_speculative.cpp)

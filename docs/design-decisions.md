@@ -952,3 +952,60 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
 
   `test_server`: API parsing of all fields, 400 on invalid values, a seeded HTTP request
   reproduces. `bench_sampling`: greedy 440 → 70 µs, top-p 2.8 → 0.9 ms, top-k 1.2 → 0.84 ms.
+
+## DD-044: Speculative decoding: drafters, one-pass verification, KV rollback
+
+- **Decision:** The runtime has the three pieces speculative decoding needs, plus a working
+  single-sequence implementation built from them:
+  1. **Multi-row logits.** `SeqBatch::logits_last` makes one forward pass score every drafted
+     position. The batched forward already handles k + 1 rows of one sequence.
+  2. **KV rollback.** `KvBlockTable::truncate` drops the K/V of rejected drafts and unmaps
+     whole blocks.
+  3. **Verification.** `Sampler::sample_speculative` uses the target's *own* sampling
+     pipeline (penalties, top-k, top-p, min-p, temperature):
+     - greedy accepts a draft iff it is the argmax;
+     - sampling accepts draft d with probability p(d), otherwise draws from p without d.
+
+     This is Leviathan et al.'s rule for a one-hot draft distribution, so outputs follow the
+     target distribution exactly.
+
+  Drafters implement one method, `propose(context, k)`:
+  - `NgramDrafter` (prompt lookup) continues the latest earlier occurrence of the context's
+    longest suffix (4 down to 2 tokens). It needs no model or memory.
+  - `ModelDrafter` runs a small model with its own KV, greedy. Its vocabulary must match the
+    target's token for token, which is checked at creation. It rolls its KV back to the prefix
+    it shares with the accepted context. Drafting failures stop drafting, never the request.
+
+  `SpeculativeGenerator` runs propose → verify (1 target pass) → accept a prefix, plus the
+  target's correction or a bonus token → rollback. So each target pass yields 1..k+1 tokens.
+  It is exposed as `engine run --spec ngram|DRAFT.gguf --spec-k K`, and measured by
+  `bench_speculative`.
+- **Reason:** Spec §47 asks for extension points for speculative decoding, draft models and
+  KV rollback. On a CPU, decode is memory-bound: scoring k + 1 positions reads the weights
+  once, costing little more than one token. Every accepted draft is a token for nearly free.
+- **Not yet:** speculation inside the continuous-batching scheduler. The pieces are there: a
+  decode entry contributing 1 + k rows, its own draft state, and rollback through
+  `SequenceState`. The policy is the open question: with many concurrent sequences the batch
+  already amortizes weight reads, so speculation helps mostly at low concurrency. Also
+  deferred: tree drafts (Medusa/EAGLE), stochastic draft-model proposals (the rejection rule
+  generalizes to max(0, p − q)), and an API switch.
+- **Tradeoffs:**
+  - Greedy speculative output equals plain greedy *up to float rounding*. Verification runs
+    the multi-row matmul path, which accumulates in a different order than the one-row decode
+    path (DD-031), so a near-tie could flip. The tiny-model tests show exact equality, and so
+    does `bench_speculative` on Qwen2.5 (column "exact").
+  - Prompt lookup only pays off when the output repeats the context.
+  - A draft model costs its own decode; it pays off when it is several times cheaper than the
+    target and agrees often.
+- **Evidence:** `test_speculative`:
+  - n-gram proposal logic;
+  - greedy output identical to plain greedy with n-gram, self-draft (100% acceptance) and a
+    different same-vocabulary model at k = 1, 3, 6;
+  - all KV returned after rollbacks;
+  - verification reproduces the target distribution within 0.005 (200k draws) for a
+    high-probability, a low-probability and an impossible (outside top-k) draft, with an
+    acceptance rate equal to p(draft);
+  - seeded sampling reproduces;
+  - mismatched draft vocabularies are rejected.
+
+  `bench_speculative` results are in docs/benchmarks.md.

@@ -74,12 +74,27 @@ class Sampler {
   // decoding, which needs the same adjusted distribution.
   void apply_penalties(std::span<float> logits, std::span<const TokenId> context);
 
+  // Speculative verification of a deterministic draft token (DD-044): accept
+  // `draft` with probability p(draft) under this sampler's distribution;
+  // otherwise return a token drawn from p with `draft` removed. This is the
+  // Leviathan et al. rule for a one-hot draft distribution, so the returned
+  // token is distributed exactly as sample()'s. Greedy: accepted iff argmax.
+  TokenId sample_speculative(std::span<float> logits, std::span<const TokenId> context, TokenId draft,
+                             bool& accepted);
+
  private:
+  // Kept distribution after top-k / temperature / min-p / top-p: n entries in
+  // probs_ (token ids via token_at), unnormalized, summing to `total`.
+  size_t distribution(std::span<float> logits, double& total);
+  TokenId token_at(size_t i) const { return dense_ ? static_cast<TokenId>(i) : cand_[i].second; }
+  TokenId draw(size_t n, double total, TokenId exclude);
+
   SamplingParams params_;
   Rng rng_;
   std::vector<std::pair<float, TokenId>> cand_;  // (logit, id) candidates, reused
   std::vector<float> probs_;
   std::vector<TokenId> history_;
+  bool dense_ = false;  // probs_ indexed by token id (temperature-only path)
 };
 
 }  // namespace engine

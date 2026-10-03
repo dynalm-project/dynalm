@@ -10,7 +10,11 @@
 #include "common/timer.h"
 #include "logging/log.h"
 #include "platform/cpu_info.h"
+#include "backends/cpu/cpu_backend.h"
+#include "platform/isa.h"
 #include "runtime/engine.h"
+#include "runtime/speculative.h"
+#include "runtime/text_stream.h"
 
 namespace engine::cli {
 namespace {
@@ -35,7 +39,10 @@ void usage() {
                "  --temp T              temperature (0 = greedy)\n"
                "  --top-k K, --top-p P, --min-p P\n"
                "  --repeat-penalty R, --presence-penalty P, --frequency-penalty F, --repeat-last-n N\n"
-               "  --seed S              RNG seed (reproducible output)\n");
+               "  --seed S              RNG seed (reproducible output)\n"
+               "speculative decoding (single sequence, DD-044):\n"
+               "  --spec ngram|DRAFT    prompt-lookup drafter, or a draft model sharing the vocabulary\n"
+               "  --spec-k K            tokens drafted per step (default 4)\n");
 }
 
 bool parse_int(std::string_view s, int& out) {
@@ -54,12 +61,113 @@ bool parse_float(std::string_view s, float& out) {
   }
 }
 
+struct SpecModel {
+  std::unique_ptr<LoadedModel> model;
+  std::unique_ptr<KvBlockPool> kv;
+  std::unique_ptr<Transformer> tf;
+};
+
+Status load_spec_model(const std::string& path, CpuBackend& be, DType kv_dtype, int ctx, int batch, SpecModel& out) {
+  ENGINE_ASSIGN_OR_RETURN(out.model, load_model(path));
+  ENGINE_ASSIGN_OR_RETURN(out.kv, KvBlockPool::create(kv_geometry_for(out.model->config, kv_dtype, 16, ctx), be));
+  ENGINE_ASSIGN_OR_RETURN(out.tf, Transformer::create(out.model->config, out.model->weights, be, batch));
+  return Status::Ok();
+}
+
+// `engine run --spec ...`: the single-sequence speculative path (the Engine's
+// continuous-batching scheduler does not host drafters yet).
+int run_speculative(const std::string& path, const std::string& spec, int k, const std::string& prompt,
+                    const std::string& system, bool chat, bool stream, int threads, int ctx, int batch,
+                    const EngineOptions& opts, const GenerateParams& params) {
+  ThreadPool pool(threads > 0 ? threads : cpu_info().physical_cores);
+  CpuBackend be(pool, select_best_isa(cpu_info().features));
+  SpecModel target, draft;
+  if (Status st = load_spec_model(path, be, opts.kv_dtype, ctx, batch, target); !st.ok()) {
+    std::fprintf(stderr, "run: %s\n", st.to_string().c_str());
+    return 1;
+  }
+  const Tokenizer& tok = *target.model->tokenizer;
+  std::unique_ptr<Drafter> drafter;
+  if (spec == "ngram") {
+    drafter = std::make_unique<NgramDrafter>();
+  } else {
+    if (Status st = load_spec_model(spec, be, opts.kv_dtype, ctx, batch, draft); !st.ok()) {
+      std::fprintf(stderr, "run: draft: %s\n", st.to_string().c_str());
+      return 1;
+    }
+    auto md = ModelDrafter::create(*draft.tf, *draft.kv, *draft.model->tokenizer, tok);
+    if (!md.ok()) {
+      std::fprintf(stderr, "run: %s\n", md.status().to_string().c_str());
+      return 1;
+    }
+    drafter = std::move(*md);
+  }
+  std::vector<TokenId> ids;
+  if (chat) {
+    if (!target.model->chat_template) {
+      std::fprintf(stderr, "run: model has no chat template (use --raw)\n");
+      return 1;
+    }
+    std::vector<ChatMessage> msgs;
+    if (!system.empty()) msgs.push_back({"system", system});
+    msgs.push_back({"user", prompt});
+    auto text = target.model->chat_template->apply(msgs, true);
+    if (!text.ok()) return 1;
+    ids = tok.encode(*text, true, true);
+  } else {
+    ids = tok.encode(prompt, true, false);
+  }
+
+  SpeculativeGenerator gen(*target.tf, *target.kv, tok, *drafter);
+  GenerateOptions go;
+  go.max_new_tokens = params.max_tokens;
+  go.stop_at_eog = params.stop_at_eog;
+  SpeculativeOptions so;
+  so.draft_tokens = k;
+  so.sampling = params.sampling;
+  TextStreamer streamer(tok, params.stop);
+  std::string text;
+  SpeculativeStats st;
+  const Stopwatch timer;
+  double first_ms = -1;
+  const Status s = gen.generate(ids, go, so, [&](TokenId t) {
+    if (first_ms < 0) first_ms = timer.elapsed_ms();
+    if (tok.is_eog(t) && go.stop_at_eog) return false;
+    const TextStreamer::Delta d = streamer.push(t);
+    if (stream) {
+      std::fwrite(d.text.data(), 1, d.text.size(), stdout);
+      std::fflush(stdout);
+    } else {
+      text += d.text;
+    }
+    return !d.stopped;
+  }, &st);
+  if (!streamer.stopped()) {
+    const std::string rest = streamer.finish();
+    if (stream) std::fwrite(rest.data(), 1, rest.size(), stdout); else text += rest;
+  }
+  std::printf(stream ? "\n" : "%s\n", text.c_str());
+  if (!s.ok()) {
+    std::fprintf(stderr, "run: %s\n", s.to_string().c_str());
+    return 1;
+  }
+  const double decode_s = (timer.elapsed_ms() - std::max(first_ms, 0.0)) / 1e3;
+  std::fprintf(stderr,
+               "\n[stats] prompt %zu tok | TTFT %.1f ms | generated %d tok, %.1f tok/s | drafter %s, k %d | "
+               "acceptance %.0f%% | %.2f tokens per target pass\n",
+               ids.size(), first_ms, st.generated, decode_s > 0 ? (st.generated - 1) / decode_s : 0.0,
+               std::string(drafter->name()).c_str(), k, 100 * st.acceptance(), st.tokens_per_pass());
+  return 0;
+}
+
 }  // namespace
 
 int cmd_run(std::span<const std::string_view> args) {
   std::string path, prompt, system;
   int max_tokens = 128, threads = 0, ctx = 4096, batch = 256;
   bool chat = true, stream = true;
+  std::string spec;
+  int spec_k = 4;
   EngineOptions opts;
   GenerateParams params;
 
@@ -78,6 +186,8 @@ int cmd_run(std::span<const std::string_view> args) {
     else if (a == "--raw") chat = false;
     else if (a == "--no-stream") stream = false;
     else if (a == "--temp" || a == "--temperature") ok = parse_float(value(), params.sampling.temperature);
+    else if (a == "--spec") spec = value();
+    else if (a == "--spec-k") ok = parse_int(value(), spec_k) && spec_k >= 1;
     else if (a == "--top-k") ok = parse_int(value(), params.sampling.top_k);
     else if (a == "--top-p") ok = parse_float(value(), params.sampling.top_p);
     else if (a == "--min-p") ok = parse_float(value(), params.sampling.min_p);
@@ -110,6 +220,11 @@ int cmd_run(std::span<const std::string_view> args) {
   if (Status st = params.sampling.validate(); !st.ok()) {
     std::fprintf(stderr, "run: %s\n", st.to_string().c_str());
     return 1;
+  }
+
+  if (!spec.empty()) {
+    params.max_tokens = max_tokens;
+    return run_speculative(path, spec, spec_k, prompt, system, chat, stream, threads, ctx, batch, opts, params);
   }
 
   const Stopwatch load_timer;

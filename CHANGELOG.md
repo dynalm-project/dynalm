@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Phase 27 — Speculative decoding
+- `SeqBatch::logits_last`: one forward pass returns logits for the last N tokens of a sequence.
+- `Sampler::sample_speculative`: verification with the target's own sampling pipeline (greedy:
+  argmax match; sampling: accept with p(d), else resample without d), so outputs follow the
+  target distribution exactly (DD-044).
+- `runtime/speculative`: `Drafter` interface, `NgramDrafter` (prompt lookup), `ModelDrafter`
+  (same-vocabulary small model with KV rollback), and `SpeculativeGenerator`
+  (propose → one-pass verify → accept → `KvBlockTable::truncate` rollback).
+- `engine run --spec ngram|DRAFT.gguf --spec-k K`; `bench_speculative`.
+- Tests: `test_speculative` (greedy exactness with three drafters, distribution preservation,
+  KV rollback, vocabulary check).
+
 ### Phase 26 — Advanced sampling
 - `sampling/sampler`: `SamplingParams` (temperature, top_k, top_p, min_p,
   repetition/frequency/presence penalties, penalty window, seed) and a per-sequence `Sampler`.

@@ -33,6 +33,9 @@ struct SeqBatch {
   int32_t start_pos = 0;
   std::span<const int32_t> block_table;
   bool want_logits = true;  // compute logits for this sequence's last token
+  // With want_logits: logits for the last `logits_last` tokens (speculative
+  // verification scores every drafted position in one pass).
+  int32_t logits_last = 1;
 };
 
 // Optional per-op timing of forward passes (off by default; profiling adds
@@ -69,9 +72,9 @@ class Transformer {
                  std::span<const int32_t> block_table, std::span<float> logits);
 
   // Batched forward over several sequences (total tokens <= max_batch_tokens).
-  // Every weight is read once for the whole batch. Logits for the last token
-  // of each sequence with want_logits are written to `logits` in order, one
-  // row of vocab_size floats each.
+  // Every weight is read once for the whole batch. Logits for the last
+  // `logits_last` tokens of each sequence with want_logits are written to
+  // `logits` in order, one row of vocab_size floats each.
   Status forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& cache, std::span<float> logits);
 
   void set_profiling(bool on) { profiling_ = on; }

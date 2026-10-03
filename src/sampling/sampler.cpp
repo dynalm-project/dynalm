@@ -126,10 +126,7 @@ void Sampler::apply_penalties(std::span<float> logits, std::span<const TokenId> 
   }
 }
 
-TokenId Sampler::sample(std::span<float> logits, std::span<const TokenId> context) {
-  apply_penalties(logits, context);
-  if (params_.greedy()) return sample_greedy(logits);
-
+size_t Sampler::distribution(std::span<float> logits, double& kept_total_out) {
   const size_t vocab = logits.size();
   const float max_l = max_logit(logits);
   const float t = params_.temperature, inv_t = 1.0f / t;
@@ -149,13 +146,11 @@ TokenId Sampler::sample(std::span<float> logits, std::span<const TokenId> contex
     double total = 0;
     for (double v : lanes) total += v;
     for (; i < vocab; ++i) total += pr[i];
-    double u = rng_.uniform() * total;
-    for (size_t k = 0; k < vocab; ++k) {
-      u -= probs_[k];
-      if (u < 0) return static_cast<TokenId>(k);
-    }
-    return static_cast<TokenId>(vocab - 1);
+    dense_ = true;
+    kept_total_out = total;
+    return vocab;
   }
+  dense_ = false;
 
   // One pass: a histogram of counts and probability mass over the top 40*T
   // of logit range (exp(-40) is below float resolution of any realistic
@@ -201,7 +196,7 @@ TokenId Sampler::sample(std::span<float> logits, std::span<const TokenId> contex
   for (size_t i = 0; i < vocab; ++i) {
     if (logits[i] >= cutoff) cand_.emplace_back(logits[i], static_cast<TokenId>(i));
   }
-  if (cand_.empty()) return sample_greedy(logits);
+  if (cand_.empty()) cand_.emplace_back(max_l, sample_greedy(logits));  // only NaNs/-inf: argmax
   size_t n = cand_.size();
   const bool need_order = use_k || params_.top_p < 1.0f;
   if (need_order) {
@@ -222,13 +217,57 @@ TokenId Sampler::sample(std::span<float> logits, std::span<const TokenId> contex
     n = std::max<size_t>(keep, 1);
     kept_total = mass;
   }
+  kept_total_out = kept_total;
+  return n;
+}
 
-  double u = rng_.uniform() * kept_total;
+TokenId Sampler::draw(size_t n, double total, TokenId exclude) {
+  double u = rng_.uniform() * total;
+  TokenId last = -1;
   for (size_t i = 0; i < n; ++i) {
+    const TokenId id = token_at(i);
+    if (id == exclude) continue;
+    last = id;
     u -= probs_[i];
-    if (u < 0) return cand_[i].second;
+    if (u < 0) return id;
   }
-  return cand_[n - 1].second;  // rounding: the last kept candidate
+  return last;  // rounding: the last kept candidate
+}
+
+TokenId Sampler::sample(std::span<float> logits, std::span<const TokenId> context) {
+  apply_penalties(logits, context);
+  if (params_.greedy()) return sample_greedy(logits);
+  double total = 0;
+  const size_t n = distribution(logits, total);
+  return draw(n, total, -1);
+}
+
+TokenId Sampler::sample_speculative(std::span<float> logits, std::span<const TokenId> context, TokenId draft,
+                                    bool& accepted) {
+  apply_penalties(logits, context);
+  if (params_.greedy()) {
+    const TokenId best = sample_greedy(logits);
+    accepted = best == draft;
+    return best;
+  }
+  double total = 0;
+  const size_t n = distribution(logits, total);
+  double p_draft = 0;
+  for (size_t i = 0; i < n; ++i) {
+    if (token_at(i) == draft) {
+      p_draft = probs_[i] / total;
+      break;
+    }
+  }
+  if (p_draft > 0 && rng_.uniform() < p_draft) {
+    accepted = true;
+    return draft;
+  }
+  // Rejected: the residual max(0, p - q) with q one-hot at `draft` is p with
+  // the draft removed, renormalized.
+  accepted = false;
+  if (p_draft >= 1.0) return draft;  // the only possible token (cannot be rejected in exact arithmetic)
+  return draw(n, total * (1.0 - p_draft), draft);
 }
 
 }  // namespace engine

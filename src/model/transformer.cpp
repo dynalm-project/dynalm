@@ -344,7 +344,13 @@ Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& c
       batch_pos_.push_back(sb.start_pos + static_cast<int32_t>(i));
       batch_seq_.push_back(static_cast<int32_t>(si));
     }
-    if (sb.want_logits) logit_rows_.push_back(static_cast<int32_t>(batch_tokens_.size()) - 1);
+    if (sb.want_logits) {
+      if (sb.logits_last < 1 || static_cast<size_t>(sb.logits_last) > sb.tokens.size()) {
+        return InvalidArgument("forward: logits_last must be in [1, tokens]");
+      }
+      const auto end = static_cast<int32_t>(batch_tokens_.size());
+      for (int32_t r = end - sb.logits_last; r < end; ++r) logit_rows_.push_back(r);
+    }
   }
   if (batch_tokens_.empty()) return InvalidArgument("forward: empty batch");
   if (logits.size() != logit_rows_.size() * static_cast<size_t>(c.vocab_size)) {

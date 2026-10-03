@@ -615,3 +615,30 @@ How to read this:
 
 The row copy alone is 15 µs. Flat synthetic logits are the worst case for top-p, since the
 nucleus is large. Worst case is under 1 ms per token, 2–3% of a Qwen2.5-0.5B decode step.
+
+## Phase 27 — speculative decoding (`bench_speculative`, greedy, 96 new tokens, k = 4, 10 threads)
+
+Target Qwen2.5-1.5B-Instruct Q4_K_M; draft model Qwen2.5-0.5B-Instruct Q4_K_M (same vocabulary).
+The "quote" prompt asks the model to repeat a paragraph; the "open" prompt asks for a story.
+
+| prompt | drafter | decode tok/s | speed-up | acceptance | tokens / target pass | output = plain greedy |
+|---|---|---|---|---|---|---|
+| quote | none | 13.8 | 1.00× | – | 1.00 | – |
+| quote | n-gram | **21.4** | **1.55×** | 75% | 1.94 | yes |
+| quote | 0.5B model | 11.4 | 0.83× | 75% | 3.96 | yes |
+| open | none | 12.7 | 1.00× | – | 1.00 | – |
+| open | n-gram | 12.3 | 0.96× | 11% | 1.03 | yes |
+| open | 0.5B model | 10.0 | 0.78× | 47% | 2.79 | yes |
+
+Same benchmark with Qwen2.5-0.5B Q8_0 as the target: n-gram gives 1.64× on "quote"
+(90% acceptance) and 1.09× on "open".
+
+How to read this:
+- **Prompt lookup.** It is a clear win when the output repeats the input (edits, quoting,
+  code refactors) and costs nothing measurable otherwise. It needs no extra model or memory.
+- **Draft model.** It loses here, even with almost 4 tokens per target pass. A 0.5B draft is
+  only about 2.4× cheaper per token than a 1.5B target on this machine (both are
+  bandwidth-bound: 0.47 vs 1.1 GB). The draft's 4 sequential passes, plus a 5-row
+  verification pass that costs more than a 1-row decode (expand path, DD-036), eat the gain.
+  Draft models pay off when the cost ratio is around 10× or more (for example 0.5B drafting
+  for 7B), or once the multi-row fused decode kernel (TODO) makes verification nearly free.
