@@ -69,6 +69,16 @@ constexpr NameRole kLayer[] = {
     {"mlp.up_proj.weight", TensorRole::kFfnUp},
     {"mlp.gate_up_proj.weight", TensorRole::kFfnUp},  // Phi-3: fused gate|up, like its GGUF
     {"mlp.down_proj.weight", TensorRole::kFfnDown},
+    // MoE routers and shared experts (per-expert tensors: parse_expert_name).
+    {"block_sparse_moe.gate.weight", TensorRole::kFfnRouter},          // Mixtral
+    {"block_sparse_moe.router.layer.weight", TensorRole::kFfnRouter},  // Granite-MoE
+    {"block_sparse_moe.input_linear.weight", TensorRole::kFfnGateUp},  // Granite-MoE [E, 2F, D], split at load
+    {"block_sparse_moe.output_linear.weight", TensorRole::kFfnDownExperts},
+    {"mlp.gate.weight", TensorRole::kFfnRouter},                       // Qwen-MoE
+    {"mlp.shared_expert.gate_proj.weight", TensorRole::kFfnGateShared},
+    {"mlp.shared_expert.up_proj.weight", TensorRole::kFfnUpShared},
+    {"mlp.shared_expert.down_proj.weight", TensorRole::kFfnDownShared},
+    {"mlp.shared_expert_gate.weight", TensorRole::kFfnSharedRouter},   // [1, D], reshaped at load
 };
 
 // Replaces a (small) norm tensor by an F32 copy holding 1 + w.
@@ -150,8 +160,11 @@ Result<ModelConfig> read_config(const json::Value& cfg) {
   if (!mt || !mt->is_string()) return Corrupt("config.json: missing model_type");
   const std::string& type = mt->as_string();
   ModelConfig c;
-  if (type == "llama" || type == "mistral") c.architecture = "llama";
-  else if (type == "qwen2" || type == "qwen3" || type == "gemma" || type == "gemma2" || type == "phi3") c.architecture = type;
+  if (type == "llama" || type == "mistral" || type == "mixtral") c.architecture = "llama";
+  else if (type == "qwen2" || type == "qwen3" || type == "gemma" || type == "gemma2" || type == "phi3" ||
+           type == "granite" || type == "granitemoe") c.architecture = type;
+  else if (type == "qwen2_moe") c.architecture = "qwen2moe";
+  else if (type == "qwen3_moe") c.architecture = "qwen3moe";
   else if (type == "gemma3_text") c.architecture = "gemma3";
   else if (type == "gemma3") return Unsupported("multimodal Gemma 3 checkpoints are not supported; use a text-only (gemma3_text) model");
   else return Unsupported("Hugging Face model_type '" + type + "' is not supported yet");
@@ -210,7 +223,66 @@ Result<ModelConfig> read_config(const json::Value& cfg) {
   }
   c.attn_logit_softcap = static_cast<float>(get_float_or(cfg, "attn_logit_softcapping", 0.0));
   c.final_logit_softcap = static_cast<float>(get_float_or(cfg, "final_logit_softcapping", 0.0));
+
+  // MoE: Mixtral / Granite-MoE ("num_local_experts", expert width =
+  // intermediate_size) and Qwen-MoE ("num_experts", "moe_intermediate_size").
+  ENGINE_ASSIGN_OR_RETURN(int64_t n_exp, get_int_or(cfg, "num_local_experts", 0));
+  if (n_exp == 0 && (type == "qwen2_moe" || type == "qwen3_moe")) {
+    ENGINE_ASSIGN_OR_RETURN(n_exp, get_int_or(cfg, "num_experts", 0));
+  }
+  if (n_exp > 0) {
+    ENGINE_ASSIGN_OR_RETURN(int64_t used, get_int(cfg, "num_experts_per_tok"));
+    ENGINE_ASSIGN_OR_RETURN(int64_t moe_ff, get_int_or(cfg, "moe_intermediate_size", c.intermediate_size));
+    ENGINE_ASSIGN_OR_RETURN(int64_t shared_ff, get_int_or(cfg, "shared_expert_intermediate_size", 0));
+    ENGINE_ASSIGN_OR_RETURN(int64_t sparse_step, get_int_or(cfg, "decoder_sparse_step", 1));
+    const json::Value* dense_layers = field(cfg, "mlp_only_layers");
+    if (sparse_step != 1 || (dense_layers && dense_layers->is_array() && !dense_layers->as_array().empty())) {
+      return Unsupported("MoE models mixing dense and sparse layers are not supported yet");
+    }
+    c.moe.num_experts = static_cast<int32_t>(n_exp);
+    c.moe.experts_per_token = static_cast<int32_t>(used);
+    c.moe.expert_intermediate_size = moe_ff;
+    c.moe.shared_intermediate_size = shared_ff;
+    c.moe.num_shared_experts = shared_ff > 0 ? 1 : 0;
+  }
+  // Granite multipliers.
+  c.embedding_scale = static_cast<float>(get_float_or(cfg, "embedding_multiplier", 1.0));
+  c.residual_scale = static_cast<float>(get_float_or(cfg, "residual_multiplier", 1.0));
+  c.attn_scale = static_cast<float>(get_float_or(cfg, "attention_multiplier", 0.0));
+  c.logit_scale = static_cast<float>(get_float_or(cfg, "logits_scaling", 1.0));
   return c;
+}
+
+bool parse_expert_name(std::string_view name, TensorRole& role, int& layer, int& expert) {
+  constexpr std::string_view kPrefix = "model.layers.";
+  if (!name.starts_with(kPrefix)) return false;
+  name.remove_prefix(kPrefix.size());
+  auto number = [](std::string_view& s, int& out) {
+    const size_t dot = s.find('.');
+    if (dot == std::string_view::npos || dot == 0) return false;
+    const auto [p, ec] = std::from_chars(s.data(), s.data() + dot, out);
+    if (ec != std::errc() || p != s.data() + dot || out < 0) return false;
+    s.remove_prefix(dot + 1);
+    return true;
+  };
+  if (!number(name, layer)) return false;
+  for (std::string_view base : {"block_sparse_moe.experts.", "mlp.experts."}) {
+    if (!name.starts_with(base)) continue;
+    name.remove_prefix(base.size());
+    if (!number(name, expert)) return false;
+    static constexpr std::pair<std::string_view, TensorRole> kParts[] = {
+        {"w1.weight", TensorRole::kFfnGateExperts},        {"w3.weight", TensorRole::kFfnUpExperts},
+        {"w2.weight", TensorRole::kFfnDownExperts},        {"gate_proj.weight", TensorRole::kFfnGateExperts},
+        {"up_proj.weight", TensorRole::kFfnUpExperts},     {"down_proj.weight", TensorRole::kFfnDownExperts}};
+    for (const auto& [suffix, r] : kParts) {
+      if (name == suffix) {
+        role = r;
+        return true;
+      }
+    }
+    return false;
+  }
+  return false;
 }
 
 bool parse_tensor_name(std::string_view name, std::string_view arch, TensorRole& role, int& layer) {
@@ -339,6 +411,23 @@ Status apply_conventions(const json::Value& cfg, const ModelConfig& c, TensorReg
                            TensorRole::kPostFfnNorm, TensorRole::kAttnQNorm, TensorRole::kAttnKNorm}) {
         ENGINE_RETURN_IF_ERROR(fold_one_plus(w, r, l));
       }
+    }
+  }
+  for (int l = 0; l < c.num_layers && c.moe.num_experts > 0; ++l) {
+    // Granite-MoE input_linear [E, 2F, D] = gate|up: zero-copy halves.
+    if (const Tensor* gu = w.find(TensorRole::kFfnGateUp, l); gu && gu->shape().rank() == 3) {
+      const int64_t f = gu->shape()[1] / 2;
+      ENGINE_ASSIGN_OR_RETURN(Tensor gate, gu->slice(1, 0, f));
+      ENGINE_ASSIGN_OR_RETURN(Tensor up, gu->slice(1, f, f));
+      w.take(TensorRole::kFfnGateUp, l);
+      ENGINE_RETURN_IF_ERROR(w.add(TensorRole::kFfnGateExperts, l, std::move(gate)));
+      ENGINE_RETURN_IF_ERROR(w.add(TensorRole::kFfnUpExperts, l, std::move(up)));
+    }
+    // Qwen-MoE shared_expert_gate is a [1, D] linear; the IR stores it as [D].
+    if (const Tensor* g = w.find(TensorRole::kFfnSharedRouter, l); g && g->shape().rank() == 2) {
+      ENGINE_ASSIGN_OR_RETURN(Tensor v, g->reshape({g->numel()}));
+      w.take(TensorRole::kFfnSharedRouter, l);
+      ENGINE_RETURN_IF_ERROR(w.add(TensorRole::kFfnSharedRouter, l, std::move(v)));
     }
   }
   if (c.architecture == "llama") {

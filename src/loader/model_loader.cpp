@@ -175,12 +175,26 @@ Result<std::unique_ptr<LoadedModel>> load_safetensors(const std::string& path) {
   m->weights = TensorRegistry(m->config.num_layers);
   std::map<std::string, int64_t> bytes_by_dtype;
   std::map<std::string, PackedParts> packed;  // by linear weight name
+  std::map<std::pair<TensorRole, int>, std::vector<Tensor>> expert_parts;  // per-expert 2-D tensors
+  const int32_t num_experts = m->config.moe.num_experts;
+  if (scheme && num_experts > 0) return Unsupported("GPTQ/AWQ mixture-of-experts checkpoints are not supported yet");
   std::vector<std::unique_ptr<safetensors::SafeTensorsFile>> shards;
   for (const std::string& shard : files.weights) {
     ENGINE_ASSIGN_OR_RETURN(auto st, safetensors::SafeTensorsFile::open(shard));
     for (const safetensors::TensorInfo& info : st->tensors()) {
       TensorRole role;
-      int layer;
+      int layer, expert;
+      if (num_experts > 0 && hf::parse_expert_name(info.name, role, layer, expert)) {
+        if (layer >= m->config.num_layers || expert >= num_experts) {
+          return Corrupt("expert tensor '" + info.name + "' is out of range");
+        }
+        auto& slot = expert_parts[{role, layer}];
+        slot.resize(static_cast<size_t>(num_experts));
+        ENGINE_ASSIGN_OR_RETURN(slot[static_cast<size_t>(expert)], st->load_tensor(info));
+        m->weight_bytes += static_cast<int64_t>(info.nbytes);
+        bytes_by_dtype[info.dtype_name] += static_cast<int64_t>(info.nbytes);
+        continue;
+      }
       std::string weight_name, component;
       if (scheme && hf::split_packed_name(info.name, weight_name, component) &&
           hf::parse_tensor_name(weight_name, m->config.architecture, role, layer)) {
@@ -204,6 +218,25 @@ Result<std::unique_ptr<LoadedModel>> load_safetensors(const std::string& path) {
       bytes_by_dtype[info.dtype_name] += static_cast<int64_t>(info.nbytes);
     }
     shards.push_back(std::move(st));
+  }
+  // Stack per-expert matrices into the IR's [experts, rows, cols] tensors
+  // (one copy at load; GGUF and Granite-MoE checkpoints are already 3-D).
+  for (auto& [key, parts] : expert_parts) {
+    const Tensor& first = parts.front();
+    for (size_t e = 0; e < parts.size(); ++e) {
+      if (!parts[e].defined() || parts[e].dtype() != first.dtype() || !(parts[e].shape() == first.shape()) ||
+          first.shape().rank() != 2) {
+        return Corrupt("expert " + std::to_string(e) + " of " + std::string(tensor_role_name(key.first)) + " (layer " +
+                       std::to_string(key.second) + ") is missing or inconsistent");
+      }
+    }
+    const int64_t rows = first.shape()[0], cols = first.shape()[1];
+    const auto bytes = static_cast<size_t>(dtype_row_bytes(first.dtype(), cols) * rows);
+    ENGINE_ASSIGN_OR_RETURN(Tensor stacked, Tensor::empty(first.dtype(), {num_experts, rows, cols}));
+    for (size_t e = 0; e < parts.size(); ++e) {
+      std::memcpy(static_cast<std::byte*>(stacked.data()) + e * bytes, parts[e].data(), bytes);
+    }
+    ENGINE_RETURN_IF_ERROR(m->weights.add(key.first, key.second, std::move(stacked)));
   }
   // Reported "quantization": the dominant weight dtype (F32 / F16 / BF16).
   for (const auto& [name, bytes] : bytes_by_dtype) {

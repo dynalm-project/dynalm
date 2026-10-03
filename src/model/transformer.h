@@ -38,7 +38,8 @@ struct SeqBatch {
 // Optional per-op timing of forward passes (off by default; profiling adds
 // one timestamp per op).
 enum class ForwardOp : uint8_t {
-  kEmbed, kNorm, kQkv, kRope, kKvStore, kAttention, kAttnOut, kMlpUp, kAct, kMlpDown, kLmHead, kCount
+  kEmbed, kNorm, kQkv, kRope, kKvStore, kAttention, kAttnOut, kMlpUp, kAct, kMlpDown, kMoeRoute, kMoeExperts,
+  kMoeScatter, kLmHead, kCount
 };
 std::string_view forward_op_name(ForwardOp op);
 
@@ -88,7 +89,14 @@ class Transformer {
     TensorView b_up, b_down;
     TensorView post_ffn_norm;
     bool fused_qkv = false, fused_gate_up = false;
+    // MoE: router [experts, hidden]; per-expert 2-D views of the 3-D expert
+    // tensors (gate, up, down); optional shared expert with sigmoid gate.
+    TensorView router;
+    std::vector<std::array<TensorView, 3>> experts;
+    TensorView sh_router, sh_gate, sh_up, sh_down;
   };
+  // Routed MoE MLP for rows of `xn`, accumulated into `out` (zeroed first).
+  void moe_mlp(const Layer& L, const TensorView& xn, const TensorView& out, int64_t m);
 
   Transformer(const ModelConfig& c, Backend& b) : config_(c), backend_(b) {}
   Status init(const TensorRegistry& weights, int32_t max_batch);
@@ -107,6 +115,11 @@ class Transformer {
 
   // Scratch [max_batch, ...]
   Tensor x_, xn_, qkv_, attn_, o_, ff_a_, ff_b_;
+  // MoE scratch: router logits, gathered rows, expert intermediates/outputs.
+  Tensor router_, moe_x_, moe_a_, moe_b_, moe_y_, sh_gate_;
+  std::vector<std::vector<std::pair<int32_t, float>>> expert_rows_;  // per expert: (row, weight)
+  std::vector<std::pair<float, int32_t>> route_scratch_;
+  std::vector<Backend::MatmulJob> up_jobs_, down_jobs_;
   // Per-call batch metadata (reused, capacity max_batch).
   std::vector<TokenId> batch_tokens_;
   std::vector<int32_t> batch_pos_, batch_seq_, logit_rows_;

@@ -59,6 +59,15 @@ class Backend {
   virtual void embedding(const TensorView& table, std::span<const int32_t> ids, const TensorView& out) = 0;
   // y[m, n] = x[m, k] · w[n, k]ᵀ (+ bias[n])
   virtual void matmul(const TensorView& x, const TensorView& w, const TensorView* bias, const TensorView& y) = 0;
+  // Several independent matmuls (no bias), e.g. the active experts of an MoE
+  // layer. Backends may run them in one parallel region; the default runs
+  // them in order.
+  struct MatmulJob {
+    TensorView x, w, y;
+  };
+  virtual void matmul_many(std::span<const MatmulJob> jobs) {
+    for (const MatmulJob& j : jobs) matmul(j.x, j.w, nullptr, j.y);
+  }
   // Row-wise RMSNorm: y = x / rms(x) * weight
   virtual void rms_norm(const TensorView& x, const TensorView& weight, float eps, const TensorView& y) = 0;
   // Row-wise LayerNorm: y = (x - mean) / std * weight + bias (bias optional)

@@ -53,6 +53,11 @@ struct MoeConfig {
   int32_t experts_per_token = 0;
   int32_t num_shared_experts = 0;
   int64_t expert_intermediate_size = 0;
+  int64_t shared_intermediate_size = 0;  // shared expert FFN width (Qwen2-MoE)
+  // Gating: softmax over all experts, keep the top `experts_per_token`; if
+  // set, renormalize the kept weights to sum to 1 (Mixtral, Qwen3-MoE,
+  // Granite-MoE) — Qwen2-MoE keeps the raw softmax weights.
+  bool normalize_topk = true;
 };
 
 // Precision is tracked per concept, never conflated. Weight dtypes are per
@@ -98,7 +103,9 @@ struct ModelConfig {
   bool post_ffn_norm = false;
   bool tied_embeddings = false;   // lm_head shares token embedding
 
-  float embedding_scale = 1.0f;       // Gemma: sqrt(hidden_size)
+  float embedding_scale = 1.0f;       // Gemma: sqrt(hidden_size); Granite: embedding_multiplier
+  float residual_scale = 1.0f;        // Granite: each block's output is scaled before the residual add
+  float logit_scale = 1.0f;           // Granite: logits are divided by this
   float attn_logit_softcap = 0.0f;    // 0 = off (Gemma2)
   float final_logit_softcap = 0.0f;   // 0 = off (Gemma2)
   float attn_scale = 0.0f;            // 0 = 1/sqrt(head_dim)

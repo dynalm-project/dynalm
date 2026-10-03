@@ -38,8 +38,8 @@ Result<ModelConfig> read_model_config(const GgufFile& f) {
   ENGINE_ASSIGN_OR_RETURN(std::string_view arch_sv, f.get_string("general.architecture"));
   const std::string arch(arch_sv);
   c.architecture = arch;
-  // llama.cpp's converter permutes Llama Q/K rows for interleaved RoPE.
-  c.qk_rows_interleaved = arch == "llama";
+  // llama.cpp's converter permutes Llama-derived Q/K rows for interleaved RoPE.
+  c.qk_rows_interleaved = arch == "llama" || arch == "granite" || arch == "granitemoe";
   if (auto name = f.get_string("general.name"); name.ok()) c.name = std::string(*name);
 
   ENGINE_ASSIGN_OR_RETURN(int64_t hidden, arch_int(f, arch, "embedding_length"));
@@ -110,10 +110,24 @@ Result<ModelConfig> read_model_config(const GgufFile& f) {
   ENGINE_ASSIGN_OR_RETURN(int64_t n_used, arch_int_or(f, arch, "expert_used_count", 0));
   ENGINE_ASSIGN_OR_RETURN(int64_t n_shared, arch_int_or(f, arch, "expert_shared_count", 0));
   ENGINE_ASSIGN_OR_RETURN(int64_t exp_ffn, arch_int_or(f, arch, "expert_feed_forward_length", 0));
+  ENGINE_ASSIGN_OR_RETURN(int64_t shared_ffn, arch_int_or(f, arch, "expert_shared_feed_forward_length", 0));
   c.moe.num_experts = static_cast<int32_t>(n_exp);
   c.moe.experts_per_token = static_cast<int32_t>(n_used);
   c.moe.num_shared_experts = static_cast<int32_t>(n_shared);
-  c.moe.expert_intermediate_size = exp_ffn;
+  // Mixtral / Granite-MoE store the expert width as feed_forward_length.
+  c.moe.expert_intermediate_size = exp_ffn > 0 ? exp_ffn : (n_exp > 0 ? ffn : 0);
+  c.moe.shared_intermediate_size = shared_ffn;
+  if (auto norm = f.get_bool(arch + ".expert_weights_norm"); norm.ok()) c.moe.normalize_topk = *norm;
+
+  // Granite multipliers (absent elsewhere: identity).
+  ENGINE_ASSIGN_OR_RETURN(double emb_scale, arch_float_or(f, arch, "embedding_scale", 1.0));
+  ENGINE_ASSIGN_OR_RETURN(double res_scale, arch_float_or(f, arch, "residual_scale", 1.0));
+  ENGINE_ASSIGN_OR_RETURN(double att_scale, arch_float_or(f, arch, "attention.scale", 0.0));
+  ENGINE_ASSIGN_OR_RETURN(double logit_scale, arch_float_or(f, arch, "logit_scale", 1.0));
+  c.embedding_scale = static_cast<float>(emb_scale);
+  c.residual_scale = static_cast<float>(res_scale);
+  c.attn_scale = static_cast<float>(att_scale);
+  c.logit_scale = static_cast<float>(logit_scale);
 
   // Tied embeddings: no separate output projection.
   c.tied_embeddings = f.find_tensor("output.weight") == nullptr;
@@ -165,6 +179,10 @@ constexpr NameRole kLayer[] = {
     {"ffn_gate_exps.weight", TensorRole::kFfnGateExperts},
     {"ffn_up_exps.weight", TensorRole::kFfnUpExperts},
     {"ffn_down_exps.weight", TensorRole::kFfnDownExperts},
+    {"ffn_gate_inp_shexp.weight", TensorRole::kFfnSharedRouter},
+    {"ffn_gate_shexp.weight", TensorRole::kFfnGateShared},
+    {"ffn_up_shexp.weight", TensorRole::kFfnUpShared},
+    {"ffn_down_shexp.weight", TensorRole::kFfnDownShared},
 };
 
 }  // namespace

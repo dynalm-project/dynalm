@@ -5,7 +5,8 @@ Generates golden logits for the C++ runtime tests. Written from the Hugging
 Face modeling code of each family (not from the C++ runtime), in fp32 with no
 KV cache (full recompute per step), so it is easy to audit.
 
-Supported: llama, qwen2, qwen3, gemma, gemma2, gemma3, phi3. Weights may be
+Supported: llama (incl. Mixtral MoE), granite, granitemoe, qwen2, qwen3, qwen2moe,
+qwen3moe, gemma, gemma2, gemma3, phi3. Weights may be
 f32/f16 or any GGML quantized type (dequantized with gguf-py's reference code).
 
     PYTHONUTF8=1 python tools/ref_model.py models/SmolLM2-135M-Instruct-f16.gguf \
@@ -99,6 +100,33 @@ def silu(x):
     return x / (1 + np.exp(-x))
 
 
+def softmax(x):
+    e = np.exp(x - x.max(-1, keepdims=True))
+    return e / e.sum(-1, keepdims=True)
+
+
+def moe(h, w, p, k, normalize, act):
+    """Routed experts as in HF MixtralSparseMoeBlock / Qwen2MoeSparseMoeBlock:
+    softmax over all experts, keep top-k, optionally renormalize."""
+    probs = softmax(h @ w[p + "ffn_gate_inp.weight"].T)  # [T, E]
+    gate_e, up_e, down_e = (w[p + f"ffn_{n}_exps.weight"] for n in ("gate", "up", "down"))
+    out = np.zeros_like(h)
+    for t in range(h.shape[0]):
+        top = np.argsort(-probs[t], kind="stable")[:k]
+        wt = probs[t, top]
+        if normalize:
+            wt = wt / wt.sum()
+        for e, we in zip(top, wt):
+            y = (act(h[t] @ gate_e[e].T) * (h[t] @ up_e[e].T)) @ down_e[e].T
+            out[t] += we * y
+    if p + "ffn_up_shexp.weight" in w:  # Qwen2-MoE shared expert
+        sh = (act(h @ w[p + "ffn_gate_shexp.weight"].T) * (h @ w[p + "ffn_up_shexp.weight"].T)) @ w[p + "ffn_down_shexp.weight"].T
+        if p + "ffn_gate_inp_shexp.weight" in w:
+            sh = sh * (1 / (1 + np.exp(-(h @ w[p + "ffn_gate_inp_shexp.weight"])[:, None])))
+        out = out + sh
+    return out
+
+
 def forward(kv, w, tokens):
     arch = kv["general.architecture"]
     g = lambda k, d=None: kv.get(f"{arch}.{k}", d)
@@ -113,9 +141,14 @@ def forward(kv, w, tokens):
     final_cap = g("final_logit_softcapping", 0.0) or 0.0
 
     gemma = arch.startswith("gemma")
-    style = "interleaved" if arch == "llama" else "half"
+    style = "interleaved" if arch in ("llama", "granite", "granitemoe") else "half"
     act = gelu_tanh if gemma else silu
-    scale = hd ** -0.5
+    scale = g("attention.scale", 0.0) or hd ** -0.5  # Granite: attention_multiplier
+    emb_scale = g("embedding_scale", 1.0)
+    res_scale = g("residual_scale", 1.0)
+    logit_scale = g("logit_scale", 1.0)
+    n_used = g("expert_used_count", 0)
+    moe_norm = arch != "qwen2moe"  # Qwen2-MoE: norm_topk_prob = False
     if (arch == "gemma2" and L == 46) or (arch == "gemma3" and L == 62):
         scale = (D // H) ** -0.5
 
@@ -124,6 +157,8 @@ def forward(kv, w, tokens):
     x = w.rows("token_embd.weight", tokens)
     if gemma:
         x = x * np.float32(np.sqrt(D))
+    elif emb_scale != 1.0:
+        x = x * np.float32(emb_scale)
     qi, ki = np.arange(T)[:, None], np.arange(T)[None, :]
     causal = ki <= qi
 
@@ -164,9 +199,12 @@ def forward(kv, w, tokens):
         o = np.einsum("hts,shd->thd", s, v).reshape(T, H * hd) @ w[p + "attn_output.weight"].T
         if p + "post_attention_norm.weight" in w:
             o = rms_norm(o, w[p + "post_attention_norm.weight"], eps)
-        x = x + o
+        x = x + o * np.float32(res_scale)
 
         h = rms_norm(x, w[p + "ffn_norm.weight"], eps)
+        if p + "ffn_gate_inp.weight" in w:
+            x = x + moe(h, w, p, n_used, moe_norm, act) * np.float32(res_scale)
+            continue
         if p + "ffn_gate.weight" in w:
             gate, up = h @ w[p + "ffn_gate.weight"].T, h @ w[p + "ffn_up.weight"].T
         else:  # phi3: fused gate|up stored as ffn_up
@@ -174,11 +212,11 @@ def forward(kv, w, tokens):
         f = (act(gate) * up) @ w[p + "ffn_down.weight"].T
         if p + "post_ffw_norm.weight" in w:
             f = rms_norm(f, w[p + "post_ffw_norm.weight"], eps)
-        x = x + f
+        x = x + f * np.float32(res_scale)
 
     x = rms_norm(x[-1:], w["output_norm.weight"], eps)
     lm = "output.weight" if "output.weight" in w else "token_embd.weight"
-    logits = (x @ w[lm].T)[0]
+    logits = (x @ w[lm].T)[0] / np.float32(logit_scale)
     if final_cap:
         logits = final_cap * np.tanh(logits / final_cap)
     return logits

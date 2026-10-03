@@ -30,6 +30,9 @@ set(ENGINE_TEST_MODEL_Q8 "${PROJECT_SOURCE_DIR}/models/SmolLM2-135M-Instruct-Q8_
 set(ENGINE_TEST_MODEL_QWEN_Q4 "${PROJECT_SOURCE_DIR}/models/qwen2.5-0.5b-instruct-q4_k_m.gguf"
     CACHE FILEPATH "Qwen Q4_K_M GGUF (mixed Q4_K/Q5_0/Q6_K/Q8_0) for quantized golden tests")
 
+set(ENGINE_TEST_MODEL_GRANITE_MOE "${PROJECT_SOURCE_DIR}/models/granite-3.1-1b-a400m-instruct-Q8_0.gguf"
+    CACHE FILEPATH "Granite-3.1-1B-A400M (MoE, 32 experts / 8 active) Q8_0 GGUF for MoE golden tests")
+
 function(engine_add_test name)
   add_executable(${name} ${ARGN})
   target_link_libraries(${name} PRIVATE engine_core GTest::gtest_main)
@@ -41,7 +44,8 @@ function(engine_add_test name)
     ENGINE_TEST_MODEL_QWEN_F16_PATH="${ENGINE_TEST_MODEL_QWEN_F16}"
     ENGINE_TEST_MODEL_GEMMA_PATH="${ENGINE_TEST_MODEL_GEMMA}"
     ENGINE_TEST_MODEL_Q8_PATH="${ENGINE_TEST_MODEL_Q8}"
-    ENGINE_TEST_MODEL_QWEN_Q4_PATH="${ENGINE_TEST_MODEL_QWEN_Q4}")
+    ENGINE_TEST_MODEL_QWEN_Q4_PATH="${ENGINE_TEST_MODEL_QWEN_Q4}"
+    ENGINE_TEST_MODEL_GRANITE_MOE_PATH="${ENGINE_TEST_MODEL_GRANITE_MOE}")
   gtest_discover_tests(${name} DISCOVERY_TIMEOUT 60)
 endfunction()
 

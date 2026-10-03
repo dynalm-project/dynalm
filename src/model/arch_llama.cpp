@@ -1,5 +1,7 @@
-// Llama family: Llama 1/2/3.x, Mistral (dense), DeepSeek-LLM (dense), SmolLM,
-// TinyLlama and other GGUF files with general.architecture = "llama".
+// Llama family: Llama 1/2/3.x, Mistral, Mixtral (MoE: expert tensors present),
+// DeepSeek-LLM (dense), SmolLM, TinyLlama, and IBM Granite / Granite-MoE
+// (Llama layout plus embedding / attention / residual / logit multipliers,
+// which the loader puts in ModelConfig).
 
 #include <array>
 
@@ -13,7 +15,7 @@ class LlamaArchitecture final : public ModelArchitecture {
   std::string_view name() const override { return "Llama"; }
 
   std::span<const std::string_view> ids() const override {
-    static constexpr std::array<std::string_view, 1> kIds = {"llama"};
+    static constexpr std::array<std::string_view, 3> kIds = {"llama", "granite", "granitemoe"};
     return kIds;
   }
 
@@ -30,6 +32,8 @@ class LlamaArchitecture final : public ModelArchitecture {
     if (c.rope.scaling == RopeScaling::kYarn) {
       return Unsupported("Llama with YaRN RoPE scaling is not supported yet");
     }
+    // Mixtral and Granite-MoE renormalize the top-k routing weights.
+    c.moe.normalize_topk = true;
     return Status::Ok();
   }
 };

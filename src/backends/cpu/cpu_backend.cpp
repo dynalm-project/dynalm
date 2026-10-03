@@ -72,6 +72,40 @@ void CpuBackend::embedding(const TensorView& table, std::span<const int32_t> ids
   }
 }
 
+void CpuBackend::matmul_many(std::span<const MatmulJob> jobs) {
+  // Jobs with several rows (MoE prefill) get the full GEMM path one by one.
+  // Few-row jobs (decode) are small: one parallel region over all jobs'
+  // output rows, fused dequantize-dot, instead of one dispatch per job.
+  constexpr int64_t kMaxFusedRows = 3, kChunk = 16;
+  bool fused = true;
+  for (const MatmulJob& j : jobs) fused = fused && rows(j.x) <= kMaxFusedRows;
+  if (!fused || jobs.size() <= 1) {
+    for (const MatmulJob& j : jobs) matmul(j.x, j.w, nullptr, j.y);
+    return;
+  }
+  thread_local std::vector<size_t> first_chunk;  // prefix sums of per-job chunk counts
+  first_chunk.assign(1, 0);
+  for (const MatmulJob& j : jobs) first_chunk.push_back(first_chunk.back() + static_cast<size_t>((rows(j.w) + kChunk - 1) / kChunk));
+  const size_t total = first_chunk.back();
+  const std::vector<size_t>& offsets = first_chunk;  // read by the workers below
+  pool_.parallel_for(total, grain_for(total, pool_.size(), 1), [&](size_t begin, size_t end) {
+    for (size_t c = begin; c < end; ++c) {
+      const size_t ji = static_cast<size_t>(std::upper_bound(offsets.begin(), offsets.end(), c) - offsets.begin()) - 1;
+      const MatmulJob& j = jobs[ji];
+      const int64_t m = rows(j.x), k = cols(j.x), n = rows(j.w);
+      const VecDotFn vec_dot = k_.vec_dot_for(j.w.dtype());
+      const int64_t w_row_bytes = dtype_row_bytes(j.w.dtype(), k);
+      const auto* wbase = static_cast<const std::byte*>(j.w.data());
+      const int64_t n0 = static_cast<int64_t>(c - offsets[ji]) * kChunk, n1 = std::min(n, n0 + kChunk);
+      for (int64_t r = n0; r < n1; ++r) {
+        for (int64_t i = 0; i < m; ++i) {
+          row_ptr<float>(j.y, i)[r] = vec_dot(wbase + r * w_row_bytes, row_ptr<const float>(j.x, i), k);
+        }
+      }
+    }
+  });
+}
+
 void CpuBackend::matmul(const TensorView& x, const TensorView& w, const TensorView* bias, const TensorView& y) {
   const int64_t m = rows(x), k = cols(x), n = rows(w);
   assert(cols(w) == k && cols(y) == n && rows(y) == m);

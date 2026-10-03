@@ -11,6 +11,8 @@
 #include <sstream>
 
 #include "backends/cpu/cpu_backend.h"
+#include "platform/cpu_info.h"
+#include "platform/isa.h"
 #include "dtype/fp16.h"
 #include "kv_cache/kv_cache.h"
 #include "loader/model_loader.h"
@@ -485,6 +487,40 @@ TEST(RuntimeGolden, RejectsInvalidInput) {
   const TokenId ok[] = {1};
   const int32_t far[] = {1000};  // no block for this position
   EXPECT_FALSE(rm->transformer->forward(ok, far, *rm->cache, seq.block_table(), logits).ok());
+}
+
+TEST(CpuBackend, MatmulManyMatchesIndividualMatmuls) {
+  // MoE batches: several independent (x, w, y) jobs with 1-3 rows run in one
+  // parallel region (fused dot path); larger jobs fall back to matmul().
+  ThreadPool pool(4);
+  CpuBackend be(pool, select_best_isa(cpu_info().features));
+  std::mt19937 rng(25);
+  std::uniform_real_distribution<float> u(-1.0f, 1.0f);
+  constexpr int64_t kK = 64;
+  for (const std::vector<int64_t>& rows : {std::vector<int64_t>{1, 2, 3, 1}, std::vector<int64_t>{1, 5, 2}}) {
+    std::vector<Tensor> xs, ws, ys, refs;
+    std::vector<Backend::MatmulJob> jobs;
+    for (size_t j = 0; j < rows.size(); ++j) {
+      const int64_t n = 17 + 13 * static_cast<int64_t>(j);  // not a multiple of the 16-row chunk
+      Tensor x = *Tensor::empty(DType::kF32, {rows[j], kK});
+      Tensor w = *Tensor::empty(DType::kF16, {n, kK});
+      for (int64_t i = 0; i < x.numel(); ++i) x.data_as<float>()[i] = u(rng);
+      for (int64_t i = 0; i < w.numel(); ++i) w.data_as<uint16_t>()[i] = fp32_to_fp16(u(rng));
+      ys.push_back(*Tensor::zeros(DType::kF32, {rows[j], n}));
+      refs.push_back(*Tensor::zeros(DType::kF32, {rows[j], n}));
+      be.matmul(x, w, nullptr, refs.back());
+      jobs.push_back({x.view(), w.view(), ys.back().view()});
+      xs.push_back(std::move(x));
+      ws.push_back(std::move(w));
+    }
+    be.matmul_many(jobs);
+    for (size_t j = 0; j < jobs.size(); ++j) {
+      for (int64_t i = 0; i < ys[j].numel(); ++i) {
+        const float want = refs[j].data_as<float>()[i];
+        EXPECT_NEAR(ys[j].data_as<float>()[i], want, 1e-4f + 1e-5f * std::abs(want)) << "job " << j << " elem " << i;
+      }
+    }
+  }
 }
 
 }  // namespace

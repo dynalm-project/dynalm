@@ -30,6 +30,7 @@ class CpuBackend final : public Backend {
 
   void embedding(const TensorView& table, std::span<const int32_t> ids, const TensorView& out) override;
   void matmul(const TensorView& x, const TensorView& w, const TensorView* bias, const TensorView& y) override;
+  void matmul_many(std::span<const MatmulJob> jobs) override;
   void rms_norm(const TensorView& x, const TensorView& weight, float eps, const TensorView& y) override;
   void layer_norm(const TensorView& x, const TensorView& weight, const TensorView* bias, float eps,
                   const TensorView& y) override;

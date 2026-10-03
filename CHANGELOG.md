@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+### Phase 25 — MoE support
+- Generic Transformer MoE (DD-042):
+  - host-side routing (softmax, top-k, optional renormalization);
+  - each active expert runs once per batch on its gathered rows, with a weighted scatter-add;
+  - optional shared expert with a sigmoid gate.
+- Families:
+  - Mixtral (GGUF `llama` + experts, HF `mixtral`);
+  - Qwen2-MoE / Qwen1.5-MoE and Qwen3-MoE (GGUF `qwen2moe`/`qwen3moe`, HF `qwen2_moe`/`qwen3_moe`);
+  - IBM Granite and Granite-MoE (`granite`, `granitemoe`), whose embedding, attention,
+    residual and logit multipliers are now ModelConfig scalars.
+- New tensor roles for shared experts.
+- GGUF: reads `expert_shared_feed_forward_length` and `expert_weights_norm`.
+- HF: per-expert tensors are stacked into 3-D at load, and Granite's fused `input_linear` is
+  split without a copy. Models mixing dense and MoE layers, and GPTQ/AWQ MoE checkpoints, are
+  rejected clearly.
+- `tools/ref_model.py`: MoE and Granite multipliers, written from the HF modeling code.
+- `tools/make_tiny_models.py` / `make_tiny_hf.py`: four tiny MoE fixtures, as GGUF and HF.
+- `Backend::matmul_many` (CPU: one parallel region for many small matmuls): Granite-MoE decode
+  59.7 → 29.1 ms/token.
+- Granite chat template (`<|start_of_role|>`), including its default system prompt and turn
+  separator, read from the template text.
+- Profiler ops `moe_route`, `moe_experts`, `moe_gather_scatter`.
+- Tests: MoE goldens, HF↔GGUF equivalence and the compat suite for all four; a Granite-MoE
+  real-model golden; Granite template vs jinja2 rendering; `matmul_many` vs `matmul`.
+
 ### Phase 24 — GPTQ/AWQ
 - `quant/gptq_awq`: `PackedScheme`, exact GPTQ (v1/v2, 4/8-bit, act-order) and AWQ (GEMM,
   4-bit) unpacking and reference dequantization; load-time repack to Q4_0 / Q8_0 (bit-exact for

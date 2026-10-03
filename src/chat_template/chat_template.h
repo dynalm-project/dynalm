@@ -33,6 +33,7 @@ enum class ChatFormat {
   kGemma,      // <start_of_turn>user\n...<end_of_turn>  (role "model")
   kPhi3,       // <|user|>\n...<|end|>
   kDeepSeek2,  // <｜User｜>...<｜Assistant｜> (DeepSeek-V2/V3/R1)
+  kGranite,    // <|start_of_role|>role<|end_of_role|>...<|end_of_text|>  (IBM Granite 3.x)
 };
 
 std::string_view chat_format_name(ChatFormat f);
@@ -43,8 +44,8 @@ class ChatTemplate {
   // Detects the format from a Jinja template source. Unrecognized templates
   // are kUnsupported; callers may fall back to an explicit format.
   static Result<ChatTemplate> from_jinja(std::string_view jinja);
-  explicit ChatTemplate(ChatFormat format, std::string default_system = {})
-      : format_(format), default_system_(std::move(default_system)) {}
+  explicit ChatTemplate(ChatFormat format, std::string default_system = {}, std::string turn_separator = "\n")
+      : format_(format), default_system_(std::move(default_system)), separator_(std::move(turn_separator)) {}
 
   ChatFormat format() const { return format_; }
   const std::string& default_system() const { return default_system_; }
@@ -56,6 +57,7 @@ class ChatTemplate {
  private:
   ChatFormat format_;
   std::string default_system_;  // used by templates that inject one when absent
+  std::string separator_;       // text after each end-of-turn token (Granite: as in the template)
 };
 
 }  // namespace engine

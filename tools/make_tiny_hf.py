@@ -20,8 +20,28 @@ import sys
 import numpy as np
 from gguf import GGUFReader
 
-ARCHES = ["llama", "qwen2", "qwen3", "gemma", "gemma2", "gemma3", "phi3"]
-MODEL_TYPE = {"gemma3": "gemma3_text"}
+ARCHES = ["llama", "qwen2", "qwen3", "gemma", "gemma2", "gemma3", "phi3",
+          "mixtral", "qwen2moe", "qwen3moe", "granitemoe"]
+MODEL_TYPE = {"gemma3": "gemma3_text", "qwen2moe": "qwen2_moe", "qwen3moe": "qwen3_moe"}
+
+
+def moe_tensors(arch, l, rest, w):
+    """HF names for MoE tensors of layer l (GGUF stores experts as 3-D)."""
+    p = f"model.layers.{l}."
+    if rest == "ffn_gate_inp.weight":
+        return {p + {"mixtral": "block_sparse_moe.gate.weight",
+                     "granitemoe": "block_sparse_moe.router.layer.weight"}.get(arch, "mlp.gate.weight"): w}
+    if rest == "ffn_gate_inp_shexp.weight":
+        return {p + "mlp.shared_expert_gate.weight": w.reshape(1, -1)}
+    if rest.endswith("_shexp.weight"):
+        part = rest.split("_")[1]  # gate / up / down
+        return {p + f"mlp.shared_expert.{part}_proj.weight": w}
+    part = rest.split("_")[1]  # gate / up / down (3-D [E, rows, cols])
+    if arch == "granitemoe":
+        return {p + f"block_sparse_moe.{part}_exps": w}  # fused below
+    names = {"gate": "w1", "up": "w3", "down": "w2"} if arch == "mixtral" else             {"gate": "gate_proj", "up": "up_proj", "down": "down_proj"}
+    base = "block_sparse_moe.experts" if arch == "mixtral" else "mlp.experts"
+    return {p + f"{base}.{e}.{names[part]}.weight": w[e] for e in range(w.shape[0])}
 
 
 def field(r, key):
@@ -33,6 +53,7 @@ def field(r, key):
 
 
 def hf_name(arch, gname):
+    """HF name for a non-MoE GGUF tensor."""
     if gname == "token_embd.weight":
         return "model.embed_tokens.weight"
     if gname == "output_norm.weight":
@@ -87,7 +108,7 @@ def write_safetensors(path, tensors):
 
 def export(arch, data_dir):
     r = GGUFReader(os.path.join(data_dir, f"tiny_{arch}.gguf"))
-    a = arch
+    a = field(r, "general.architecture")  # "llama" for the Mixtral fixture
     heads, kv_heads = field(r, f"{a}.attention.head_count"), field(r, f"{a}.attention.head_count_kv")
     head_dim = field(r, f"{a}.attention.key_length")
     out_dir = os.path.join(data_dir, f"hf_tiny_{arch}")
@@ -96,13 +117,25 @@ def export(arch, data_dir):
     tensors = {}
     for t in r.tensors:
         w = np.array(t.data, dtype=np.float32).reshape(list(reversed([int(x) for x in t.shape])))
-        if arch == "llama" and t.name.endswith("attn_q.weight"):
+        permuted = a in ("llama", "granite", "granitemoe")
+        if permuted and t.name.endswith("attn_q.weight"):
             w = unpermute(w, heads)
-        if arch == "llama" and t.name.endswith("attn_k.weight"):
+        if permuted and t.name.endswith("attn_k.weight"):
             w = unpermute(w, kv_heads)
         if arch.startswith("gemma") and t.name.endswith("norm.weight"):
             w = w - 1.0
-        tensors[hf_name(arch, t.name)] = w.astype(np.float16)
+        rest = t.name.split(".", 2)[2] if t.name.startswith("blk.") else ""
+        if "exps" in rest or rest.startswith("ffn_gate_inp") or "shexp" in rest:
+            for k, v in moe_tensors(arch, int(t.name.split(".")[1]), rest, w).items():
+                tensors[k] = v.astype(np.float16)
+        else:
+            tensors[hf_name(arch, t.name)] = w.astype(np.float16)
+    if arch == "granitemoe":  # input_linear = gate|up along the row dim; output_linear = down
+        for l in range(field(r, f"{a}.block_count")):
+            p = f"model.layers.{l}.block_sparse_moe."
+            tensors[p + "input_linear.weight"] = np.concatenate(
+                [tensors.pop(p + "gate_exps"), tensors.pop(p + "up_exps")], axis=1)
+            tensors[p + "output_linear.weight"] = tensors.pop(p + "down_exps")
     write_safetensors(os.path.join(out_dir, "model.safetensors"), tensors)
 
     window = field(r, f"{a}.attention.sliding_window") or 0
@@ -128,6 +161,20 @@ def export(arch, data_dir):
     }
     if arch == "qwen2":
         config["use_sliding_window"] = False
+    if field(r, f"{a}.expert_count"):
+        n = field(r, f"{a}.expert_count")
+        config["num_local_experts" if arch in ("mixtral", "granitemoe") else "num_experts"] = n
+        config["num_experts_per_tok"] = field(r, f"{a}.expert_used_count")
+        if field(r, f"{a}.expert_feed_forward_length"):
+            config["moe_intermediate_size"] = field(r, f"{a}.expert_feed_forward_length")
+        if field(r, f"{a}.expert_shared_feed_forward_length"):
+            config["shared_expert_intermediate_size"] = field(r, f"{a}.expert_shared_feed_forward_length")
+        config["norm_topk_prob"] = arch != "qwen2moe"
+    if field(r, f"{a}.embedding_scale"):
+        config["embedding_multiplier"] = field(r, f"{a}.embedding_scale")
+        config["residual_multiplier"] = field(r, f"{a}.residual_scale")
+        config["attention_multiplier"] = field(r, f"{a}.attention.scale")
+        config["logits_scaling"] = field(r, f"{a}.logit_scale")
     if field(r, f"{a}.attn_logit_softcapping"):
         config["attn_logit_softcapping"] = field(r, f"{a}.attn_logit_softcapping")
         config["final_logit_softcapping"] = field(r, f"{a}.final_logit_softcapping")
@@ -159,7 +206,10 @@ def export(arch, data_dir):
 
 
 def main():
+    only = set(sys.argv[2:])
     for arch in ARCHES:
+        if only and arch not in only:
+            continue
         export(arch, sys.argv[1])
         print("wrote", f"hf_tiny_{arch}")
 

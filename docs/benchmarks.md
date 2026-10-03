@@ -569,3 +569,35 @@ Kernels, one 4096-element row (`bench_kernels`): Q4_1 dot 2533 → 487 ns (5.2×
 
 Load time is spent unpacking and repacking every linear layer on one thread (once per
 layer). GGUF loads are memory-maps only.
+
+## Phase 25 — mixture of experts (Granite-3.1-1B-A400M: 32 experts, 8 active, 1.3B total / 0.4B active)
+
+Where decode time went (`bench_profile`, Q8_0, 10 threads, ms per token):
+
+| version | total | expert matmuls | note |
+|---|---|---|---|
+| per-expert `matmul` calls | 59.7 | 42.4 | 576 small matmuls per token, each its own thread-pool dispatch |
+| `matmul_many` (one parallel region per layer for all active experts) | **29.1** | 17.7 | ≈ 290 MB of expert weights per token at ≈ 16 GB/s |
+
+Prefill, 256 tokens: 1.5 s → 0.98 s. Experts with many rows still use the GEMM path, one expert
+at a time.
+
+End to end (in-process `engine benchmark`, prompt 128 / output 64, 10 threads), against a dense
+model with a similar active size:
+
+| model | quant | c=1 ITL p50 ms | c=4 ITL p50 ms | c=4 out tok/s |
+|---|---|---|---|---|
+| Granite-3.1-1B-A400M (MoE) | Q8_0 | **28.1** | 59.8 | 39.4 |
+| Qwen2.5-0.5B (dense) | Q8_0 | 31.6 | 51.8 | 46.1 |
+| Granite-3.1-1B-A400M (MoE) | Q4_K_M | 34.5 | 64.6 | 35.9 |
+| Qwen2.5-0.5B (dense) | Q4_K_M | 30.4 | 48.7 | 46.9 |
+
+How to read this:
+- **Single stream.** One sequence touches only 8 of 32 experts per layer, so a 1.3B-parameter
+  MoE decodes as fast as a 0.5B dense model.
+- **Batched decode.** Different sequences route to different experts, so up to all 32 are read
+  per step. MoE batching therefore gains less than dense batching.
+- **Q4_K_M vs Q8_0.** Granite's Q4_K_M is slower than its Q8_0 at one stream: expert matrices
+  are small (512 × 1024), and the Q4_K fused dot does more work per byte than Q8_0.
+- **Cold start.** The first request after start-up page-faults the memory-mapped weights:
+  16 s TTFT through the Docker bind mount, versus 0.8 s warm (TODO: prefetch at load).

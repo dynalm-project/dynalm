@@ -45,6 +45,11 @@ Result<ModelConfig> read_config(const json::Value& config);
 // HF parameter name -> (role, layer); false if the engine does not use it.
 bool parse_tensor_name(std::string_view name, std::string_view arch, TensorRole& role, int& layer);
 
+// Per-expert MoE weights ("model.layers.L.block_sparse_moe.experts.E.w1.weight",
+// "model.layers.L.mlp.experts.E.up_proj.weight", ...) -> (expert role, layer, expert).
+// The loader stacks them into the 3-D expert tensors of the IR.
+bool parse_expert_name(std::string_view name, TensorRole& role, int& layer, int& expert);
+
 // Llama 3 "rope_scaling" -> rope_freqs factors (head_dim / 2 values), the same
 // values llama.cpp's converter stores. Empty if the config has no such scaling.
 Result<std::vector<float>> llama3_rope_factors(const json::Value& config, int32_t rope_dim, float base);

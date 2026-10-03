@@ -8,7 +8,10 @@
 | Gemma / Gemma 2 / Gemma 3 (text) | GemmaArchitecture (`gemma`, `gemma2`, `gemma3`) | ✅ tiny-model golden; Gemma-3-270M real golden |
 | Phi-3 / 3.5 / 4-mini (dense) | PhiArchitecture (`phi3`) | ✅ tiny-model golden (no real checkpoint fits the dev machine) |
 | DeepSeek dense (LLM/Coder, R1-Distill) | via Llama / Qwen adapters | ⚠ R1-Distill-Qwen OK; DeepSeek-LLM needs its pre-tokenizer (TODO) |
-| MoE (Mixtral, DeepSeek-MoE, Qwen-MoE) | — | Phase 25 |
+| Mixtral (MoE) | LlamaArchitecture (GGUF `llama` + experts; HF `mixtral`) | ✅ tiny golden + HF/GGUF equivalence (DD-042) |
+| Qwen2-MoE / Qwen1.5-MoE, Qwen3-MoE | QwenArchitecture (`qwen2moe`, `qwen3moe`) | ✅ tiny goldens (shared expert, raw vs renormalized gating) |
+| IBM Granite / Granite-MoE | LlamaArchitecture (`granite`, `granitemoe`) | ✅ tiny golden; Granite-3.1-1B-A400M real golden |
+| DeepSeek-MoE / V2 / V3, OLMoE | — | not yet (mixed dense/MoE layers, MLA attention; clear error) |
 
 Formats:
 - GGUF v2/v3 ✅.
@@ -36,7 +39,7 @@ Verified files: SmolLM2-135M-Instruct f16 (llama arch, 30 layers, 272 tensors).
 | HF `tokenizer.json`: SentencePiece-style BPE with byte fallback | ✅ (ids equal to GGUF: Gemma 3) |
 | HF Unigram / WordPiece, other split regexes | not yet (clear error) |
 
-Chat templates: ChatML, Llama-3, Llama-2, Mistral, Gemma, Phi-3, DeepSeek-V2/3.
+Chat templates: ChatML, Llama-3, Llama-2, Mistral, Gemma, Phi-3, DeepSeek-V2/3, Granite 3.x.
 
 Weight types that run today: f32, f16, bf16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q2_K, Q3_K, Q4_K,
 Q5_K, Q6_K (so every common GGUF file type: Q8_0, Q6_K, Q5_K_M, Q4_K_M, Q3_K_*, Q2_K).

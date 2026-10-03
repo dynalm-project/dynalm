@@ -37,6 +37,34 @@ std::string extract_chatml_default_system(std::string_view jinja) {
   return {};
 }
 
+// Granite 3.x: the default system prompt is built from string literals,
+//   set system_message = "Knowledge Cutoff Date: ... developed by IBM."
+//   ... {%- else %}{%- set system_message = system_message + " You are a helpful AI assistant." %}
+// (the no-tools, no-documents branch). The turn separator is whatever the
+// template writes after <|end_of_text|> (a newline or a space, by release).
+std::string literal_after(std::string_view j, std::string_view head) {
+  const size_t p = j.find(head);
+  if (p == std::string_view::npos) return {};
+  const size_t start = p + head.size();
+  const size_t end = j.find('"', start);
+  return end == std::string_view::npos ? std::string() : std::string(j.substr(start, end - start));
+}
+
+ChatTemplate granite_template(std::string_view j) {
+  std::string system = literal_after(j, "set system_message = \"");
+  const std::string tail = literal_after(j, "{%- else %}{%- set system_message = system_message + \"");
+  if (!system.empty()) system += tail;
+  std::string sep = "\n";
+  constexpr std::string_view kEnd = "<|end_of_text|>";
+  if (const size_t p = j.find(kEnd); p != std::string_view::npos) {
+    const size_t q = j.find('\'', p + kEnd.size());
+    if (q != std::string_view::npos && q - (p + kEnd.size()) <= 2) {
+      sep = std::string(j.substr(p + kEnd.size(), q - p - kEnd.size()));
+      if (sep == "\\n") sep = "\n";
+    }
+  }
+  return ChatTemplate(ChatFormat::kGranite, std::move(system), std::move(sep));
+}
 
 }  // namespace
 
@@ -49,13 +77,14 @@ std::string_view chat_format_name(ChatFormat f) {
     case ChatFormat::kGemma: return "gemma";
     case ChatFormat::kPhi3: return "phi3";
     case ChatFormat::kDeepSeek2: return "deepseek2";
+    case ChatFormat::kGranite: return "granite";
   }
   return "?";
 }
 
 Result<ChatFormat> parse_chat_format(std::string_view name) {
   for (ChatFormat f : {ChatFormat::kChatMl, ChatFormat::kLlama3, ChatFormat::kLlama2, ChatFormat::kMistral,
-                       ChatFormat::kGemma, ChatFormat::kPhi3, ChatFormat::kDeepSeek2}) {
+                       ChatFormat::kGemma, ChatFormat::kPhi3, ChatFormat::kDeepSeek2, ChatFormat::kGranite}) {
     if (chat_format_name(f) == name) return f;
   }
   return InvalidArgument("unknown chat template '" + std::string(name) + "'");
@@ -65,6 +94,7 @@ Result<ChatTemplate> ChatTemplate::from_jinja(std::string_view j) {
   if (j.empty()) return Unsupported("model has no chat template");
   if (contains(j, "<|im_start|>")) return ChatTemplate(ChatFormat::kChatMl, extract_chatml_default_system(j));
   if (contains(j, "<|start_header_id|>")) return ChatTemplate(ChatFormat::kLlama3);
+  if (contains(j, "<|start_of_role|>")) return granite_template(j);
   if (contains(j, "<start_of_turn>")) return ChatTemplate(ChatFormat::kGemma);
   if (contains(j, "<|user|>") && contains(j, "<|end|>")) return ChatTemplate(ChatFormat::kPhi3);
   if (contains(j, "<｜User｜>")) return ChatTemplate(ChatFormat::kDeepSeek2);
@@ -138,6 +168,16 @@ Result<std::string> ChatTemplate::apply(std::span<const ChatMessage> msgs, bool 
         }
       }
       (void)gen;  // the model continues directly after [/INST]
+      break;
+    }
+
+    case ChatFormat::kGranite: {
+      const std::string& system = has_system ? msgs.front().content : default_system_;
+      if (!system.empty()) out += "<|start_of_role|>system<|end_of_role|>" + system + "<|end_of_text|>" + separator_;
+      for (size_t i = has_system ? 1 : 0; i < msgs.size(); ++i) {
+        out += "<|start_of_role|>" + msgs[i].role + "<|end_of_role|>" + msgs[i].content + "<|end_of_text|>" + separator_;
+      }
+      if (gen) out += "<|start_of_role|>assistant<|end_of_role|>";
       break;
     }
 

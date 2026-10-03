@@ -226,7 +226,9 @@ TEST_P(TinyHf, MatchesGguf) {
   EXPECT_LT(d, 1e-4f) << arch;
 }
 
-INSTANTIATE_TEST_SUITE_P(All, TinyHf, ::testing::Values("llama", "qwen2", "qwen3", "gemma", "gemma2", "gemma3", "phi3"),
+INSTANTIATE_TEST_SUITE_P(All, TinyHf,
+                         ::testing::Values("llama", "qwen2", "qwen3", "gemma", "gemma2", "gemma3", "phi3", "mixtral",
+                                           "qwen2moe", "qwen3moe", "granitemoe"),
                          [](const ::testing::TestParamInfo<std::string>& i) { return i.param; });
 
 TEST(TinyHfSharded, IndexJsonShardsLoadLikeOneFile) {

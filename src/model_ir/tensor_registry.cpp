@@ -13,6 +13,7 @@ std::string_view tensor_role_name(TensorRole r) {
       "ffn_norm", "ffn_norm_bias", "ffn_gate", "ffn_up", "ffn_gate_up", "ffn_down",
       "ffn_up_bias", "ffn_down_bias", "post_ffn_norm",
       "ffn_router", "ffn_gate_experts", "ffn_up_experts", "ffn_down_experts",
+      "ffn_shared_router", "ffn_gate_shared", "ffn_up_shared", "ffn_down_shared",
   };
   static_assert(std::size(kNames) == static_cast<size_t>(TensorRole::kCount));
   return kNames[static_cast<size_t>(r)];

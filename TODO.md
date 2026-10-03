@@ -28,7 +28,7 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
 - [x] Phase 22 — Production hardening
 - [x] Phase 23 — SafeTensors
 - [x] Phase 24 — GPTQ/AWQ architecture preparation
-- [ ] Phase 25 — MoE support
+- [x] Phase 25 — MoE support
 - [ ] Phase 26 — Advanced sampling
 - [ ] Phase 27 — Speculative decoding preparation
 - [ ] Phase 28 — GPU backend architecture
@@ -43,6 +43,9 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
   rows in registers) to replace the expand path for small batches (DD-036).
 - GPTQ act-order: permute input channels (with the producing layer's outputs) to keep 4-bit storage (DD-041).
 - Native packed int4 kernels behind PackedScheme (GPU path: Marlin-style); parallel repack at load (2 s for 0.5B).
+- MoE: mixed dense/MoE layer stacks (DeepSeek-MoE first-k-dense, Qwen mlp_only_layers);
+  MLA attention for DeepSeek-V2/V3; OLMoE (full-width QK-norm); parallel gather/scatter and
+  concurrent expert GEMMs for MoE prefill.
 - Open-loop (Poisson arrival) mode for the load generator (DD-037).
 - Token-authenticated admin endpoint for deployments behind a same-host proxy (DD-039).
 - CPU affinity / thread pinning / NUMA placement (spec §32), measured against the baselines.

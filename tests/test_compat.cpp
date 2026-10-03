@@ -66,6 +66,8 @@ std::vector<CompatCase> cases() {
       {"tiny_qwen3", d + "tiny_qwen3.gguf", 100},   {"tiny_gemma", d + "tiny_gemma.gguf", 100},
       {"tiny_gemma2", d + "tiny_gemma2.gguf", 100}, {"tiny_gemma3", d + "tiny_gemma3.gguf", 100},
       {"tiny_phi3", d + "tiny_phi3.gguf", 100},
+      {"tiny_mixtral", d + "tiny_mixtral.gguf", 100},     {"tiny_qwen2moe", d + "tiny_qwen2moe.gguf", 100},
+      {"tiny_qwen3moe", d + "tiny_qwen3moe.gguf", 100},   {"tiny_granitemoe", d + "tiny_granitemoe.gguf", 100},
   };
   // Optional real models: shorter long-generation to keep the suite fast.
   v.push_back({"smollm2_q8", testing::smollm_q8_model(), 64});

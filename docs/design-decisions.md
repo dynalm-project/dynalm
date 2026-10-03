@@ -836,3 +836,68 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
     Decode ITL p50, 10 threads: GPTQ 31.0 ms, AWQ 33.4 ms, GGUF Q4_K_M 29.0 ms.
   - **Load time.** Load is 2.0–2.4 s, against 0.16 s for GGUF (repacking on load). A first
     version took 5.3 s because it unpacked each layer twice with strided writes.
+
+## DD-042: Mixture of experts in the generic Transformer: host routing, per-expert batched matmuls
+
+- **Decision:** MoE is part of the one generic `Transformer`, configured by `MoeConfig`. There
+  is no per-family code. A layer with expert tensors replaces its MLP with three steps:
+  1. **Route.** Router logits = `matmul(xn, router)`. Each row takes a softmax over all
+     experts and keeps the top-k (ties go to the lower expert id). The kept weights are
+     renormalized when `normalize_topk` is set (Mixtral, Qwen3-MoE, Granite-MoE) and left
+     as raw softmax probabilities otherwise (Qwen2-MoE).
+  2. **Run experts.** Each *active* expert runs once on all rows routed to it: gather those
+     rows, run gate/up matmuls on that expert's 2-D slice of the 3-D tensor, `act_mul`, then
+     the down matmul. The result is scatter-added with the routing weights.
+  3. **Shared expert.** Optional: a dense MLP on every row, scaled by
+     σ(x · w_shared_router) (Qwen2-MoE).
+
+  Expert tensors stay 3-D `[experts, rows, cols]` in the registry (zero-copy from GGUF). Per-expert
+  2-D views are resolved once at init.
+  - **Granite multipliers.** These are config scalars applied by the same code path:
+    `embedding_scale`, `residual_scale` (each block's output before the residual add),
+    `attn_scale` and `logit_scale`.
+  - **Supported now:**
+    - Mixtral (GGUF `llama` + experts; HF `mixtral`),
+    - Qwen2-MoE / Qwen1.5-MoE (`qwen2moe` / `qwen2_moe`),
+    - Qwen3-MoE (`qwen3moe` / `qwen3_moe`),
+    - Granite / Granite-MoE (`granite`, `granitemoe`).
+  - **HF layouts.** Per-expert HF tensors (`experts.N.w1`, `experts.N.gate_proj`, …) are
+    stacked into the 3-D form at load. Granite's fused `input_linear` is split into
+    gate/up views without copying.
+- **Reason:** Spec §4 asks for a design where MoE fits in. Grouping rows by expert means
+  prefill reads each active expert's weights once per batch, instead of once per token. For a
+  single decode token, only k experts' weights are read, which is the whole point of MoE on a
+  bandwidth-bound CPU.
+- **Alternatives:**
+  - **Dense evaluation of all experts, masked.** Simple, but reads every expert's weights:
+    4× the bandwidth for Granite (32 experts, 8 active).
+  - **A fused MoE kernel with expert-parallel threads.** A good next step for decode, where
+    each expert's matmul is small. It would sit behind the same Layer data.
+  - **llama.cpp-style `mul_mat_id`.** Equivalent to the per-expert batched matmul; a
+    candidate for device backends.
+- **Tradeoffs:**
+  - Routing, gather and scatter run on the host CPU. Fine for the CPU backend; a GPU backend
+    needs a route/gather/scatter op (Phase 28 design).
+  - Decode would issue 3k small matmuls per layer (k = 8 for Granite). `Backend::matmul_many`
+    runs all active experts' gate+up, then all down projections, in one parallel region each:
+    2 dispatches per layer instead of 24. The CPU backend fuses jobs of ≤ 3 rows and falls
+    back to per-job GEMM for larger ones.
+  - Models that mix dense and MoE layers (`decoder_sparse_step` ≠ 1, `mlp_only_layers`,
+    DeepSeek's dense first layers) are rejected with a clear error.
+  - DeepSeek-V2/V3 additionally need MLA attention: not supported.
+  - GPTQ/AWQ MoE checkpoints are rejected.
+- **Evidence:**
+  - **Tiny fixtures.** Four MoE fixtures (Mixtral-style, Qwen2-MoE with shared expert,
+    Qwen3-MoE, Granite-MoE with multipliers) match the independent NumPy reference (prompt
+    logits ≤ 2e-3, greedy continuation with chunked prefill identical). The reference
+    `tools/ref_model.py` is written from the HF modeling code.
+  - **Formats.** HF exports of the same fixtures load to identical logits: 0 for the Qwen
+    MoEs, ≤ 1e-6 for Mixtral and Granite, from RoPE pairing order.
+  - **Compatibility.** The suite (load, tokenizer, short and long generation, KV reuse,
+    concurrent batching) passes for all four.
+  - **Real model.** Granite-3.1-1B-A400M Q8_0 (32 experts, top-8) matches the NumPy reference
+    golden: prompt logits within 5e-3, and 6 greedy tokens identical. The chat template
+    renders identically to jinja2. It answers "capital of France" with Paris.
+  - **Performance.** Decode is 59.7 → 29.1 ms/token with `matmul_many`. That is on par with
+    dense Qwen2.5-0.5B Q8_0 (31.6 ms) at 2.6× the total parameters
+    (docs/benchmarks.md, Phase 25).

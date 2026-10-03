@@ -1,5 +1,6 @@
 #include "model/transformer.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -114,6 +115,31 @@ Status Transformer::init(const TensorRegistry& w, int32_t max_batch) {
     ENGINE_RETURN_IF_ERROR(vec(TensorRole::kPostFfnNorm, l, L.post_ffn_norm));
     L.fused_qkv = present(L.wqkv);
     L.fused_gate_up = present(L.w_gate_up);
+
+    if (c.moe.num_experts > 0) {
+      ENGINE_RETURN_IF_ERROR(weight(TensorRole::kFfnRouter, l, L.router));
+      TensorView gate3, up3, down3;
+      ENGINE_RETURN_IF_ERROR(weight(TensorRole::kFfnGateExperts, l, gate3));
+      ENGINE_RETURN_IF_ERROR(weight(TensorRole::kFfnUpExperts, l, up3));
+      ENGINE_RETURN_IF_ERROR(weight(TensorRole::kFfnDownExperts, l, down3));
+      if (!present(L.router) || !present(gate3) || !present(up3) || !present(down3)) {
+        return InvalidArgument("MoE layer " + std::to_string(l) + " is missing router or expert weights");
+      }
+      L.experts.resize(static_cast<size_t>(c.moe.num_experts));
+      for (int32_t e = 0; e < c.moe.num_experts; ++e) {
+        ENGINE_ASSIGN_OR_RETURN(L.experts[static_cast<size_t>(e)][0], gate3.select(0, e));
+        ENGINE_ASSIGN_OR_RETURN(L.experts[static_cast<size_t>(e)][1], up3.select(0, e));
+        ENGINE_ASSIGN_OR_RETURN(L.experts[static_cast<size_t>(e)][2], down3.select(0, e));
+      }
+      ENGINE_RETURN_IF_ERROR(weight(TensorRole::kFfnGateShared, l, L.sh_gate));
+      ENGINE_RETURN_IF_ERROR(weight(TensorRole::kFfnUpShared, l, L.sh_up));
+      ENGINE_RETURN_IF_ERROR(weight(TensorRole::kFfnDownShared, l, L.sh_down));
+      if (w.has(TensorRole::kFfnSharedRouter, l)) {
+        TensorView v;
+        ENGINE_RETURN_IF_ERROR(vec(TensorRole::kFfnSharedRouter, l, v));
+        ENGINE_ASSIGN_OR_RETURN(L.sh_router, v.reshape({1, c.hidden_size}));  // matmul weight [1, hidden]
+      }
+    }
   }
 
   // Scratch. qkv holds Q|K|V side by side; ff_a/ff_b hold gate/up (or a
@@ -131,9 +157,131 @@ Status Transformer::init(const TensorRegistry& w, int32_t max_batch) {
   ENGINE_RETURN_IF_ERROR(scratch(q_dim + k_dim + v_dim, qkv_));
   ENGINE_RETURN_IF_ERROR(scratch(o_dim, attn_));
   ENGINE_RETURN_IF_ERROR(scratch(c.hidden_size, o_));
-  ENGINE_RETURN_IF_ERROR(scratch(2 * c.intermediate_size, ff_a_));
-  ENGINE_RETURN_IF_ERROR(scratch(c.intermediate_size, ff_b_));
+  ENGINE_RETURN_IF_ERROR(scratch(std::max<int64_t>(1, 2 * c.intermediate_size), ff_a_));
+  ENGINE_RETURN_IF_ERROR(scratch(std::max<int64_t>(1, c.intermediate_size), ff_b_));
+  if (c.moe.num_experts > 0) {
+    const int64_t fw = std::max(c.moe.expert_intermediate_size, c.moe.shared_intermediate_size);
+    // Packed routed rows: up to max_batch * experts_per_token (>= max_batch for the shared expert).
+    const int64_t packed = static_cast<int64_t>(max_batch) * std::max(1, c.moe.experts_per_token);
+    auto packed_scratch = [&](int64_t cols, Tensor& t) -> Status {
+      ENGINE_ASSIGN_OR_RETURN(t, Tensor::zeros(DType::kF32, {packed, cols}));
+      return Status::Ok();
+    };
+    ENGINE_RETURN_IF_ERROR(scratch(c.moe.num_experts, router_));
+    ENGINE_RETURN_IF_ERROR(packed_scratch(c.hidden_size, moe_x_));
+    ENGINE_RETURN_IF_ERROR(packed_scratch(2 * fw, moe_a_));
+    ENGINE_RETURN_IF_ERROR(packed_scratch(fw, moe_b_));
+    ENGINE_RETURN_IF_ERROR(packed_scratch(c.hidden_size, moe_y_));
+    up_jobs_.reserve(static_cast<size_t>(2 * c.moe.num_experts));
+    down_jobs_.reserve(static_cast<size_t>(c.moe.num_experts));
+    ENGINE_RETURN_IF_ERROR(scratch(1, sh_gate_));
+    expert_rows_.resize(static_cast<size_t>(c.moe.num_experts));
+    for (auto& v : expert_rows_) v.reserve(static_cast<size_t>(max_batch));
+    route_scratch_.resize(static_cast<size_t>(c.moe.num_experts));
+  }
   return Status::Ok();
+}
+
+// Routed mixture of experts (CPU-side routing; a device backend would add a
+// fused route/gather/scatter op behind the same Layer data, DD-042).
+void Transformer::moe_mlp(const Layer& L, const TensorView& xn, const TensorView& out, int64_t m) {
+  const ModelConfig& c = config_;
+  const int32_t ne = c.moe.num_experts, k = c.moe.experts_per_token;
+  const int64_t d = c.hidden_size;
+  const auto row = [](const TensorView& t, int64_t r) {
+    return reinterpret_cast<float*>(static_cast<std::byte*>(t.data()) + r * t.stride(0));
+  };
+
+  // 1. Router logits -> softmax -> top-k (ties: lower expert id) -> weights.
+  const TensorView logits = rows_of(router_, m);
+  backend_.matmul(xn, L.router, nullptr, logits);
+  for (auto& v : expert_rows_) v.clear();
+  for (int64_t r = 0; r < m; ++r) {
+    const float* lg = row(logits, r);
+    float mx = lg[0];
+    for (int32_t e = 1; e < ne; ++e) mx = std::max(mx, lg[e]);
+    double sum = 0;
+    for (int32_t e = 0; e < ne; ++e) {
+      const float p = std::exp(lg[e] - mx);
+      route_scratch_[static_cast<size_t>(e)] = {p, e};
+      sum += p;
+    }
+    std::partial_sort(route_scratch_.begin(), route_scratch_.begin() + k, route_scratch_.end(),
+                      [](const auto& a, const auto& b) { return a.first != b.first ? a.first > b.first : a.second < b.second; });
+    double kept = 0;
+    for (int32_t j = 0; j < k; ++j) kept += route_scratch_[static_cast<size_t>(j)].first;
+    const double denom = c.moe.normalize_topk ? kept : sum;
+    for (int32_t j = 0; j < k; ++j) {
+      const auto& [p, e] = route_scratch_[static_cast<size_t>(j)];
+      expert_rows_[static_cast<size_t>(e)].emplace_back(static_cast<int32_t>(r), static_cast<float>(p / denom));
+    }
+  }
+  mark(ForwardOp::kMoeRoute);
+
+  // 2. Pack the routed rows by expert into one buffer ([sum of counts, d]),
+  //    run every active expert's gate+up as one batch of matmuls, one
+  //    activation over all packed rows, every down projection as one batch,
+  //    then scatter-add with the routing weights. Each active expert reads
+  //    its weights once per step however many rows it serves.
+  for (int64_t r = 0; r < m; ++r) std::memset(row(out, r), 0, static_cast<size_t>(d) * sizeof(float));
+  const int64_t fe = c.moe.expert_intermediate_size;
+  int64_t total = 0;
+  for (const auto& rows : expert_rows_) total += static_cast<int64_t>(rows.size());
+  const TensorView xp = rows_of(moe_x_, total), ap = rows_of(moe_a_, total), bp = rows_of(moe_b_, total);
+  const TensorView yp = rows_of(moe_y_, total);
+  auto slice = [](const TensorView& v, int64_t r0, int64_t n) {
+    return view2d(reinterpret_cast<std::byte*>(v.data()) + r0 * v.stride(0), n, v.dim(1), v.stride(0));
+  };
+  up_jobs_.clear();
+  down_jobs_.clear();
+  int64_t off = 0;
+  for (int32_t e = 0; e < ne; ++e) {
+    const auto& rows = expert_rows_[static_cast<size_t>(e)];
+    if (rows.empty()) continue;
+    const auto cnt = static_cast<int64_t>(rows.size());
+    for (int64_t i = 0; i < cnt; ++i) {
+      std::memcpy(row(xp, off + i), row(xn, rows[static_cast<size_t>(i)].first), static_cast<size_t>(d) * sizeof(float));
+    }
+    const auto& W = L.experts[static_cast<size_t>(e)];
+    const TensorView xe = slice(xp, off, cnt), ae = slice(ap, off, cnt), be = slice(bp, off, cnt);
+    up_jobs_.push_back({xe, W[0], cols_of(ae, 0, fe)});
+    up_jobs_.push_back({xe, W[1], cols_of(ae, fe, fe)});
+    down_jobs_.push_back({cols_of(be, 0, fe), W[2], slice(yp, off, cnt)});
+    off += cnt;
+  }
+  mark(ForwardOp::kMoeScatter);
+  backend_.matmul_many(up_jobs_);
+  backend_.act_mul(c.activation, cols_of(ap, 0, fe), cols_of(ap, fe, fe), cols_of(bp, 0, fe));
+  backend_.matmul_many(down_jobs_);
+  mark(ForwardOp::kMoeExperts);
+  off = 0;
+  for (int32_t e = 0; e < ne; ++e) {
+    for (const auto& [r, wgt] : expert_rows_[static_cast<size_t>(e)]) {
+      float* o = row(out, r);
+      const float* y = row(yp, off++);
+      for (int64_t j = 0; j < d; ++j) o[j] += wgt * y[j];
+    }
+  }
+  mark(ForwardOp::kMoeScatter);
+
+  // 3. Shared expert (all rows), optionally scaled by sigmoid(x . w_router).
+  if (present(L.sh_up)) {
+    const int64_t fs = c.moe.shared_intermediate_size;
+    const TensorView a = rows_of(moe_a_, m), b = rows_of(moe_b_, m), ys = rows_of(moe_y_, m);
+    const TensorView gate = cols_of(a, 0, fs), up = cols_of(a, fs, fs), act = cols_of(b, 0, fs);
+    backend_.matmul(xn, L.sh_gate, nullptr, gate);
+    backend_.matmul(xn, L.sh_up, nullptr, up);
+    backend_.act_mul(c.activation, gate, up, act);
+    backend_.matmul(act, L.sh_down, nullptr, ys);
+    const TensorView g = rows_of(sh_gate_, m);
+    if (present(L.sh_router)) backend_.matmul(xn, L.sh_router, nullptr, g);
+    for (int64_t r = 0; r < m; ++r) {
+      const float s = present(L.sh_router) ? 1.0f / (1.0f + std::exp(-row(g, r)[0])) : 1.0f;
+      float* o = row(out, r);
+      const float* y = row(ys, r);
+      for (int64_t j = 0; j < d; ++j) o[j] += s * y[j];
+    }
+  }
 }
 
 void Transformer::norm(const TensorView& x, const TensorView& w, const TensorView& b, const TensorView& y) {
@@ -146,7 +294,8 @@ void Transformer::norm(const TensorView& x, const TensorView& w, const TensorVie
 
 std::string_view forward_op_name(ForwardOp op) {
   static constexpr std::string_view kNames[] = {"embed",   "norm",     "qkv",     "rope+qknorm", "kv_store", "attention",
-                                                "attn_out", "mlp_up",   "act",     "mlp_down",    "lm_head"};
+                                                "attn_out", "mlp_up",   "act",     "mlp_down",    "moe_route", "moe_experts",
+                                                "moe_gather_scatter", "lm_head"};
   static_assert(std::size(kNames) == static_cast<size_t>(ForwardOp::kCount));
   return kNames[static_cast<size_t>(op)];
 }
@@ -277,12 +426,21 @@ Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& c
 
     backend_.matmul(attn, L.wo, present(L.bo) ? &L.bo : nullptr, o);
     if (present(L.post_attn_norm)) backend_.rms_norm(o, L.post_attn_norm, c.norm_eps, o);
+    if (c.residual_scale != 1.0f) backend_.scale(o, c.residual_scale);
     backend_.add(x, o, x);
     mark(ForwardOp::kAttnOut);
 
     // --- MLP ---
     norm(x, L.ffn_norm, L.ffn_norm_b, xn);
     mark(ForwardOp::kNorm);
+    if (!L.experts.empty()) {
+      moe_mlp(L, xn, o, m);
+      if (present(L.post_ffn_norm)) backend_.rms_norm(o, L.post_ffn_norm, c.norm_eps, o);
+      if (c.residual_scale != 1.0f) backend_.scale(o, c.residual_scale);
+      backend_.add(x, o, x);
+      mark(ForwardOp::kMlpDown);
+      continue;
+    }
     if (c.mlp == MlpType::kGated) {
       TensorView gate, up;
       if (L.fused_gate_up) {
@@ -306,6 +464,7 @@ Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& c
     }
     backend_.matmul(ff_b, L.w_down, present(L.b_down) ? &L.b_down : nullptr, o);
     if (present(L.post_ffn_norm)) backend_.rms_norm(o, L.post_ffn_norm, c.norm_eps, o);
+    if (c.residual_scale != 1.0f) backend_.scale(o, c.residual_scale);
     backend_.add(x, o, x);
     mark(ForwardOp::kMlpDown);
   }
@@ -324,6 +483,7 @@ Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& c
     norm(gathered, output_norm_, output_norm_b_, normed);
     const TensorView out = view2d(logits.data(), n_out, c.vocab_size, c.vocab_size * 4);
     backend_.matmul(normed, lm_head_, nullptr, out);
+    if (c.logit_scale != 1.0f) backend_.scale(out, 1.0f / c.logit_scale);
     if (c.final_logit_softcap > 0) backend_.softcap(out, c.final_logit_softcap);
     mark(ForwardOp::kLmHead);
   }

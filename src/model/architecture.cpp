@@ -66,6 +66,27 @@ Status validate_standard_decoder(const ModelConfig& c, const TensorRegistry& w) 
     if (c.post_attn_norm) ENGINE_RETURN_IF_ERROR(expect_shape(w, TensorRole::kPostAttnNorm, l, {d}));
 
     ENGINE_RETURN_IF_ERROR(expect_shape(w, TensorRole::kFfnNorm, l, {d}));
+    if (c.moe.num_experts > 0) {
+      // Routed experts (gated MLP each) + optional shared expert.
+      const int64_t ne = c.moe.num_experts, fe = c.moe.expert_intermediate_size;
+      if (fe <= 0) return InvalidArgument("MoE model without expert_feed_forward_length");
+      ENGINE_RETURN_IF_ERROR(expect_shape(w, TensorRole::kFfnRouter, l, {ne, d}));
+      ENGINE_RETURN_IF_ERROR(expect_shape(w, TensorRole::kFfnGateExperts, l, {ne, fe, d}));
+      ENGINE_RETURN_IF_ERROR(expect_shape(w, TensorRole::kFfnUpExperts, l, {ne, fe, d}));
+      ENGINE_RETURN_IF_ERROR(expect_shape(w, TensorRole::kFfnDownExperts, l, {ne, d, fe}));
+      if (w.has(TensorRole::kFfnUpShared, l)) {
+        const int64_t fs = c.moe.shared_intermediate_size;
+        if (fs <= 0) return InvalidArgument("shared expert without expert_shared_feed_forward_length");
+        ENGINE_RETURN_IF_ERROR(expect_shape(w, TensorRole::kFfnGateShared, l, {fs, d}));
+        ENGINE_RETURN_IF_ERROR(expect_shape(w, TensorRole::kFfnUpShared, l, {fs, d}));
+        ENGINE_RETURN_IF_ERROR(expect_shape(w, TensorRole::kFfnDownShared, l, {d, fs}));
+        if (w.has(TensorRole::kFfnSharedRouter, l)) {
+          ENGINE_RETURN_IF_ERROR(expect_shape(w, TensorRole::kFfnSharedRouter, l, {d}));
+        }
+      }
+      if (c.post_ffn_norm) ENGINE_RETURN_IF_ERROR(expect_shape(w, TensorRole::kPostFfnNorm, l, {d}));
+      continue;
+    }
     if (w.has(TensorRole::kFfnGateUp, l)) {
       ENGINE_RETURN_IF_ERROR(expect_shape(w, TensorRole::kFfnGateUp, l, {2 * ff, d}));
     } else {

@@ -92,7 +92,8 @@ TEST_P(TinyArch, MatchesReference) {
 }
 
 INSTANTIATE_TEST_SUITE_P(All, TinyArch,
-                         ::testing::Values("llama", "qwen2", "qwen3", "gemma", "gemma2", "gemma3", "phi3"),
+                         ::testing::Values("llama", "qwen2", "qwen3", "gemma", "gemma2", "gemma3", "phi3", "mixtral",
+                                           "qwen2moe", "qwen3moe", "granitemoe"),
                          [](const ::testing::TestParamInfo<std::string>& p) { return p.param; });
 
 // Real f16 checkpoints vs the reference (skipped when the files are absent;
@@ -106,7 +107,8 @@ class RealArch : public ::testing::TestWithParam<int> {};
 TEST_P(RealArch, MatchesReference) {
   const RealCase cases[] = {{engine::testing::qwen_f16_model(), "ref_qwen25.txt"},
                             {engine::testing::gemma_model(), "ref_gemma3.txt"},
-                            {engine::testing::qwen_q4_model(), "ref_qwen25_q4_k_m.txt"}};
+                            {engine::testing::qwen_q4_model(), "ref_qwen25_q4_k_m.txt"},
+                            {engine::testing::granite_moe_model(), "ref_granite_moe_q8_0.txt"}};
   const RealCase rc = cases[GetParam()];
   if (!engine::testing::exists(rc.model)) GTEST_SKIP() << rc.model << " not present";
   if (!std::filesystem::exists(data(rc.fixture))) GTEST_SKIP() << rc.fixture << " not generated";
@@ -143,11 +145,11 @@ TEST_P(RealArch, MatchesReference) {
 }
 
 std::string real_case_name(const ::testing::TestParamInfo<int>& p) {
-  static const char* kNames[] = {"Qwen25", "Gemma3", "Qwen25Q4KM"};
+  static const char* kNames[] = {"Qwen25", "Gemma3", "Qwen25Q4KM", "GraniteMoeQ8"};
   return kNames[p.param];
 }
 
-INSTANTIATE_TEST_SUITE_P(Real, RealArch, ::testing::Values(0, 1, 2), real_case_name);
+INSTANTIATE_TEST_SUITE_P(Real, RealArch, ::testing::Values(0, 1, 2, 3), real_case_name);
 
 TEST(Architectures, ConfigureSetsFamilySemantics) {
   auto qwen2 = load_model(data("tiny_qwen2.gguf"));

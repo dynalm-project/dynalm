@@ -55,11 +55,15 @@ enum class TensorRole : uint8_t {
   kFfnDownBias,
   kPostFfnNorm,
 
-  // Per layer: MoE (Phase 25)
-  kFfnRouter,
-  kFfnGateExperts,
-  kFfnUpExperts,
-  kFfnDownExperts,
+  // Per layer: MoE (Phase 25). Expert tensors are 3-D [experts, rows, cols].
+  kFfnRouter,         // [experts, hidden]
+  kFfnGateExperts,    // [experts, expert_ff, hidden]
+  kFfnUpExperts,      // [experts, expert_ff, hidden]
+  kFfnDownExperts,    // [experts, hidden, expert_ff]
+  kFfnSharedRouter,   // [hidden]: sigmoid gate of the shared expert (Qwen2-MoE)
+  kFfnGateShared,     // [shared_ff, hidden]
+  kFfnUpShared,       // [shared_ff, hidden]
+  kFfnDownShared,     // [hidden, shared_ff]
 
   kCount,
 };

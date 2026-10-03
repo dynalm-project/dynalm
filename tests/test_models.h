@@ -27,6 +27,10 @@ inline std::string smollm_q8_model() { return model_path("ENGINE_TEST_MODEL_Q8",
 
 inline std::string qwen_q4_model() { return model_path("ENGINE_TEST_MODEL_QWEN_Q4", ENGINE_TEST_MODEL_QWEN_Q4_PATH); }
 
+inline std::string granite_moe_model() {
+  return model_path("ENGINE_TEST_MODEL_GRANITE_MOE", ENGINE_TEST_MODEL_GRANITE_MOE_PATH);
+}
+
 inline bool exists(const std::string& p) { return !p.empty() && std::filesystem::exists(p); }
 
 }  // namespace engine::testing

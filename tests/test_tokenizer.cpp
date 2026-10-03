@@ -212,6 +212,28 @@ TEST(ChatTemplate, Llama3AndGemma) {
             "<start_of_turn>user\nV<end_of_turn>\n<start_of_turn>model\n");
 }
 
+TEST(ChatTemplate, GraniteMatchesJinjaRendering) {
+  // tests/data/granite31_chat_template.jinja is the template embedded in
+  // granite-3.1-1b-a400m-instruct; expected strings were rendered from it with
+  // jinja2 (default system prompt injected; a space separates turns).
+  std::ifstream in(std::string(ENGINE_TEST_DATA_DIR) + "/granite31_chat_template.jinja", std::ios::binary);
+  std::stringstream ss;
+  ss << in.rdbuf();
+  auto t = ChatTemplate::from_jinja(ss.str());
+  ASSERT_TRUE(t.ok());
+  EXPECT_EQ(t->format(), ChatFormat::kGranite);
+  const ChatMessage one[] = {{"user", "Hi there"}};
+  EXPECT_EQ(*t->apply(one, true),
+            "<|start_of_role|>system<|end_of_role|>Knowledge Cutoff Date: April 2024. You are Granite, developed by IBM. "
+            "You are a helpful AI assistant.<|end_of_text|> <|start_of_role|>user<|end_of_role|>Hi there<|end_of_text|> "
+            "<|start_of_role|>assistant<|end_of_role|>");
+  const ChatMessage conv[] = {{"system", "Be terse."}, {"user", "Hi"}, {"assistant", "Hello!"}, {"user", "Bye"}};
+  EXPECT_EQ(*t->apply(conv, true),
+            "<|start_of_role|>system<|end_of_role|>Be terse.<|end_of_text|> <|start_of_role|>user<|end_of_role|>Hi"
+            "<|end_of_text|> <|start_of_role|>assistant<|end_of_role|>Hello!<|end_of_text|> "
+            "<|start_of_role|>user<|end_of_role|>Bye<|end_of_text|> <|start_of_role|>assistant<|end_of_role|>");
+}
+
 TEST(ChatTemplate, DetectionAndErrors) {
   EXPECT_EQ(ChatTemplate::from_jinja("x<|start_header_id|>y")->format(), ChatFormat::kLlama3);
   EXPECT_EQ(ChatTemplate::from_jinja("<start_of_turn>")->format(), ChatFormat::kGemma);

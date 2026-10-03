@@ -74,6 +74,10 @@ attention → O proj → optional post-norm → residual → norm → gated/plai
 optional post-norm → residual] → final norm on the last row → LM head → optional
 soft-cap. Every branch is a `ModelConfig` flag.
 
+MoE layers (DD-042) replace the MLP with: router matmul → per-row top-k → for each active
+expert, one batched gated MLP over the rows routed to it (a 2-D slice of the 3-D expert
+tensors) → weighted scatter-add → optional sigmoid-gated shared expert.
+
 ## Threads ✅
 
 HTTP workers (cpp-httplib pool, max-active + 8) → `Engine::submit` → one scheduler
