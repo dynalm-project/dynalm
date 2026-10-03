@@ -150,7 +150,7 @@ TEST_F(ServerTest, HealthModelsMetrics) {
   EXPECT_EQ(J(m->body.c_str()).find("data")->as_array()[0].find("id")->as_string(), "tiny");
   auto met = client->Get("/metrics");
   ASSERT_TRUE(met);
-  EXPECT_NE(met->body.find("engine_kv_cache_capacity_blocks"), std::string::npos);
+  EXPECT_NE(met->body.find("dynalm_kv_cache_capacity_blocks"), std::string::npos);
   EXPECT_EQ(client->Get("/nope")->status, 404);
 }
 
@@ -285,7 +285,7 @@ TEST_F(ServerTest, OverloadIsRejectedWith503AndHealthStillAnswers) {
   EXPECT_EQ(J(res->body.c_str()).find("error")->find("type")->as_string(), "overloaded_error");
   EXPECT_EQ(s->active_requests(), 0);  // the refused request released its slot
   EXPECT_EQ(c.Get("/health")->status, 200);
-  EXPECT_NE(c.Get("/metrics")->body.find("engine_requests_rejected_total 1"), std::string::npos);
+  EXPECT_NE(c.Get("/metrics")->body.find("dynalm_requests_rejected_total 1"), std::string::npos);
 }
 
 TEST_F(ServerTest, AdmissionLimitUnderConcurrency) {
@@ -365,11 +365,11 @@ TEST_F(ServerTest, MetricsCoverSpecList) {
   ASSERT_EQ(client->Post("/v1/completions", R"({"prompt":"m","max_tokens":4})", "application/json")->status, 200);
   const std::string m = client->Get("/metrics")->body;
   for (const char* name :
-       {"engine_requests_total", "engine_requests_active", "engine_requests_failed_total",
-        "engine_generation_tokens_total", "engine_tokens_processed_total", "engine_prefill_tokens_total",
-        "engine_generation_tokens_per_second", "engine_prefill_tokens_per_second", "engine_kv_cache_used_blocks",
-        "engine_kv_cache_capacity_tokens", "engine_kv_cache_hit_rate", "engine_scheduler_step_ms_bucket",
-        "engine_queue_latency_ms_avg", "engine_ttft_ms_bucket", "engine_itl_ms_bucket", "engine_tpot_ms_bucket"}) {
+       {"dynalm_requests_total", "dynalm_requests_active", "dynalm_requests_failed_total",
+        "dynalm_generation_tokens_total", "dynalm_tokens_processed_total", "dynalm_prefill_tokens_total",
+        "dynalm_generation_tokens_per_second", "dynalm_prefill_tokens_per_second", "dynalm_kv_cache_used_blocks",
+        "dynalm_kv_cache_capacity_tokens", "dynalm_kv_cache_hit_rate", "dynalm_scheduler_step_ms_bucket",
+        "dynalm_queue_latency_ms_avg", "dynalm_ttft_ms_bucket", "dynalm_itl_ms_bucket", "dynalm_tpot_ms_bucket"}) {
     EXPECT_NE(m.find(name), std::string::npos) << name;
   }
 }

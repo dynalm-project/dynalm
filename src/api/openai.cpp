@@ -270,7 +270,7 @@ std::string models_json(const std::string& model_id, int64_t created) {
   m["id"] = model_id;
   m["object"] = "model";
   m["created"] = created;
-  m["owned_by"] = "engine";
+  m["owned_by"] = "dynalm";
   json::Object o;
   o["object"] = "list";
   o["data"] = json::Array{std::move(m)};

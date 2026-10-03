@@ -4,12 +4,12 @@
 // variables and the command line, merged into one argument list that the
 // command's own parser consumes. Later sources override earlier ones:
 //
-//   config file  <  ENGINE_* environment  <  command line
+//   config file  <  DYNALM_* environment  <  command line
 //
 // Config file: one `key = value` (or bare `key` for flags) per line, `#`
 // comments; keys are the long option names without "--" (e.g. `threads = 8`).
-// Environment: ENGINE_<KEY> with '-' as '_' (e.g. ENGINE_HTTP_THREADS=32).
-// The file is named by `--config PATH` on the command line or ENGINE_CONFIG.
+// Environment: DYNALM_<KEY> with '-' as '_' (e.g. DYNALM_HTTP_THREADS=32).
+// The file is named by `--config PATH` on the command line or DYNALM_CONFIG.
 
 #include <span>
 #include <string>

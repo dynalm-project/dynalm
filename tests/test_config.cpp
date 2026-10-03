@@ -46,7 +46,7 @@ TEST(Config, PrecedenceFileThenEnvThenCli) {
     std::ofstream f(path);
     f << "threads = 2\nport = 7000\nhttp-threads = 5\n";
   }
-  g_env = {{"ENGINE_PORT", "7100"}, {"ENGINE_HTTP_THREADS", "6"}, {"ENGINE_DISABLE_ADMIN", "1"}};
+  g_env = {{"DYNALM_PORT", "7100"}, {"DYNALM_HTTP_THREADS", "6"}, {"DYNALM_DISABLE_ADMIN", "1"}};
   const std::string_view cli[] = {"--config", path, "--port", "7200", "model.gguf"};
   auto merged = merge_config(cli, kOpts, fake_env);
   ASSERT_TRUE(merged.ok()) << merged.status().to_string();
@@ -67,7 +67,7 @@ TEST(Config, PrecedenceFileThenEnvThenCli) {
   EXPECT_EQ(positional, "model.gguf");
   std::remove(path.c_str());
 
-  g_env = {{"ENGINE_CONFIG", "/nonexistent/engine.conf"}};
+  g_env = {{"DYNALM_CONFIG", "/nonexistent/engine.conf"}};
   EXPECT_FALSE(merge_config({}, kOpts, fake_env).ok());  // a named config must exist
   g_env.clear();
 }

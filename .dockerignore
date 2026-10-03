@@ -1,0 +1,11 @@
+.git
+build
+out
+models
+results
+tests
+benchmarks
+tools
+scripts
+*.gguf
+*.safetensors

@@ -213,6 +213,7 @@ CpuKernels make_cpu_kernels(CpuIsa isa) {
   if (isa == CpuIsa::kAvx2 || isa == CpuIsa::kAvx512 || isa == CpuIsa::kAmx) {
     register_avx2_kernels(k);  // AVX-512/AMX tiers build on AVX2 until they have their own kernels
   }
+  if (isa == CpuIsa::kNeon) register_neon_kernels(k);
   return k;
 }
 

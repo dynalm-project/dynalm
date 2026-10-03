@@ -23,7 +23,7 @@ const OptionSpec* find_option(std::span<const OptionSpec> options, std::string_v
 }
 
 std::string env_name(std::string_view option) {
-  std::string n = "ENGINE_";
+  std::string n = "DYNALM_";
   for (char c : option) n += c == '-' ? '_' : static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
   return n;
 }
@@ -81,7 +81,7 @@ Result<std::vector<std::string>> merge_config(std::span<const std::string_view> 
   if (!env) env = process_env;
   std::vector<std::string> cli;
   std::string config_path;
-  if (const char* p = env("ENGINE_CONFIG")) config_path = p;
+  if (const char* p = env("DYNALM_CONFIG")) config_path = p;
   for (size_t i = 0; i < cli_args.size(); ++i) {
     if (cli_args[i] == "--config") {
       if (i + 1 >= cli_args.size()) return InvalidArgument("--config needs a file path");

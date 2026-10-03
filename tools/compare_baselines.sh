@@ -5,7 +5,7 @@
 #
 #   bash tools/compare_baselines.sh [model.gguf] [threads] [out.jsonl]
 #
-# Requires the engine-dev image + linux-release build (tools/linux.sh) and
+# Requires the dynalm-dev image + linux-release build (tools/linux.sh) and
 # ghcr.io/ggml-org/llama.cpp:server. Servers run one at a time (memory).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -29,8 +29,8 @@ wait_health() {
 
 bench() {  # $1 = port, $2 = label
   MSYS_NO_PATHCONV=1 docker run --rm --add-host=host.docker.internal:host-gateway \
-    -v "$SRC:/src" -v engine-linux-build:/src/build engine-dev \
-    /src/build/linux-release/src/engine benchmark "/src/models/$MODEL" --url "http://host.docker.internal:$1" \
+    -v "$SRC:/src" -v dynalm-linux-build:/src/build dynalm-dev \
+    /src/build/linux-release/src/dynalm benchmark "/src/models/$MODEL" --url "http://host.docker.internal:$1" \
     --concurrency "$CONC" --prompt "$PROMPTS" --output "$OUTPUTS" --out "/src/$OUT.$2"
   # Label rows by target name for the report.
   python - "$OUT.$2" "$2" "$OUT" <<'PY'
@@ -43,14 +43,14 @@ PY
   rm -f "$OUT.$2"
 }
 
-echo "== this engine (threads $THREADS)"
-docker rm -f bench-engine >/dev/null 2>&1 || true
-MSYS_NO_PATHCONV=1 docker run -d --name bench-engine -p 127.0.0.1:8000:8000 -v "$SRC:/src" -v engine-linux-build:/src/build \
-  engine-dev /src/build/linux-release/src/engine --log-level warn serve "/src/models/$MODEL" --host 0.0.0.0 --port 8000 \
+echo "== DynaLM (threads $THREADS)"
+docker rm -f bench-dynalm >/dev/null 2>&1 || true
+MSYS_NO_PATHCONV=1 docker run -d --name bench-dynalm -p 127.0.0.1:8000:8000 -v "$SRC:/src" -v dynalm-linux-build:/src/build \
+  dynalm-dev /src/build/linux-release/src/dynalm --log-level warn serve "/src/models/$MODEL" --host 0.0.0.0 --port 8000 \
   -t "$THREADS" --ctx 32768 >/dev/null
 wait_health 8000
-bench 8000 "engine"
-docker rm -f bench-engine >/dev/null
+bench 8000 "dynalm"
+docker rm -f bench-dynalm >/dev/null
 
 echo "== llama.cpp llama-server (threads $THREADS, 16 slots)"
 docker rm -f bench-llamacpp >/dev/null 2>&1 || true

@@ -7,6 +7,9 @@
 #include <psapi.h>
 #else
 #include <sys/resource.h>
+#if ENGINE_OS_MACOS
+#include <mach/mach.h>
+#endif
 
 #include <fstream>
 #include <string>
@@ -38,6 +41,7 @@ double process_cpu_seconds() {
 
 #else
 
+#if !ENGINE_OS_MACOS
 namespace {
 int64_t status_kb(const char* key) {
   std::ifstream in("/proc/self/status");
@@ -54,9 +58,25 @@ int64_t status_kb(const char* key) {
   return 0;
 }
 }  // namespace
+#endif
 
+#if ENGINE_OS_MACOS
+int64_t process_rss_bytes() {
+  mach_task_basic_info_data_t info{};
+  mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+  if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info), &count) != KERN_SUCCESS) {
+    return 0;
+  }
+  return static_cast<int64_t>(info.resident_size);
+}
+int64_t process_peak_rss_bytes() {
+  rusage ru{};
+  return getrusage(RUSAGE_SELF, &ru) == 0 ? static_cast<int64_t>(ru.ru_maxrss) : 0;  // bytes on macOS
+}
+#else
 int64_t process_rss_bytes() { return status_kb("VmRSS:"); }
 int64_t process_peak_rss_bytes() { return status_kb("VmHWM:"); }
+#endif
 
 double process_cpu_seconds() {
   rusage ru{};

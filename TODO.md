@@ -60,5 +60,7 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
 - Pre-tokenizers for DeepSeek-LLM/V3 and Tekken (Mistral Nemo).
 - YaRN and LongRoPE scaling (Qwen long-context, Phi-3-128k).
 
-- Clang in the Linux container (gcc is covered).
+- Push to GitHub and get the CI matrix green (macOS has not run yet); measure NEON on real ARM hardware.
+- Homebrew formula / winget manifest / signed Windows releases once tagged releases exist.
+- NEON kernels for Q5_K/Q2_K/Q3_K and int8 dot products (SDOT).
 - Measure P-core-only vs. all-core threading on hybrid CPUs (DD-004).

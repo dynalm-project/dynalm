@@ -73,5 +73,5 @@ them with the launch, or caches them; the tables are constant.
 
 `ENABLE_CUDA`, `ENABLE_HIP`, `ENABLE_METAL` and `ENABLE_VULKAN` exist and default to OFF.
 Turning one on is a configure error until its backend exists, so a build never silently
-lacks the requested backend. `engine info` lists the built backends, and
+lacks the requested backend. `dynalm info` lists the built backends, and
 `--backend cuda` fails with a clear message.

@@ -38,7 +38,7 @@ namespace {
 class EngineTarget final : public Target {
  public:
   explicit EngineTarget(Engine& e) : engine_(e) {}
-  std::string name() const override { return "engine (in-process)"; }
+  std::string name() const override { return "dynalm (in-process)"; }
   bool in_process() const override { return true; }
 
   RequestResult run(const std::string& prompt, int32_t max_tokens) override {

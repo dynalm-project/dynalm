@@ -454,7 +454,7 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   - Prefill matmul: expand panels of 4 weight rows to fp32 once, then run an AVX2 4×2
     microkernel (8 accumulators) over all activation rows. K is sliced into 1024-wide pieces
     so an activation slice stays cache-resident while a thread sweeps its panels; partial
-    sums accumulate. The slice width is a backend setting (`ENGINE_GEMM_KC` overrides it,
+    sums accumulate. The slice width is a backend setting (`DYNALM_GEMM_KC` overrides it,
     for experiments and the AutoTuner).
   - Decode attention: when (rows × heads) can't fill the pool and the context exceeds 512,
     split each context into 256-position chunks and merge the partial softmaxes with
@@ -500,7 +500,7 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
 - **Evidence:** Tests: UTF-8 never split; stop strings across tokens; minimal holdback;
   earliest of several stops; engine streams incrementally and matches the Generator;
   concurrent clients on 4 threads; consumer cancellation; per-request errors; streams
-  outliving the engine. `engine run` now uses this path.
+  outliving the engine. `dynalm run` now uses this path.
 - **Tradeoffs:** Event queues are unbounded per request. A client that never reads holds
   at most its own request's text, bounded by `max_tokens`.
 
@@ -531,7 +531,7 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
 
 - **Decision:** `CpuBackend::matmul` uses the fused dequantize-dot kernel only for a single
   activation row. From two rows up (`expand_min_rows_ = 2`, override
-  `ENGINE_MATMUL_EXPAND_MIN`), it expands 4-row weight panels to fp32 once and runs the
+  `DYNALM_MATMUL_EXPAND_MIN`), it expands 4-row weight panels to fp32 once and runs the
   register-blocked GEMM. Row dequantization has AVX2 kernels for Q8_0, Q4_0, Q5_0, Q4_K
   and Q6_K (F16 already had one). They reuse the dot kernels' unpacking but store scaled
   floats.
@@ -547,7 +547,7 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
 - **Evidence:**
   - `bench_kernels` dequant row speedups: Q6_K 9.8×, Q5_0 5.0×, Q4_0 4.1×, Q8_0 1.9×,
     Q4_K 1.1×.
-  - End-to-end threshold sweep, `engine benchmark` in-process, Qwen2.5-0.5B Q4_K_M,
+  - End-to-end threshold sweep, `dynalm benchmark` in-process, Qwen2.5-0.5B Q4_K_M,
     10 threads, prompt 128, output 64. Two alternating repetitions, ITL p50 in ms:
 
     | rows (c) | fused | expand ≥ 4 | expand ≥ 2 |
@@ -565,7 +565,7 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
 
 ## DD-037: Benchmark framework: one closed-loop load generator for every target
 
-- **Decision:** `engine benchmark` drives a closed-loop load generator (`bench/loadgen`).
+- **Decision:** `dynalm benchmark` drives a closed-loop load generator (`bench/loadgen`).
   For each point (concurrency × prompt length × output length), C client threads issue
   requests back to back.
   - Prompts are generated to an exact token count, with a unique leading text per request,
@@ -610,8 +610,8 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
 ## DD-038: Layered configuration and RAM-based AUTO sizing
 
 - **Decision:**
-  - **Merging.** `engine serve` options come from a config file (`--config` or
-    `ENGINE_CONFIG`; `key = value` lines), then `ENGINE_<OPTION>` environment variables,
+  - **Merging.** `dynalm serve` options come from a config file (`--config` or
+    `DYNALM_CONFIG`; `key = value` lines), then `DYNALM_<OPTION>` environment variables,
     then the command line. Later sources win. `config/merge_config` concatenates the three
     sources into one argument list, and the command's existing parser consumes it, so every
     option works in every source without duplicated parsing.
@@ -661,7 +661,7 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
     completion for up to `--shutdown-timeout` (default 30 s). A second signal stops
     immediately; the remaining streams end as cancelled.
   - **Admin endpoint.** `/admin/shutdown` accepts loopback clients only, and
-    `--disable-admin` removes it. `engine stop` is its client.
+    `--disable-admin` removes it. `dynalm stop` is its client.
   - **Request ownership.** Each admitted request is owned by an RAII `Inflight` object held
     by the response. Its destructor returns the admission slot and cancels the engine
     request if it did not finish. That covers every exit path, including a client that
@@ -673,7 +673,7 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   - Before this change, with 16 HTTP workers, a 17th streaming client blocked behind the
     others, and so did health checks.
   - Draining lets rolling restarts happen without cutting off users mid-answer.
-- **One model per process:** `engine unload` is the same as `engine stop`. Multi-model
+- **One model per process:** `dynalm unload` is the same as `dynalm stop`. Multi-model
   hosting means separate weights, KV pools and schedulers competing for the same cores and
   memory bandwidth. On a CPU that is better done with separate processes behind a router,
   whose failures are also isolated. This keeps the server small.
@@ -697,7 +697,7 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
     leaks, and the engine stays usable. Oversized requests are rejected before compute.
     Engine destruction with in-flight streams is safe.
   - Container runs: SIGTERM with one request in flight let it finish (96 tokens, no error)
-    and then exited 0; `engine stop` drained and exited.
+    and then exited 0; `dynalm stop` drained and exited.
   - The gate runs all of these under ASAN/UBSAN and TSAN.
 
 ## DD-040: SafeTensors and Hugging Face directories load into the same IR as GGUF
@@ -764,7 +764,7 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
     (262K, SPM path), Qwen2.5 and SmolLM2 on mixed text including emoji, CJK, whitespace
     runs and specials.
   - **Real checkpoints.** SmolLM2-135M SafeTensors (BF16) vs GGUF F16: identical tokenizer,
-    max |logit diff| 1.7e-5, same argmax. `engine run` gives the same text.
+    max |logit diff| 1.7e-5, same argmax. `dynalm run` gives the same text.
   - **Qwen2.5-0.5B-Instruct.** SafeTensors loads, tokenizes identically to the official GGUF,
     and answers "What is 7 times 6?" with 42. The official GGUF is *not* a twin of the HF
     weights: its `general.version` is v0.1, and even its F32 norm vectors differ (by factors
@@ -923,7 +923,7 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   Linux/gcc and Windows/MSVC (libm `exp` and `std::` distributions differ by platform).
 - **Defaults:**
   - The HTTP API defaults to temperature 1.0, like OpenAI; `--temperature` changes it.
-  - `engine run` defaults to greedy (a reproducible developer tool).
+  - `dynalm run` defaults to greedy (a reproducible developer tool).
   - The in-process `GenerateParams` default is greedy.
   - Extensions accepted by llama.cpp/vLLM are parsed: `top_k`, `min_p`,
     `repetition_penalty`, `repeat_last_n`.
@@ -978,7 +978,7 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
 
   `SpeculativeGenerator` runs propose → verify (1 target pass) → accept a prefix, plus the
   target's correction or a bonus token → rollback. So each target pass yields 1..k+1 tokens.
-  It is exposed as `engine run --spec ngram|DRAFT.gguf --spec-k K`, and measured by
+  It is exposed as `dynalm run --spec ngram|DRAFT.gguf --spec-k K`, and measured by
   `bench_speculative`.
 - **Reason:** Spec §47 asks for extension points for speculative decoding, draft models and
   KV rollback. On a CPU, decode is memory-bound: scoring k + 1 positions reads the weights
@@ -1060,3 +1060,63 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
     results identical to CPU.
 
   352 tests pass.
+
+## DD-046: DynaLM: name, three-OS installs, CI matrix, NEON kernels
+
+- **Decision:** The project ships as **DynaLM**.
+  - **Name.** The user-facing names are `dynalm`: the command, the version banner,
+    `DYNALM_*` environment variables, `dynalm_*` Prometheus metrics, `owned_by` in the API,
+    and the Docker images. Internal code names (the `engine::` namespace, `ENGINE_*` compile
+    macros, library targets) are unchanged: renaming them touches every file and gains users
+    nothing.
+  - **Platforms.**
+    - SIMD options follow the target CPU: AVX2/AVX-512/AMX only on x86-64, NEON only on
+      ARM64. `-mavx2` would be a compile error on Apple Silicon.
+    - macOS has its own platform code: CPU topology including P/E cores via `sysctl`, memory
+      via Mach, process RSS via `task_info`.
+    - A NEON kernel tier covers fp32/fp16/bf16 dot products, the GEMM panel, and Q8_0, Q4_0,
+      Q4_1, Q5_0, Q4_K and Q6_K dot products and dequantization. Other types use the generic
+      tier.
+  - **Install.**
+    - `scripts/install.sh` (Linux, macOS) and `scripts/install.ps1` (Windows, through
+      Visual Studio's toolchain) build a release binary with a static C/C++ runtime
+      (`DYNALM_STATIC_RUNTIME`) and run `cmake --install`.
+    - CPack makes `dynalm-<ver>-<os>-<arch>` archives.
+    - A two-stage `Dockerfile` (amd64/arm64) serves on `0.0.0.0` through `DYNALM_HOST`.
+    - The one configure-time download (cpp-httplib, hash-pinned) now retries, and can come
+      from a local file (`DYNALM_HTTPLIB_HEADER`).
+  - **CI** (`.github/workflows/ci.yml`):
+    - Linux x86-64 with gcc, clang, ASAN/UBSAN and TSAN;
+    - native Linux ARM64;
+    - Windows MSVC;
+    - macOS on Apple Silicon;
+    - the install scripts on all three operating systems;
+    - the Docker build.
+
+    `release.yml` packages all four platforms on a version tag.
+- **Reason:** The user asked for DynaLM with installs on Linux, macOS and Windows. Without CI,
+  only the developer's machine is ever tested. Without NEON, Apple Silicon (the most common
+  Mac) would run only scalar kernels.
+- **Alternatives:**
+  - Prebuilt binaries only: needs CI and signing first.
+  - A Homebrew formula or winget manifest: natural next steps once releases exist.
+  - Renaming internal names too: churn, no user value.
+- **Tradeoffs:**
+  - Builds need network access once (cpp-httplib) unless the header is provided.
+  - macOS has not been built on a Mac yet; the CI job covers it once the repository is on
+    GitHub. No GitHub remote exists today, so no workflow has run.
+  - NEON performance is unmeasured: there is no ARM hardware here, only emulation.
+  - Windows Smart App Control may block freshly built, unsigned binaries on some machines.
+- **Evidence:**
+  - **Linux x86-64.** 352/352 tests with gcc 13 and with clang 18, a clean build
+    (`-Wall -Wextra`, no warnings).
+  - **Linux ARM64** (emulated: Docker + QEMU):
+    - builds with `kernels: generic neon`;
+    - `test_kernels` passes with the NEON tier checked against the dequantization
+      reference for every type;
+    - 339/340 tests pass. The exception is one real-model concurrency test whose 120 s
+      request timeout expires under emulation (277 s run). The same model's single-sequence
+      and KV-reuse tests pass on ARM64.
+  - **Windows.** `install.ps1` built and installed a static-runtime `dynalm.exe`, which
+    answered "capital of France" natively at 33.9 tok/s (Qwen2.5-0.5B Q4_K_M).
+  - **Linux install.** `install.sh` installs into a fresh container.

@@ -19,24 +19,24 @@ constexpr double kGiB = 1024.0 * 1024.0 * 1024.0;
 
 void print_usage() {
   std::printf(
-      "usage: engine [--log-level trace|debug|info|warn|error|off] <command> [args]\n"
+      "usage: dynalm [--log-level trace|debug|info|warn|error|off] <command> [args]\n"
       "\n"
       "commands:\n"
       "  version              print version and build configuration\n"
       "  info                 print detected hardware and selected CPU backend\n"
       "  inspect <model>      show model metadata, config and memory estimate\n"
-      "  run <model> -p TEXT  generate from a prompt (engine run for options)\n"
-      "  serve <model>        OpenAI-compatible HTTP server (engine serve for options)\n"
+      "  run <model> -p TEXT  generate from a prompt (dynalm run for options)\n"
+      "  serve <model>        OpenAI-compatible HTTP server (dynalm serve for options)\n"
       "  benchmark <model>    load test (in-process or --url server), P50-P99 latency\n"
-      "  list [dir]           GGUF models under dir (default ./models or $ENGINE_MODELS_DIR)\n"
+      "  list [dir]           GGUF models under dir (default ./models or $DYNALM_MODELS_DIR)\n"
       "  stop | unload        ask a local server to drain and exit (--host, --port)\n");
 }
 
 int cmd_version() {
-  std::printf("engine %s\n", ENGINE_VERSION_STRING);
+  std::printf("DynaLM %s\n", ENGINE_VERSION_STRING);
   std::printf("build:    %s, %s %s\n", ENGINE_BUILD_TYPE, ENGINE_COMPILER_ID, ENGINE_COMPILER_VERSION);
-  std::printf("kernels:  generic%s%s%s\n", ENGINE_HAS_AVX2 ? " avx2" : "",
-              ENGINE_HAS_AVX512 ? " avx512" : "", ENGINE_HAS_AMX ? " amx" : "");
+  std::printf("kernels:  generic%s%s%s%s\n", ENGINE_HAS_AVX2 ? " avx2" : "", ENGINE_HAS_AVX512 ? " avx512" : "",
+              ENGINE_HAS_AMX ? " amx" : "", ENGINE_HAS_NEON ? " neon" : "");
   std::printf("backends: cpu (built); cuda, hip, metal, vulkan: designed, not built (DD-045)\n");
   return 0;
 }
@@ -107,7 +107,7 @@ int main(int argc, char** argv) {
     if (args[i] == "--log-level" && i + 1 < args.size()) {
       engine::log::Level lvl;
       if (!engine::log::parse_level(args[i + 1], lvl)) {
-        std::fprintf(stderr, "engine: invalid log level '%.*s'\n",
+        std::fprintf(stderr, "dynalm: invalid log level '%.*s'\n",
                      static_cast<int>(args[i + 1].size()), args[i + 1].data());
         return 1;
       }
@@ -117,7 +117,7 @@ int main(int argc, char** argv) {
       print_usage();
       return 0;
     } else {
-      std::fprintf(stderr, "engine: unknown option '%.*s'\n", static_cast<int>(args[i].size()),
+      std::fprintf(stderr, "dynalm: unknown option '%.*s'\n", static_cast<int>(args[i].size()),
                    args[i].data());
       return 1;
     }
@@ -137,7 +137,7 @@ int main(int argc, char** argv) {
   if (cmd == "serve") return engine::cli::cmd_serve(std::span(args).subspan(i + 1));
 #else
   if (cmd == "serve") {
-    std::fprintf(stderr, "engine: built without the server (ENABLE_SERVER=OFF)\n");
+    std::fprintf(stderr, "dynalm: built without the server (ENABLE_SERVER=OFF)\n");
     return 2;
   }
 #endif
@@ -150,7 +150,7 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  std::fprintf(stderr, "engine: unknown command '%.*s'\n", static_cast<int>(cmd.size()), cmd.data());
+  std::fprintf(stderr, "dynalm: unknown command '%.*s'\n", static_cast<int>(cmd.size()), cmd.data());
   print_usage();
   return 1;
 }

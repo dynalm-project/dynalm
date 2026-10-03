@@ -188,7 +188,7 @@ Result<ModelConfig> read_config(const json::Value& cfg) {
   c.norm_eps = static_cast<float>(get_float_or(cfg, "rms_norm_eps", 1e-6));
   c.qk_rows_interleaved = false;
   // Final say comes from the adapter (lm_head present or not); this is the
-  // declared intent, shown by `engine inspect`. HF's default is tied.
+  // declared intent, shown by `dynalm inspect`. HF's default is tied.
   const json::Value* tie = field(cfg, "tie_word_embeddings");
   c.tied_embeddings = !(tie && tie->is_bool() && !tie->as_bool());
 

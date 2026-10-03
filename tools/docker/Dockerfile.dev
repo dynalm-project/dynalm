@@ -1,11 +1,14 @@
-# Linux dev/test image: gcc 13, cmake, ninja, GoogleTest.
-# Used for Linux builds and sanitizer runs (ASAN/UBSAN/TSAN), which MSVC lacks.
+# Linux dev/test image: gcc 13 + clang 18, cmake, ninja, GoogleTest.
+# Used for Linux builds, sanitizer runs (ASAN/UBSAN/TSAN, which MSVC lacks),
+# clang builds (the macOS compiler family) and, with --platform linux/arm64,
+# ARM64/NEON builds under emulation.
 #
-#   docker build -t engine-dev -f tools/docker/Dockerfile.dev tools/docker
+#   docker build -t dynalm-dev -f tools/docker/Dockerfile.dev tools/docker
+#   docker build --platform linux/arm64 -t dynalm-dev-arm64 -f tools/docker/Dockerfile.dev tools/docker
 #   tools/linux.sh linux-asan-ubsan
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      g++ cmake ninja-build libgtest-dev ca-certificates \
+      g++ clang cmake ninja-build libgtest-dev ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src

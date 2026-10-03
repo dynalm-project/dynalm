@@ -1,4 +1,4 @@
-// `engine inspect <model> [--metadata] [--tensors]`: a GGUF file, or a Hugging
+// `dynalm inspect <model> [--metadata] [--tensors]`: a GGUF file, or a Hugging
 // Face model directory / .safetensors file (spec §16).
 
 #include <cstdio>
@@ -67,7 +67,7 @@ int cmd_inspect(std::span<const std::string_view> args) {
     }
   }
   if (path.empty()) {
-    std::fprintf(stderr, "usage: engine inspect <model> [--metadata] [--tensors]\n");
+    std::fprintf(stderr, "usage: dynalm inspect <model> [--metadata] [--tensors]\n");
     return 1;
   }
 

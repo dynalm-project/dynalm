@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+### DynaLM: name, installs, CI, NEON
+- Renamed to **DynaLM**:
+  - the command `engine` → `dynalm`;
+  - environment variables `ENGINE_*` → `DYNALM_*` (`DYNALM_CONFIG`, `DYNALM_MODELS_DIR`,
+    `DYNALM_<OPTION>`, `DYNALM_GEMM_KC`, `DYNALM_MATMUL_EXPAND_MIN`);
+  - Prometheus metrics `engine_*` → `dynalm_*`;
+  - API `owned_by: "dynalm"`.
+- Installers: `scripts/install.sh` (Linux, macOS) and `scripts/install.ps1` (Windows). CMake
+  install rules, CPack archives, `DYNALM_STATIC_RUNTIME`, a two-stage `Dockerfile`
+  (amd64/arm64).
+- CI: `.github/workflows/ci.yml`:
+  - Linux x86-64 gcc/clang/ASAN/TSAN;
+  - Linux ARM64;
+  - Windows MSVC;
+  - macOS Apple Silicon;
+  - install scripts and Docker.
+
+  `release.yml` builds packages on tags.
+- ARM64 NEON kernel tier (Apple Silicon, Graviton, Windows on ARM). SIMD options are now
+  architecture-aware.
+- macOS platform support: CPU topology (P/E cores), memory, process stats.
+- Presets `linux-clang-release` and `macos-release`. The dev image includes clang and builds
+  for arm64.
+- The cpp-httplib download retries, and `DYNALM_HTTPLIB_HEADER` supports offline builds.
+- README rewritten (DD-046).
+
 ### Phase 28 — GPU backend architecture (no GPU code)
 - Backend memory contract (DD-045): `upload`, `download`, `host_accessible`, all scratch and
   KV through `allocate`, KV copy-on-write through `copy`. New data-movement ops `fill`,

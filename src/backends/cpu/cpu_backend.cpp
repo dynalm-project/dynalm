@@ -48,11 +48,11 @@ inline float apply_act(Activation a, float x) {
 CpuBackend::CpuBackend(ThreadPool& pool, CpuIsa isa)
     : pool_(pool), k_(make_cpu_kernels(isa)), name_("CPU/" + std::string(isa_name(k_.isa))) {
   // Tuning override for experiments / the AutoTuner (multiple of 256; 0 = off).
-  if (const char* kc = std::getenv("ENGINE_GEMM_KC")) {
+  if (const char* kc = std::getenv("DYNALM_GEMM_KC")) {
     const long v = std::strtol(kc, nullptr, 10);
     gemm_kc_ = v > 0 ? v / 256 * 256 : 0;
   }
-  if (const char* em = std::getenv("ENGINE_MATMUL_EXPAND_MIN")) {
+  if (const char* em = std::getenv("DYNALM_MATMUL_EXPAND_MIN")) {
     expand_min_rows_ = std::max<long>(1, std::strtol(em, nullptr, 10));
   }
 }

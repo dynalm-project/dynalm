@@ -1,4 +1,4 @@
-// `engine benchmark <model> [options]`: load test the engine in-process
+// `dynalm benchmark <model> [options]`: load test the engine in-process
 // or any OpenAI-compatible server (--url), sweeping concurrency x prompt
 // length x output length, with P50/P90/P95/P99 latency.
 
@@ -22,7 +22,7 @@ namespace {
 
 void usage() {
   std::fprintf(stderr,
-               "usage: engine benchmark <model> [options]\n"
+               "usage: dynalm benchmark <model> [options]\n"
                "  --concurrency LIST    e.g. 1,4,16 (default 1,4)\n"
                "  --prompt LIST         prompt lengths in tokens (default 128,512)\n"
                "  --output LIST         output lengths in tokens (default 128)\n"
@@ -127,7 +127,7 @@ int cmd_benchmark(std::span<const std::string_view> args) {
 
   const CpuInfo& cpu = cpu_info();
   const std::string hardware = cpu.brand + " (" + std::to_string(cpu.physical_cores) + "C/" +
-                               std::to_string(cpu.logical_cores) + "T), " + "engine " + ENGINE_VERSION_STRING;
+                               std::to_string(cpu.logical_cores) + "T), " + "DynaLM " + ENGINE_VERSION_STRING;
   const std::string model = std::filesystem::path(path).filename().string();
   std::printf("target: %s\nmodel: %s\nhardware: %s\n\n", target->name().c_str(), model.c_str(), hardware.c_str());
   std::printf("%4s %6s %5s | %8s %8s | %8s %8s %8s | %7s %7s %7s | %7s %7s | %6s\n", "conc", "prompt", "out",

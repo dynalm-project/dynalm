@@ -3,7 +3,11 @@ include(FetchContent)
 # Prefer a system GoogleTest; fall back to a pinned download.
 find_package(GTest 1.14 CONFIG QUIET)
 if(NOT GTest_FOUND)
-  set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)  # match MSVC /MD runtime
+  if(DYNALM_STATIC_RUNTIME)  # match the MSVC runtime of the engine
+    set(gtest_force_shared_crt OFF CACHE BOOL "" FORCE)
+  else()
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+  endif()
   set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
   set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
   FetchContent_Declare(googletest

@@ -36,7 +36,7 @@ bool isa_compiled(CpuIsa isa) {
     case CpuIsa::kAmx: return ENGINE_HAS_AMX;
     case CpuIsa::kNeon: return false;
 #elif ENGINE_ARCH_ARM64
-    case CpuIsa::kNeon: return false;  // NEON kernels: future phase
+    case CpuIsa::kNeon: return ENGINE_HAS_NEON;
     default: return false;
 #else
     default: return false;

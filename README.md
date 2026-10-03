@@ -1,17 +1,95 @@
-# engine
+# DynaLM
 
-A CPU-first LLM inference runtime in C++20. It loads GGUF models and executes
-them with its own kernels, scheduler, and paged KV cache. The architecture is
-designed so GPU backends can be added later without touching the scheduler,
-model, or KV subsystems.
-
-**Status:** Phase 0 (foundation). See [TODO.md](TODO.md) for the roadmap and
-[docs/architecture.md](docs/architecture.md) for the design.
+**A fast, CPU-first LLM inference engine.** Run Llama, Qwen, Gemma, Phi, Mistral and
+mixture-of-experts models on an ordinary CPU, from the terminal or as an OpenAI-compatible
+server. Written in C++20 with no Python at runtime.
 
 ```sh
-cmake --preset msvc-release && cmake --build --preset msvc-release
-ctest --preset msvc-release
-build/msvc-release/src/engine info
+dynalm run  models/qwen2.5-0.5b-instruct-q4_k_m.gguf -p "What is the capital of France?"
+dynalm serve models/qwen2.5-0.5b-instruct-q4_k_m.gguf --port 8000
 ```
 
-See [docs/development.md](docs/development.md) for build requirements.
+## Why DynaLM
+
+- **Fast on CPUs.**
+  - Hand-written AVX2 (x86-64) and NEON (ARM64 / Apple Silicon) kernels.
+  - Matches or beats llama.cpp's throughput on the same machine, with 2–3× faster time to
+    first token under load.
+- **Built for many users.**
+  - Continuous batching, so new requests join running ones.
+  - Paged KV cache, chunked prompts, and reuse of shared prompt prefixes.
+- **Opens what you already have.**
+  - GGUF files (llama.cpp / Ollama), Hugging Face SafeTensors folders, and GPTQ / AWQ
+    checkpoints.
+  - Quantized formats from Q2_K to Q8_0, plus F16 and BF16.
+- **Drop-in API.** OpenAI-compatible `/v1/chat/completions` and `/v1/completions` with
+  streaming, so existing OpenAI clients work by changing the base URL.
+- **Production basics.** Graceful shutdown, overload protection, timeouts, Prometheus
+  metrics, and configuration from a file, environment variables or flags.
+
+## Install
+
+| Platform | Command | Status |
+|---|---|---|
+| Linux (x86-64, ARM64) | `./scripts/install.sh` | ✅ tested |
+| macOS (Apple Silicon, Intel) | `./scripts/install.sh` | ⚠️ supported in code; verified by the CI job on GitHub (`macos-14`), not yet run |
+| Windows 10/11 (x64) | `powershell -ExecutionPolicy Bypass -File scripts\install.ps1 -AddToPath` | ✅ tested |
+| Docker (amd64, arm64) | `docker build -t dynalm .` | ✅ tested |
+
+You need a C++20 compiler and CMake ≥ 3.24 (on Windows: Visual Studio 2022 Build Tools with
+the C++ workload). The installers build a release binary and put `dynalm` in `~/.local/bin`
+(Linux/macOS) or `%LOCALAPPDATA%\Programs\DynaLM\bin` (Windows). Release archives for every
+platform are produced by the `release` workflow when a version tag is pushed.
+
+```sh
+git clone <this repository> && cd dynalm
+./scripts/install.sh            # or scripts\install.ps1 on Windows
+dynalm info                     # your CPU, its SIMD features and the kernels DynaLM will use
+```
+
+Docker:
+
+```sh
+docker build -t dynalm .
+docker run --rm -p 8000:8000 -v "$PWD/models:/models" dynalm serve /models/model.gguf
+```
+
+## Use
+
+```sh
+dynalm list                                   # models in ./models (GGUF and Hugging Face folders)
+dynalm inspect models/model.gguf              # architecture, quantization, memory estimate, support
+dynalm run models/model.gguf -p "Hi" --temp 0.7 --top-p 0.9
+dynalm serve models/model.gguf --port 8000    # OpenAI-compatible server
+dynalm stop                                   # drain in-flight requests and exit
+dynalm benchmark models/model.gguf --concurrency 1,4,16
+```
+
+```sh
+curl http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"Hello"}],"stream":true}'
+```
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="unused")
+print(client.chat.completions.create(model="any", messages=[{"role": "user", "content": "Hi"}]).choices[0].message.content)
+```
+
+## Supported models
+
+Llama 1–3 (incl. Mistral, SmolLM, DeepSeek-distilled), Qwen 2 / 2.5 / 3, Gemma 1 / 2 / 3, Phi-3,
+IBM Granite, and mixture-of-experts models: Mixtral, Qwen-MoE, Granite-MoE. Details:
+[docs/model-support.md](docs/model-support.md).
+
+## Documentation
+
+- [docs/development.md](docs/development.md): building, testing, configuration, serving.
+- [docs/architecture.md](docs/architecture.md): how the engine is put together.
+- [docs/benchmarks.md](docs/benchmarks.md): measured performance, including head-to-head
+  runs against llama.cpp.
+- [docs/design-decisions.md](docs/design-decisions.md): every major design choice, with
+  evidence.
+- [docs/gpu-backend.md](docs/gpu-backend.md): the GPU backend contract (GPU support is
+  designed, not implemented yet).
+- [CHANGELOG.md](CHANGELOG.md) and [TODO.md](TODO.md).

@@ -63,6 +63,10 @@ std::vector<CpuKernels> tiers() {
     CpuKernels a = g;
     if (register_avx2_kernels(a)) out.push_back(a);
   }
+  if (isa_supported(CpuIsa::kNeon, cpu_info().features)) {
+    CpuKernels a = g;
+    if (register_neon_kernels(a)) out.push_back(a);
+  }
   return out;
 }
 
@@ -174,10 +178,12 @@ TEST(Kernels, GemmPanelMatchesDots) {
   }
 }
 
-TEST(Kernels, Avx2TierSelectedWhenSupported) {
+TEST(Kernels, BestTierSelectedWhenSupported) {
   const CpuKernels k = make_cpu_kernels(select_best_isa(cpu_info().features));
   if (isa_supported(CpuIsa::kAvx2, cpu_info().features) && isa_compiled(CpuIsa::kAvx2)) {
     EXPECT_EQ(k.isa, CpuIsa::kAvx2);
+  } else if (isa_supported(CpuIsa::kNeon, cpu_info().features) && isa_compiled(CpuIsa::kNeon)) {
+    EXPECT_EQ(k.isa, CpuIsa::kNeon);
   } else {
     EXPECT_EQ(k.isa, CpuIsa::kGeneric);
   }

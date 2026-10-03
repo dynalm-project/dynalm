@@ -1,4 +1,4 @@
-// `engine run <model> -p <prompt> [options]`: streamed generation through the
+// `dynalm run <model> -p <prompt> [options]`: streamed generation through the
 // Engine (the same path the HTTP server uses).
 
 #include <algorithm>
@@ -24,7 +24,7 @@ constexpr double kMiB = 1024.0 * 1024.0;
 
 void usage() {
   std::fprintf(stderr,
-               "usage: engine run <model> -p <prompt> [options]\n"
+               "usage: dynalm run <model> -p <prompt> [options]\n"
                "  -p, --prompt TEXT     prompt text\n"
                "  -n, --max-tokens N    tokens to generate (default 128)\n"
                "  --chat                wrap the prompt in the model's chat template (default)\n"
@@ -76,7 +76,7 @@ Status load_spec_model(const std::string& path, CpuBackend& be, DType kv_dtype, 
   return Status::Ok();
 }
 
-// `engine run --spec ...`: the single-sequence speculative path (the Engine's
+// `dynalm run --spec ...`: the single-sequence speculative path (the Engine's
 // continuous-batching scheduler does not host drafters yet).
 int run_speculative(const std::string& path, const std::string& spec, int k, const std::string& prompt,
                     const std::string& system, bool chat, bool stream, int threads, int ctx, int batch,

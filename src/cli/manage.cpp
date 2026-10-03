@@ -1,10 +1,10 @@
 // Model management commands (spec §41):
-//   engine list [dir]                 GGUF files and Hugging Face model directories under dir
-//                                     (default $ENGINE_MODELS_DIR or ./models)
-//   engine stop [--host H] [--port P] ask a running `engine serve` to drain and exit
+//   dynalm list [dir]                 GGUF files and Hugging Face model directories under dir
+//                                     (default $DYNALM_MODELS_DIR or ./models)
+//   dynalm stop [--host H] [--port P] ask a running `dynalm serve` to drain and exit
 //
-// A server process serves exactly one model (DD-039), so `engine unload` is
-// the same operation as `engine stop`.
+// A server process serves exactly one model (DD-039), so `dynalm unload` is
+// the same operation as `dynalm stop`.
 
 #include <algorithm>
 #include <charconv>
@@ -28,7 +28,7 @@ namespace engine::cli {
 int cmd_list(std::span<const std::string_view> args) {
   namespace fs = std::filesystem;
   std::string dir = "models";
-  if (const char* env = std::getenv("ENGINE_MODELS_DIR")) dir = env;
+  if (const char* env = std::getenv("DYNALM_MODELS_DIR")) dir = env;
   if (!args.empty()) dir = args[0];
   std::error_code ec;
   if (!fs::is_directory(dir, ec)) {
@@ -105,7 +105,7 @@ int cmd_stop(std::span<const std::string_view> args) {
       ok = ec == std::errc() && p == v.data() + v.size();
     } else ok = false;
     if (!ok) {
-      std::fprintf(stderr, "usage: engine stop [--host 127.0.0.1] [--port 8000]\n");
+      std::fprintf(stderr, "usage: dynalm stop [--host 127.0.0.1] [--port 8000]\n");
       return 1;
     }
   }
@@ -117,7 +117,7 @@ int cmd_stop(std::span<const std::string_view> args) {
   return 0;
 #else
   (void)args;
-  std::fprintf(stderr, "engine: built without the server (ENABLE_SERVER=OFF)\n");
+  std::fprintf(stderr, "dynalm: built without the server (ENABLE_SERVER=OFF)\n");
   return 2;
 #endif
 }

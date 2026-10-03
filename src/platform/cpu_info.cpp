@@ -22,6 +22,10 @@
 #include <set>
 #include <sstream>
 #include <unistd.h>
+#elif ENGINE_OS_MACOS
+#include <mach/mach.h>
+#include <sys/sysctl.h>
+#include <sys/types.h>
 #endif
 
 namespace engine {
@@ -237,6 +241,36 @@ void detect_topology_linux(CpuInfo& info) {
 
 #endif
 
+#if ENGINE_OS_MACOS
+
+int64_t sysctl_int(const char* name) {
+  int64_t v = 0;
+  size_t len = sizeof(v);
+  if (sysctlbyname(name, &v, &len, nullptr, 0) != 0) return 0;
+  if (len == sizeof(int32_t)) return static_cast<int64_t>(*reinterpret_cast<int32_t*>(&v));
+  return v;
+}
+
+// hw.perflevel0 = performance cores, hw.perflevel1 = efficiency cores
+// (Apple Silicon; absent on Intel Macs).
+void detect_topology_macos(CpuInfo& info) {
+  info.physical_cores = static_cast<int>(sysctl_int("hw.physicalcpu"));
+  info.logical_cores = static_cast<int>(sysctl_int("hw.logicalcpu"));
+  info.performance_cores = static_cast<int>(sysctl_int("hw.perflevel0.physicalcpu"));
+  info.efficiency_cores = static_cast<int>(sysctl_int("hw.perflevel1.physicalcpu"));
+  info.l1d_bytes = sysctl_int("hw.l1dcachesize");
+  info.l2_bytes = sysctl_int("hw.l2cachesize");
+  info.l3_bytes = sysctl_int("hw.l3cachesize");
+  char brand[256] = {};
+  size_t len = sizeof(brand);
+  if (info.brand.empty() && sysctlbyname("machdep.cpu.brand_string", brand, &len, nullptr, 0) == 0) {
+    info.brand = brand;
+  }
+  if (info.vendor == "ARM") info.vendor = "Apple";
+}
+
+#endif
+
 }  // namespace
 
 CpuInfo detect_cpu_info() {
@@ -255,6 +289,8 @@ CpuInfo detect_cpu_info() {
   detect_topology_windows(info);
 #elif ENGINE_OS_LINUX
   detect_topology_linux(info);
+#elif ENGINE_OS_MACOS
+  detect_topology_macos(info);
 #endif
 
   if (info.logical_cores <= 0) {
@@ -286,6 +322,16 @@ MemoryInfo memory_info() {
   while (in >> key >> value_kb >> unit) {
     if (key == "MemTotal:") m.total_bytes = value_kb * 1024;
     if (key == "MemAvailable:") m.available_bytes = value_kb * 1024;
+  }
+#elif ENGINE_OS_MACOS
+  m.total_bytes = sysctl_int("hw.memsize");
+  // Available ~ free + inactive (reclaimable) pages, like Activity Monitor.
+  vm_statistics64_data_t vm{};
+  mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+  if (host_statistics64(mach_host_self(), HOST_VM_INFO64, reinterpret_cast<host_info64_t>(&vm), &count) ==
+      KERN_SUCCESS) {
+    const auto page = static_cast<int64_t>(vm_kernel_page_size);
+    m.available_bytes = (static_cast<int64_t>(vm.free_count) + static_cast<int64_t>(vm.inactive_count)) * page;
   }
 #endif
   return m;

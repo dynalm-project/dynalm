@@ -52,7 +52,7 @@ touched at load time.
 ## Phase 3 — Model IR
 
 Nothing here is performance-critical: IR construction happens once per model load, and
-role lookups are O(1) array indexing. `engine inspect` on SmolLM2-135M (open + config +
+role lookups are O(1) array indexing. `dynalm inspect` on SmolLM2-135M (open + config +
 estimate) runs at process-startup speed. No benchmark was added.
 
 ## Phase 4 — tokenizer (`bench_tokenizer models/SmolLM2-135M-Instruct-f16.gguf`)
@@ -70,7 +70,7 @@ tokenizes in about 8 ms, far below prefill cost, so the tokenizer is not a bottl
 
 ## Phase 6 — baseline end-to-end (generic kernels)
 
-`engine run SmolLM2-135M-Instruct-f16.gguf -p "Write a short story about a robot learning to paint." -n 64`
+`dynalm run SmolLM2-135M-Instruct-f16.gguf -p "Write a short story about a robot learning to paint." -n 64`
 (chat template → 41 prompt tokens), f16 weights, f16 KV, generic kernels (no SIMD, no GEMM tiling).
 Linux container (gcc 13, -O3) on WSL2, same i7-1255U. Smart App Control blocked the Windows binary.
 
@@ -109,7 +109,7 @@ Takeaways:
 | q5_K | 763 | 883 | 0.186 | 3.69 |
 | q6_K | 3494 | 5250 | 0.853 | 0.96 |
 
-### End to end (`engine run ... -n 64 -t 10`, same prompt as Phase 6, Linux container)
+### End to end (`dynalm run ... -n 64 -t 10`, same prompt as Phase 6, Linux container)
 
 | model | weights | prefill tok/s | decode tok/s | ITL p50 / p90 / p99 ms |
 |---|---|---|---|---|
@@ -323,7 +323,7 @@ per-token chained mixing). Radix is the default.
 (An earlier run fed f32/bf16 rows of tiny byte patterns, which are denormal floats and
 pathologically slow. The benchmark now uses real values.)
 
-### End to end (`engine run ... -n 64 -t 10`, Linux container) — Phase 8 → Phase 17
+### End to end (`dynalm run ... -n 64 -t 10`, Linux container) — Phase 8 → Phase 17
 
 | model | weights | prefill tok/s | decode tok/s (was) | ITL p50 / p99 ms |
 |---|---|---|---|---|
@@ -398,7 +398,7 @@ Matmuls dominate both phases. Elementwise ops are under 6% in total, so fusing t
 | Qwen2.5-0.5B Q4_K_M | — | **278 tok/s** |
 
 Qwen prefill sustains about 257 GFLOPS end to end (≈1 GFLOP per token), near this laptop's
-practical fp32 FMA peak. Earlier `engine run` prefill numbers (16–50 tok/s) were dominated by
+practical fp32 FMA peak. Earlier `dynalm run` prefill numbers (16–50 tok/s) were dominated by
 cold page faults of the memory-mapped weights on the first forward pass, not by compute.
 
 ### Split-K decode attention (`bench_decode_context`, SmolLM2 Q8_0) — p50 ms/token
@@ -426,13 +426,13 @@ GQA KV head is read once per query head (3×). Grouped GQA attention is the next
 Faster prefill shrinks the per-step stall, so throughput, TTFT and the ITL tail all improve at
 the same time: 4× throughput and 4.7× lower TTFT at 16 requests.
 
-## Phase 21 — serving benchmarks (`engine benchmark`, DD-037)
+## Phase 21 — serving benchmarks (`dynalm benchmark`, DD-037)
 
-All rows come from the same closed-loop client (`engine benchmark --url`, streaming
+All rows come from the same closed-loop client (`dynalm benchmark --url`, streaming
 `/v1/completions`, `ignore_eos`, temperature 0). Every request has a unique prompt of exact
 length, and prompts are never reused across points. Each point runs 2 × concurrency requests
 (at least 4) after one warm-up request. Model: Qwen2.5-0.5B-Instruct Q4_K_M; 10 threads; the
-i7-1255U laptop. Servers run one at a time in the same `engine-dev`-style Docker environment
+i7-1255U laptop. Servers run one at a time in the same `dynalm-dev`-style Docker environment
 (`tools/compare_baselines.sh`); llama.cpp is `ghcr.io/ggml-org/llama.cpp:server` with
 `-t 10 -tb 10 -c 32768 -np 16`. Latencies are in ms. A laptop under sustained load throttles,
 so differences under ~10% are noise.
@@ -527,13 +527,13 @@ alternating repetitions:
 No measurable change; run-to-run spread on this laptop is ±10%.
 
 Lifecycle checks in the container:
-- `engine stop` drains and exits 0.
+- `dynalm stop` drains and exits 0.
 - SIGTERM with one request in flight finishes it (96 tokens, 0 errors), then exits 0.
 - AUTO KV picked 65536 tokens (0.75 GB) with 5.85 GB free.
 
 ## Phase 23 — SafeTensors (BF16) vs GGUF (F16), same model
 
-SmolLM2-135M-Instruct, 10 threads, in-process `engine benchmark`, prompt 128 / output 64:
+SmolLM2-135M-Instruct, 10 threads, in-process `dynalm benchmark`, prompt 128 / output 64:
 
 | format | conc | out tok/s | ITL p50 ms | TTFT p50 ms |
 |---|---|---|---|---|
@@ -546,7 +546,7 @@ Row dequantization, 4096 elements (`bench_kernels`): BF16 generic 280 ns → AVX
 F16 needs a real conversion (F16C, 144 ns); BF16 is a shift. That is why BF16 batches decode
 faster than F16. Single-stream decode is memory-bound and the same for both.
 
-Load time (`engine run`, warm page cache): GGUF 58 ms, SafeTensors 170 ms. The difference is
+Load time (`dynalm run`, warm page cache): GGUF 58 ms, SafeTensors 170 ms. The difference is
 parsing the 2 MB `tokenizer.json`; the weights are memory-mapped in both cases.
 
 Accuracy: max |logit diff| 1.7e-5 between the BF16 checkpoint and its F16 GGUF conversion. The
@@ -555,7 +555,7 @@ tiny fixtures are bit-exact (0) for 6 of 7 architectures, and Llama differs by 1
 
 ## Phase 24 — GPTQ / AWQ checkpoints (repacked at load)
 
-Qwen2.5-0.5B-Instruct, 10 threads, in-process `engine benchmark`, prompt 128 / output 64:
+Qwen2.5-0.5B-Instruct, 10 threads, in-process `dynalm benchmark`, prompt 128 / output 64:
 
 | checkpoint | runs as | load ms | c=1 out tok/s | c=1 ITL p50 ms | c=4 out tok/s | c=4 ITL p50 ms |
 |---|---|---|---|---|---|---|
@@ -582,7 +582,7 @@ Where decode time went (`bench_profile`, Q8_0, 10 threads, ms per token):
 Prefill, 256 tokens: 1.5 s → 0.98 s. Experts with many rows still use the GEMM path, one expert
 at a time.
 
-End to end (in-process `engine benchmark`, prompt 128 / output 64, 10 threads), against a dense
+End to end (in-process `dynalm benchmark`, prompt 128 / output 64, 10 threads), against a dense
 model with a similar active size:
 
 | model | quant | c=1 ITL p50 ms | c=4 ITL p50 ms | c=4 out tok/s |

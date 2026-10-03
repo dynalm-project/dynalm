@@ -1,4 +1,4 @@
-// `engine serve <model> [options]`: OpenAI-compatible HTTP server.
+// `dynalm serve <model> [options]`: OpenAI-compatible HTTP server.
 
 #include <atomic>
 #include <charconv>
@@ -32,7 +32,7 @@ constexpr OptionSpec kServeOptions[] = {
 
 void usage() {
   std::fprintf(stderr,
-               "usage: engine serve <model> [options]\n"
+               "usage: dynalm serve <model> [options]\n"
                "  --config FILE           read options from FILE (key = value lines)\n"
                "  --host ADDR             bind address (default 127.0.0.1)\n"
                "  --port N                port (default 8000)\n"
@@ -48,8 +48,8 @@ void usage() {
                "  --temperature T         default temperature when a request omits it (default 1.0)\n"
                "  --request-timeout S     per-request timeout in seconds, 0 = none (default 600)\n"
                "  --shutdown-timeout S    drain time for in-flight requests on stop (default 30)\n"
-               "  --disable-admin         turn off POST /admin/shutdown (used by `engine stop`)\n"
-               "Every option can also be set as ENGINE_<OPTION> (e.g. ENGINE_HTTP_THREADS=32)\n"
+               "  --disable-admin         turn off POST /admin/shutdown (used by `dynalm stop`)\n"
+               "Every option can also be set as DYNALM_<OPTION> (e.g. DYNALM_HTTP_THREADS=32)\n"
                "or in the config file; precedence: command line > environment > file.\n");
 }
 

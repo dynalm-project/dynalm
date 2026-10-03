@@ -1,0 +1,95 @@
+# Build and test DynaLM on every supported platform.
+# Real-model tests skip themselves (model files are not in the repository);
+# the tiny committed fixtures cover every architecture.
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: linux-x64 (${{ matrix.preset }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [linux-release, linux-clang-release, linux-asan-ubsan, linux-tsan]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libgtest-dev clang
+      - name: Allow TSAN on recent kernels
+        if: matrix.preset == 'linux-tsan'
+        run: sudo sysctl vm.mmap_rnd_bits=28
+      - run: cmake --preset ${{ matrix.preset }}
+      - run: cmake --build --preset ${{ matrix.preset }}
+      - run: ctest --preset ${{ matrix.preset }} --timeout 900
+
+  linux-arm64:
+    name: linux-arm64 (NEON)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build libgtest-dev
+      - run: cmake --preset linux-release
+      - run: cmake --build --preset linux-release
+      - run: ctest --preset linux-release --timeout 900
+      - run: ./build/linux-release/src/dynalm version
+
+  windows:
+    name: windows-x64 (MSVC)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - run: cmake --preset msvc-release
+      - run: cmake --build --preset msvc-release
+      - run: ctest --preset msvc-release --timeout 900
+      - run: .\build\msvc-release\src\dynalm.exe version
+
+  macos:
+    name: macos-arm64 (Apple Silicon)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install ninja
+      - run: cmake --preset macos-release
+      - run: cmake --build --preset macos-release
+      - run: ctest --preset macos-release --timeout 900
+      - run: ./build/macos-release/src/dynalm info
+
+  install-scripts:
+    name: install script (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    steps:
+      - uses: actions/checkout@v4
+      - run: (sudo apt-get install -y ninja-build || brew install ninja) || true
+      - run: ./scripts/install.sh --prefix "$RUNNER_TEMP/dynalm"
+      - run: '"$RUNNER_TEMP/dynalm/bin/dynalm" info'
+
+  install-script-windows:
+    name: install script (windows)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - run: powershell -ExecutionPolicy Bypass -File scripts\install.ps1 -Prefix "$env:RUNNER_TEMP\dynalm"
+      - run: '& "$env:RUNNER_TEMP\dynalm\bin\dynalm.exe" info'
+
+  docker:
+    name: docker image
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t dynalm .
+      - run: docker run --rm dynalm version

@@ -12,7 +12,6 @@ constexpr std::string_view kQwen2Regex =
     R"((?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+)";
 constexpr std::string_view kLlama3Regex =
     R"((?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+)";
-constexpr std::string_view kSpace = "\xE2\x96\x81";  // "▁"
 
 const json::Value* field(const json::Value* o, std::string_view key) {
   if (!o) return nullptr;

@@ -315,40 +315,40 @@ std::string Server::Impl::render_metrics() const {
   auto counter = [&](std::string_view name, std::string_view help, uint64_t v) {
     render_counter(name, help, static_cast<double>(v), out);
   };
-  counter("engine_requests_total", "HTTP completion requests received", requests_total.value());
-  counter("engine_requests_failed_total", "Requests that ended in an error", requests_failed.value());
-  counter("engine_requests_cancelled_total", "Requests cancelled (e.g. client disconnect)", requests_cancelled.value());
-  counter("engine_requests_rejected_total", "Requests refused with 503 (overload or draining)", requests_rejected.value());
-  counter("engine_requests_timed_out_total", "Requests that hit their timeout", st.scheduler.timed_out);
-  render_gauge("engine_requests_active", "Requests currently being served", active.load(), out);
-  counter("engine_prompt_tokens_total", "Prompt tokens of completed requests", prompt_tokens.value());
-  counter("engine_generation_tokens_total", "Tokens generated", st.scheduler.tokens_generated);
-  counter("engine_prefill_tokens_total", "Prompt tokens computed (excludes prefix-cache hits)", st.prefill_tokens);
-  counter("engine_tokens_processed_total", "Token rows computed by the model (prefill + decode)",
+  counter("dynalm_requests_total", "HTTP completion requests received", requests_total.value());
+  counter("dynalm_requests_failed_total", "Requests that ended in an error", requests_failed.value());
+  counter("dynalm_requests_cancelled_total", "Requests cancelled (e.g. client disconnect)", requests_cancelled.value());
+  counter("dynalm_requests_rejected_total", "Requests refused with 503 (overload or draining)", requests_rejected.value());
+  counter("dynalm_requests_timed_out_total", "Requests that hit their timeout", st.scheduler.timed_out);
+  render_gauge("dynalm_requests_active", "Requests currently being served", active.load(), out);
+  counter("dynalm_prompt_tokens_total", "Prompt tokens of completed requests", prompt_tokens.value());
+  counter("dynalm_generation_tokens_total", "Tokens generated", st.scheduler.tokens_generated);
+  counter("dynalm_prefill_tokens_total", "Prompt tokens computed (excludes prefix-cache hits)", st.prefill_tokens);
+  counter("dynalm_tokens_processed_total", "Token rows computed by the model (prefill + decode)",
           st.scheduler.tokens_computed);
-  render_gauge("engine_generation_tokens_per_second", "Generation throughput over the last busy second",
+  render_gauge("dynalm_generation_tokens_per_second", "Generation throughput over the last busy second",
                st.generation_tok_s, out);
-  render_gauge("engine_prefill_tokens_per_second", "Prefill throughput over the last busy second", st.prefill_tok_s,
+  render_gauge("dynalm_prefill_tokens_per_second", "Prefill throughput over the last busy second", st.prefill_tok_s,
                out);
-  render_gauge("engine_scheduler_running", "Sequences admitted", st.scheduler.running, out);
-  render_gauge("engine_scheduler_waiting", "Sequences queued", st.scheduler.waiting, out);
-  counter("engine_preemptions_total", "Sequences preempted under KV pressure", st.scheduler.preemptions);
-  render_gauge("engine_queue_latency_ms_avg", "Mean submission-to-admission latency",
+  render_gauge("dynalm_scheduler_running", "Sequences admitted", st.scheduler.running, out);
+  render_gauge("dynalm_scheduler_waiting", "Sequences queued", st.scheduler.waiting, out);
+  counter("dynalm_preemptions_total", "Sequences preempted under KV pressure", st.scheduler.preemptions);
+  render_gauge("dynalm_queue_latency_ms_avg", "Mean submission-to-admission latency",
                st.scheduler.admitted ? st.scheduler.queue_ms_total / static_cast<double>(st.scheduler.admitted) : 0.0, out);
-  render_gauge("engine_queue_latency_ms_max", "Max submission-to-admission latency", st.scheduler.queue_ms_max, out);
-  render_gauge("engine_kv_cache_used_blocks", "KV blocks in use", st.kv_blocks_used, out);
-  render_gauge("engine_kv_cache_capacity_blocks", "KV blocks total", st.kv_blocks_total, out);
-  render_gauge("engine_kv_cache_capacity_tokens", "KV capacity in tokens", static_cast<double>(engine.kv_capacity_tokens()),
+  render_gauge("dynalm_queue_latency_ms_max", "Max submission-to-admission latency", st.scheduler.queue_ms_max, out);
+  render_gauge("dynalm_kv_cache_used_blocks", "KV blocks in use", st.kv_blocks_used, out);
+  render_gauge("dynalm_kv_cache_capacity_blocks", "KV blocks total", st.kv_blocks_total, out);
+  render_gauge("dynalm_kv_cache_capacity_tokens", "KV capacity in tokens", static_cast<double>(engine.kv_capacity_tokens()),
                out);
-  render_gauge("engine_kv_cache_hit_rate", "Prefix-cache hit rate (reused / eligible prompt tokens)", st.prefix.hit_rate(),
+  render_gauge("dynalm_kv_cache_hit_rate", "Prefix-cache hit rate (reused / eligible prompt tokens)", st.prefix.hit_rate(),
                out);
-  render_gauge("engine_prefix_cache_blocks", "KV blocks held by the prefix cache", static_cast<double>(st.prefix.cached_blocks),
+  render_gauge("dynalm_prefix_cache_blocks", "KV blocks held by the prefix cache", static_cast<double>(st.prefix.cached_blocks),
                out);
-  engine.step_ms().render("engine_scheduler_step_ms", "Scheduler step (batched forward pass) latency (ms)", out);
-  ttft_ms.render("engine_ttft_ms", "Time to first token (ms)", out);
-  itl_ms.render("engine_itl_ms", "Inter-token latency of streamed responses (ms)", out);
-  tpot_ms.render("engine_tpot_ms", "Time per output token after the first, per request (ms)", out);
-  e2e_ms.render("engine_e2e_latency_ms", "End-to-end request latency (ms)", out);
+  engine.step_ms().render("dynalm_scheduler_step_ms", "Scheduler step (batched forward pass) latency (ms)", out);
+  ttft_ms.render("dynalm_ttft_ms", "Time to first token (ms)", out);
+  itl_ms.render("dynalm_itl_ms", "Inter-token latency of streamed responses (ms)", out);
+  tpot_ms.render("dynalm_tpot_ms", "Time per output token after the first, per request (ms)", out);
+  e2e_ms.render("dynalm_e2e_latency_ms", "End-to-end request latency (ms)", out);
   return out;
 }
 

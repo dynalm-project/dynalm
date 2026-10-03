@@ -54,6 +54,8 @@ void register_generic_kernels(CpuKernels& k);
 // Overrides entries with AVX2/FMA/F16C versions. Returns false (and changes
 // nothing) when the AVX2 tier was not compiled in.
 bool register_avx2_kernels(CpuKernels& k);
+// ARM64 NEON tier (Apple Silicon, Graviton, Windows on ARM); false when not compiled in.
+bool register_neon_kernels(CpuKernels& k);
 
 // Best available table for `isa` (falls back to lower tiers).
 CpuKernels make_cpu_kernels(CpuIsa isa);
