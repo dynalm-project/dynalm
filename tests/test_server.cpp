@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <thread>
 
 #include "api/json.h"
@@ -309,7 +310,13 @@ TEST_F(ServerTest, AdmissionLimitUnderConcurrency) {
   EXPECT_EQ(ok.load() + rejected.load(), 8);
   EXPECT_EQ(other.load(), 0);
   EXPECT_GE(ok.load(), 1);
-  EXPECT_EQ(s->active_requests(), 0);  // every slot came back, streamed or refused
+  // Every slot comes back, streamed or refused. A streamed request releases its
+  // slot when httplib drops the response, just after the client has read the
+  // final chunk, so allow that window (seen on the ARM64 CI runner).
+  for (int i = 0; i < 500 && s->active_requests() != 0; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  EXPECT_EQ(s->active_requests(), 0);
 }
 
 TEST_F(ServerTest, DrainRefusesNewWork) {
