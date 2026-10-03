@@ -29,7 +29,7 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
 - [x] Phase 23 — SafeTensors
 - [x] Phase 24 — GPTQ/AWQ architecture preparation
 - [x] Phase 25 — MoE support
-- [ ] Phase 26 — Advanced sampling
+- [x] Phase 26 — Advanced sampling
 - [ ] Phase 27 — Speculative decoding preparation
 - [ ] Phase 28 — GPU backend architecture
 
@@ -46,6 +46,7 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
 - MoE: mixed dense/MoE layer stacks (DeepSeek-MoE first-k-dense, Qwen mlp_only_layers);
   MLA attention for DeepSeek-V2/V3; OLMoE (full-width QK-norm); parallel gather/scatter and
   concurrent expert GEMMs for MoE prefill.
+- Sampling: logprobs/top_logprobs in the API, n > 1, logit_bias, grammar/JSON-constrained decoding.
 - Open-loop (Poisson arrival) mode for the load generator (DD-037).
 - Token-authenticated admin endpoint for deployments behind a same-host proxy (DD-039).
 - CPU affinity / thread pinning / NUMA placement (spec §32), measured against the baselines.

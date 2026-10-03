@@ -130,7 +130,10 @@ Status codes: 400 for invalid or unsupported requests (including prompt + max_to
 than the context or the KV cache), 503 for overload, draining or a retryable resource limit,
 504 for a request timeout, and 500 otherwise. Error bodies use the OpenAI shape
 `{"error":{"message","type"}}`.
-Sampling parameters are accepted, but decoding is greedy until Phase 26.
+Sampling (DD-043): `temperature` (default 1.0, as in OpenAI; `serve --temperature`), `top_p`,
+`seed`, `presence_penalty`, `frequency_penalty`, plus the extensions `top_k`, `min_p`,
+`repetition_penalty` and `repeat_last_n`. A request with a seed reproduces exactly, also
+across platforms. `engine run` is greedy unless `--temp` is given.
 The `"ignore_eos": true` request extension (also accepted by llama.cpp) disables stopping on
 end-of-generation tokens. It is used for fixed-length benchmarking.
 

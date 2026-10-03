@@ -30,12 +30,28 @@ void usage() {
                "  -c, --ctx N           KV cache capacity in tokens (default 4096)\n"
                "  --batch N             max tokens per forward pass (default 256)\n"
                "  --kv f16|f32          KV cache dtype (default f16)\n"
-               "  --no-stream           print only the final text\n");
+               "  --no-stream           print only the final text\n"
+               "sampling (default: greedy):\n"
+               "  --temp T              temperature (0 = greedy)\n"
+               "  --top-k K, --top-p P, --min-p P\n"
+               "  --repeat-penalty R, --presence-penalty P, --frequency-penalty F, --repeat-last-n N\n"
+               "  --seed S              RNG seed (reproducible output)\n");
 }
 
 bool parse_int(std::string_view s, int& out) {
   auto [p, ec] = std::from_chars(s.data(), s.data() + s.size(), out);
   return ec == std::errc() && p == s.data() + s.size();
+}
+
+bool parse_float(std::string_view s, float& out) {
+  try {
+    size_t used = 0;
+    const std::string str(s);
+    out = std::stof(str, &used);
+    return used == str.size();
+  } catch (...) {
+    return false;
+  }
 }
 
 }  // namespace
@@ -61,6 +77,20 @@ int cmd_run(std::span<const std::string_view> args) {
     else if (a == "--chat") chat = true;
     else if (a == "--raw") chat = false;
     else if (a == "--no-stream") stream = false;
+    else if (a == "--temp" || a == "--temperature") ok = parse_float(value(), params.sampling.temperature);
+    else if (a == "--top-k") ok = parse_int(value(), params.sampling.top_k);
+    else if (a == "--top-p") ok = parse_float(value(), params.sampling.top_p);
+    else if (a == "--min-p") ok = parse_float(value(), params.sampling.min_p);
+    else if (a == "--repeat-penalty") ok = parse_float(value(), params.sampling.repetition_penalty);
+    else if (a == "--presence-penalty") ok = parse_float(value(), params.sampling.presence_penalty);
+    else if (a == "--frequency-penalty") ok = parse_float(value(), params.sampling.frequency_penalty);
+    else if (a == "--repeat-last-n") ok = parse_int(value(), params.sampling.penalty_last_n);
+    else if (a == "--seed") {
+      int seed = 0;
+      ok = parse_int(value(), seed);
+      params.sampling.seed = static_cast<uint64_t>(seed);
+      params.sampling.has_seed = true;
+    }
     else if (a == "--kv") {
       const std::string_view v = value();
       ok = v == "f16" || v == "f32";
@@ -75,6 +105,10 @@ int cmd_run(std::span<const std::string_view> args) {
   }
   if (path.empty() || prompt.empty() || max_tokens <= 0 || threads < 0 || ctx <= 0 || batch <= 0) {
     usage();
+    return 1;
+  }
+  if (Status st = params.sampling.validate(); !st.ok()) {
+    std::fprintf(stderr, "run: %s\n", st.to_string().c_str());
     return 1;
   }
 

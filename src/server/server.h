@@ -34,6 +34,7 @@ struct ServerOptions {
   int http_threads = 0;            // 0 = max_active + 8 (each streaming request holds a worker)
   size_t max_body_bytes = 8 << 20;
   int32_t default_max_tokens = 1024;
+  float default_temperature = 1.0f;  // when a request omits it (OpenAI default; 0 = greedy)
   int64_t request_timeout_ms = 600000;  // per request, queued + generating (0 = none)
   bool enable_admin = true;             // POST /admin/shutdown from loopback
   std::function<void()> on_shutdown_request;  // invoked by /admin/shutdown

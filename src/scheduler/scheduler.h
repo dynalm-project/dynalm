@@ -33,6 +33,7 @@
 #include "common/status.h"
 #include "kv_cache/kv_cache.h"
 #include "model/transformer.h"
+#include "sampling/sampler.h"
 #include "prefix_cache/prefix_cache.h"
 #include "runtime/sequence.h"
 #include "tokenizer/tokenizer.h"
@@ -54,6 +55,7 @@ using RequestCallback = std::function<void(const RequestEvent&)>;
 struct Request {
   std::vector<TokenId> prompt;
   StopParams stop;
+  SamplingParams sampling;  // default: greedy
   RequestCallback on_event;
   int32_t priority = 0;    // higher is admitted first; FCFS within a level
   int64_t timeout_ms = 0;  // 0 = none; counted from submission, fails with kDeadlineExceeded
@@ -133,6 +135,7 @@ class Scheduler {
     int64_t deadline_ns = 0;  // 0 = none
     uint64_t last_step = 0;   // last step this sequence got decode rows (fairness)
     int32_t cached_blocks = 0;  // full blocks already offered to the prefix cache
+    std::unique_ptr<Sampler> sampler;  // null: greedy
   };
 
   void drain_incoming();

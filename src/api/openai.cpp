@@ -19,7 +19,46 @@ Status read_positive_int(const json::Value& body, std::string_view key, int32_t&
   return Status::Ok();
 }
 
-Status read_common(const json::Value& body, int32_t default_max_tokens, CompletionRequest& r) {
+// Reads an optional number in [lo, hi] (absent or null -> keep `out`).
+Status read_number(const json::Value& body, std::string_view key, double lo, double hi, float& out) {
+  const json::Value* v = body.find(key);
+  if (!v || v->is_null()) return Status::Ok();
+  if (!v->is_number() || !(v->as_number() >= lo) || !(v->as_number() <= hi)) {
+    return bad("'" + std::string(key) + "' must be a number in [" + std::to_string(lo) + ", " + std::to_string(hi) + "]");
+  }
+  out = static_cast<float>(v->as_number());
+  return Status::Ok();
+}
+
+// OpenAI sampling fields plus common extensions (top_k, min_p,
+// repetition_penalty, repeat_last_n) as llama.cpp / vLLM accept them.
+Status read_sampling(const json::Value& body, float default_temperature, SamplingParams& sp) {
+  sp.temperature = default_temperature;
+  ENGINE_RETURN_IF_ERROR(read_number(body, "temperature", 0.0, 2.0, sp.temperature));
+  ENGINE_RETURN_IF_ERROR(read_number(body, "top_p", 0.0, 1.0, sp.top_p));
+  if (sp.top_p <= 0.0f) return bad("'top_p' must be > 0");
+  ENGINE_RETURN_IF_ERROR(read_number(body, "min_p", 0.0, 1.0, sp.min_p));
+  ENGINE_RETURN_IF_ERROR(read_number(body, "presence_penalty", -2.0, 2.0, sp.presence_penalty));
+  ENGINE_RETURN_IF_ERROR(read_number(body, "frequency_penalty", -2.0, 2.0, sp.frequency_penalty));
+  ENGINE_RETURN_IF_ERROR(read_number(body, "repetition_penalty", 0.01, 10.0, sp.repetition_penalty));
+  float top_k = 0, last_n = static_cast<float>(sp.penalty_last_n);
+  ENGINE_RETURN_IF_ERROR(read_number(body, "top_k", 0.0, 1e6, top_k));
+  ENGINE_RETURN_IF_ERROR(read_number(body, "repeat_last_n", -1.0, 1e6, last_n));
+  if (top_k != std::floor(top_k) || last_n != std::floor(last_n)) return bad("'top_k' and 'repeat_last_n' must be integers");
+  sp.top_k = static_cast<int32_t>(top_k);
+  sp.penalty_last_n = static_cast<int32_t>(last_n);
+  if (const json::Value* seed = body.find("seed"); seed && !seed->is_null()) {
+    if (!seed->is_number() || seed->as_number() != std::floor(seed->as_number()) || std::abs(seed->as_number()) > 9e15) {
+      return bad("'seed' must be an integer");
+    }
+    sp.seed = static_cast<uint64_t>(static_cast<int64_t>(seed->as_number()));
+    sp.has_seed = true;
+  }
+  return sp.validate();
+}
+
+Status read_common(const json::Value& body, int32_t default_max_tokens, float default_temperature,
+                   CompletionRequest& r) {
   if (!body.is_object()) return bad("request body must be a JSON object");
   if (const json::Value* m = body.find("model"); m && m->is_string()) r.model = m->as_string();
 
@@ -62,14 +101,7 @@ Status read_common(const json::Value& body, int32_t default_max_tokens, Completi
       return bad("'" + std::string(unsupported) + "' is not supported");
     }
   }
-  // Sampling: accepted, but decoding is greedy for now (documented).
-  if (const json::Value* t = body.find("temperature"); t && t->is_number() && t->as_number() > 0) {
-    r.sampling_requested = true;
-  }
-  for (std::string_view key : {"top_p", "top_k", "min_p", "presence_penalty", "frequency_penalty", "seed"}) {
-    if (const json::Value* v = body.find(key); v && !v->is_null()) r.sampling_requested = true;
-  }
-  return Status::Ok();
+  return read_sampling(body, default_temperature, r.params.sampling);
 }
 
 // Message content: a string, or an array of {"type": "text", "text": ...} parts.
@@ -117,10 +149,11 @@ json::Object base(const std::string& id, const char* object, int64_t created, co
 
 }  // namespace
 
-Result<CompletionRequest> parse_chat_request(const json::Value& body, int32_t default_max_tokens) {
+Result<CompletionRequest> parse_chat_request(const json::Value& body, int32_t default_max_tokens,
+                                             float default_temperature) {
   CompletionRequest r;
   r.chat = true;
-  ENGINE_RETURN_IF_ERROR(read_common(body, default_max_tokens, r));
+  ENGINE_RETURN_IF_ERROR(read_common(body, default_max_tokens, default_temperature, r));
   const json::Value* msgs = body.find("messages");
   if (!msgs || !msgs->is_array() || msgs->as_array().empty()) return bad("'messages' must be a non-empty array");
   for (const json::Value& m : msgs->as_array()) {
@@ -139,10 +172,11 @@ Result<CompletionRequest> parse_chat_request(const json::Value& body, int32_t de
   return r;
 }
 
-Result<CompletionRequest> parse_completion_request(const json::Value& body, int32_t default_max_tokens) {
+Result<CompletionRequest> parse_completion_request(const json::Value& body, int32_t default_max_tokens,
+                                                   float default_temperature) {
   CompletionRequest r;
   r.chat = false;
-  ENGINE_RETURN_IF_ERROR(read_common(body, default_max_tokens, r));
+  ENGINE_RETURN_IF_ERROR(read_common(body, default_max_tokens, default_temperature, r));
   const json::Value* p = body.find("prompt");
   if (!p) return bad("'prompt' is required");
   if (p->is_string()) {

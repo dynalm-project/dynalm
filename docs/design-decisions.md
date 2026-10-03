@@ -517,7 +517,7 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   ASAN/UBSAN). Spec §28: lightweight HTTP that never blocks the scheduler. Handlers only
   relay a `RequestStream`.
 - **Compatibility choices:** Sampling fields (temperature, top_p, seed, penalties) are
-  accepted so standard clients work, but decoding is greedy until Phase 26. A one-time
+  accepted so standard clients work, but decoding is greedy until Phase 26 (superseded by DD-043). A one-time
   warning is logged and the limitation is documented. Features we can't honor (tools,
   n>1, logprobs, non-text content, response_format) are rejected with 400 rather than
   ignored. Requests to a model without a chat template get a clear 400 on
@@ -901,3 +901,54 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   - **Performance.** Decode is 59.7 → 29.1 ms/token with `matmul_many`. That is on par with
     dense Qwen2.5-0.5B Q8_0 (31.6 ms) at 2.6× the total parameters
     (docs/benchmarks.md, Phase 25).
+
+## DD-043: Sampling pipeline: per-sequence Sampler, histogram pruning, portable RNG and exp
+
+- **Decision:** Each request may carry `SamplingParams`: temperature, top_k, top_p, min_p,
+  repetition/frequency/presence penalties with a context window, and a seed. A non-greedy
+  request gets a `Sampler`, owned by its scheduler entry; greedy requests keep the old argmax
+  path. Per token, on the logits row in place:
+  1. **Penalties** over the last N context tokens. Counts come from sorting a reused copy of
+     the window, with no hash map.
+  2. **Greedy** (T ≤ 0 or top_k = 1): vectorized argmax, ties to the lowest id.
+  3. **Temperature only**: one vectorized exp pass, then a walk to draw.
+  4. **Otherwise**: one pass builds a 256-bin histogram of counts and probability mass over
+     the top 40·T of logit range, and applies the min-p cut. This gives a conservative logit
+     cutoff for top-k and top-p, so only the survivors are collected, sorted and used for the
+     exact top-k, then the exact nucleus over the post-top-k / min-p distribution, then the draw.
+
+  Order: penalties → top-k → temperature → min-p → top-p → draw (OpenAI applies temperature
+  before top-p). The RNG is xoshiro256** seeded through splitmix64, and `exp` is our own
+  polynomial. Both are exact functions of their input, so a seed reproduces the same tokens on
+  Linux/gcc and Windows/MSVC (libm `exp` and `std::` distributions differ by platform).
+- **Defaults:**
+  - The HTTP API defaults to temperature 1.0, like OpenAI; `--temperature` changes it.
+  - `engine run` defaults to greedy (a reproducible developer tool).
+  - The in-process `GenerateParams` default is greedy.
+  - Extensions accepted by llama.cpp/vLLM are parsed: `top_k`, `min_p`,
+    `repetition_penalty`, `repeat_last_n`.
+- **Reason:** Spec §26 asks for these modes, efficient sampling, and no temporary
+  allocations per token. The Sampler's scratch (candidates, probabilities, history) is reused,
+  so a warm Sampler allocates nothing.
+- **Alternatives:**
+  - A full sort of the 152k vocabulary per token for top-p: 2.8 ms worst case in the first
+    version.
+  - `std::nth_element` for top-k: 1.2 ms.
+  - A dense per-token count array for penalties: 600 KB per sequence at 152k vocab.
+- **Tradeoffs:**
+  - Tokens below max − 40·T (relative probability < e⁻⁴⁰) are never sampled under top-k/top-p
+    or min-p. That is negligible by construction; the temperature-only path keeps all tokens.
+  - Worst case (flat synthetic logits, 152k vocab) is about 0.6–0.9 ms per token, 2–3% of a
+    0.5B model's decode step.
+- **Evidence:** `test_sampling`:
+  - RNG output pinned to an independent Python implementation;
+  - greedy and top_k = 1 equivalence;
+  - empirical distributions (200k draws) within 0.006 of the exact softmax at T = 0.5, 1 and 1.7;
+  - top-k / top-p / min-p support sets and renormalized ratios;
+  - exact penalty arithmetic, including the window;
+  - on a 152k vocabulary, every sampled token lies in the brute-force nucleus;
+  - seed determinism, and parameter validation;
+  - engine requests reproduce with a seed and fail cleanly on invalid parameters.
+
+  `test_server`: API parsing of all fields, 400 on invalid values, a seeded HTTP request
+  reproduces. `bench_sampling`: greedy 440 → 70 µs, top-p 2.8 → 0.9 ms, top-k 1.2 → 0.84 ms.

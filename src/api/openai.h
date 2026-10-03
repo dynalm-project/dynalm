@@ -5,9 +5,11 @@
 //
 // Supported: /v1/chat/completions and /v1/completions with messages/prompt,
 // max_tokens / max_completion_tokens, stop (string or up to 4 strings),
-// stream, stream_options.include_usage. Sampling fields (temperature, top_p,
-// seed, ...) are accepted for client compatibility, but decoding is greedy
-// until the sampling phase. Unsupported features (tools, n > 1, logprobs,
+// stream, stream_options.include_usage, and sampling: temperature, top_p, seed,
+// presence_penalty, frequency_penalty, plus the common extensions top_k, min_p,
+// repetition_penalty, repeat_last_n and ignore_eos (DD-043). The default
+// temperature is the server's (1.0, as in the OpenAI API). Unsupported
+// features (tools, n > 1, logprobs,
 // non-text content parts) are rejected with a clear error instead of being
 // silently ignored.
 
@@ -29,11 +31,12 @@ struct CompletionRequest {
   bool stream = false;
   bool stream_usage = false;
   std::string model;
-  bool sampling_requested = false;  // non-greedy sampling fields were sent (decoding stays greedy)
 };
 
-Result<CompletionRequest> parse_chat_request(const json::Value& body, int32_t default_max_tokens);
-Result<CompletionRequest> parse_completion_request(const json::Value& body, int32_t default_max_tokens);
+Result<CompletionRequest> parse_chat_request(const json::Value& body, int32_t default_max_tokens,
+                                             float default_temperature = 1.0f);
+Result<CompletionRequest> parse_completion_request(const json::Value& body, int32_t default_max_tokens,
+                                                   float default_temperature = 1.0f);
 
 // OpenAI finish_reason for a stream outcome ("stop", "length"); errors and
 // cancellations are reported out of band.

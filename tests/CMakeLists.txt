@@ -122,3 +122,6 @@ engine_add_test(test_safetensors
 
 engine_add_test(test_gptq_awq
   test_gptq_awq.cpp)
+
+engine_add_test(test_sampling
+  test_sampling.cpp)

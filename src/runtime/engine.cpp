@@ -198,6 +198,7 @@ Result<std::shared_ptr<RequestStream>> Engine::submit(std::vector<TokenId> token
   r.prompt = std::move(tokens);
   r.stop = StopParams{params.max_tokens, params.stop_at_eog};
   r.priority = params.priority;
+  r.sampling = params.sampling;
   r.timeout_ms = params.timeout_ms;
   // Runs on the scheduler thread.
   r.on_event = [state, weak_core](const RequestEvent& ev) {

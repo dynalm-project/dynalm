@@ -33,6 +33,7 @@
 #include "metrics/metrics.h"
 #include "model/transformer.h"
 #include "runtime/thread_pool.h"
+#include "sampling/sampler.h"
 #include "scheduler/scheduler.h"
 
 namespace engine {
@@ -52,6 +53,7 @@ struct GenerateParams {
   bool stop_at_eog = true;
   int32_t priority = 0;
   int64_t timeout_ms = 0;
+  SamplingParams sampling;  // default: greedy (DD-043)
 };
 
 enum class StreamFinish : uint8_t { kNone, kStop, kLength, kCancelled, kError };

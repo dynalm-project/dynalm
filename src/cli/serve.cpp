@@ -5,6 +5,7 @@
 #include <chrono>
 #include <csignal>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <thread>
 
@@ -25,7 +26,7 @@ extern "C" void on_signal(int) { g_signals.fetch_add(1); }
 constexpr OptionSpec kServeOptions[] = {
     {"model"},        {"host"},        {"port"},           {"model-id"},         {"threads"},
     {"ctx"},          {"batch"},       {"kv"},             {"http-threads"},     {"max-tokens"},
-    {"max-active"},   {"request-timeout"}, {"shutdown-timeout"}, {"disable-admin", false},
+    {"max-active"},   {"request-timeout"}, {"temperature"}, {"shutdown-timeout"}, {"disable-admin", false},
 };
 
 void usage() {
@@ -42,6 +43,7 @@ void usage() {
                "  --max-active N          concurrent requests before 503 (default 64)\n"
                "  --http-threads N|auto   HTTP workers (auto: max-active + 8)\n"
                "  --max-tokens N          default max_tokens per request (default 1024)\n"
+               "  --temperature T         default temperature when a request omits it (default 1.0)\n"
                "  --request-timeout S     per-request timeout in seconds, 0 = none (default 600)\n"
                "  --shutdown-timeout S    drain time for in-flight requests on stop (default 30)\n"
                "  --disable-admin         turn off POST /admin/shutdown (used by `engine stop`)\n"
@@ -88,6 +90,12 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
     else if (a == "--http-threads") ok = parse_int_or_auto(value(), http_threads);
     else if (a == "--max-tokens") ok = parse_int(value(), max_tokens);
     else if (a == "--max-active") ok = parse_int(value(), max_active);
+    else if (a == "--temperature") {
+      const std::string v(value());
+      char* end = nullptr;
+      so.default_temperature = std::strtof(v.c_str(), &end);
+      ok = !v.empty() && end == v.c_str() + v.size() && so.default_temperature >= 0.0f && so.default_temperature <= 2.0f;
+    }
     else if (a == "--request-timeout") ok = parse_int(value(), request_timeout_s);
     else if (a == "--shutdown-timeout") ok = parse_int(value(), shutdown_timeout_s);
     else if (a == "--disable-admin") so.enable_admin = false;

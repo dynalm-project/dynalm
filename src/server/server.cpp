@@ -83,7 +83,6 @@ struct Server::Impl {
   std::thread listener;
   int bound_port = 0;
   int64_t created = unix_now();
-  std::atomic<bool> warned_sampling{false};
   std::atomic<bool> draining{false};
   std::atomic<int> active{0};
 
@@ -213,16 +212,13 @@ void Server::Impl::completions(const httplib::Request& req, httplib::Response& r
     requests_failed.inc();
     return send_error(res, 400, body.status().message());
   }
-  auto parsed = chat ? api::parse_chat_request(*body, opts.default_max_tokens)
-                     : api::parse_completion_request(*body, opts.default_max_tokens);
+  auto parsed = chat ? api::parse_chat_request(*body, opts.default_max_tokens, opts.default_temperature)
+                     : api::parse_completion_request(*body, opts.default_max_tokens, opts.default_temperature);
   if (!parsed.ok()) {
     requests_failed.inc();
     return send_error(res, 400, parsed.status().message());
   }
   api::CompletionRequest r = std::move(*parsed);
-  if (r.sampling_requested && !warned_sampling.exchange(true)) {
-    LOG_WARN("sampling parameters (temperature/top_p/...) are accepted but decoding is greedy in this version");
-  }
   if (r.params.timeout_ms <= 0) r.params.timeout_ms = opts.request_timeout_ms;
 
   auto stream = chat ? engine.generate_chat(r.messages, r.params)

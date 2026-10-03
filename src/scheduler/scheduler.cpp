@@ -36,6 +36,9 @@ uint64_t Scheduler::submit(Request request) {
   // are taken until admission.
   e.seq = std::make_unique<SequenceState>(id, request.prompt, request.stop, kv_);
   e.priority = request.priority;
+  if (!request.sampling.greedy() || request.sampling.has_penalties()) {
+    e.sampler = std::make_unique<Sampler>(request.sampling);
+  }
   e.arrival_ns = now_ns();
   e.deadline_ns = request.timeout_ms > 0 ? e.arrival_ns + request.timeout_ms * 1000000 : 0;
   std::lock_guard<std::mutex> lock(in_mu_);
@@ -93,6 +96,8 @@ void Scheduler::drain_incoming() {
     Status bad;
     if (s.prompt_len() == 0) {
       bad = InvalidArgument("empty prompt");
+    } else if (e.sampler && !e.sampler->params().validate().ok()) {
+      bad = e.sampler->params().validate();
     } else if (s.prompt_len() + static_cast<int64_t>(s.stop().max_new_tokens) > c.context_length) {
       bad = InvalidArgument("prompt + max_new_tokens exceeds context length " + std::to_string(c.context_length));
     } else if (s.prompt_len() + static_cast<int64_t>(s.stop().max_new_tokens) >
@@ -333,10 +338,10 @@ bool Scheduler::step() {
       }
     }
     if (!batch_[b].want_logits) continue;
-    const std::span<const float> row(logits_.data() + li * vocab, vocab);
+    const std::span<float> row(logits_.data() + li * vocab, vocab);
     ++li;
     if (e.seq->pending() != 0 || e.seq->status() != SequenceStatus::kDecode) continue;
-    const TokenId next = sample_greedy(row);
+    const TokenId next = e.sampler ? e.sampler->sample(row, e.seq->tokens()) : sample_greedy(row);
     e.seq->append_token(next, tokenizer_);
     ++stats_.tokens_generated;
     if (e.on_event) {

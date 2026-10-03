@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Phase 26 — Advanced sampling
+- `sampling/sampler`: `SamplingParams` (temperature, top_k, top_p, min_p,
+  repetition/frequency/presence penalties, penalty window, seed) and a per-sequence `Sampler`.
+  Histogram-pruned exact top-k/top-p, a vectorized argmax, and a portable xoshiro256** RNG and
+  exp, so seeds reproduce across platforms; no per-token allocations (DD-043).
+- Scheduler entries own their sampler; invalid parameters fail the request cleanly.
+- API: real sampling for OpenAI fields plus `top_k`, `min_p`, `repetition_penalty`,
+  `repeat_last_n`; default temperature 1.0 (`serve --temperature`). The "greedy only" caveat
+  is gone.
+- `engine run`: `--temp --top-k --top-p --min-p --repeat-penalty --presence-penalty
+  --frequency-penalty --repeat-last-n --seed` (default greedy).
+- `bench_sampling`; tests `test_sampling` plus API/HTTP cases.
+
 ### Phase 25 — MoE support
 - Generic Transformer MoE (DD-042):
   - host-side routing (softmax, top-k, optional renormalization);

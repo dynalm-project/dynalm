@@ -33,8 +33,35 @@ TEST(OpenAiParse, ChatRequest) {
   EXPECT_EQ(r->params.stop, std::vector<std::string>{"END"});
   EXPECT_TRUE(r->stream);
   EXPECT_TRUE(r->stream_usage);
-  EXPECT_TRUE(r->sampling_requested);
+  EXPECT_FLOAT_EQ(r->params.sampling.temperature, 0.7f);
   EXPECT_EQ(r->model, "x");
+}
+
+TEST(OpenAiParse, SamplingFields) {
+  auto r = api::parse_completion_request(J(R"({"prompt":"p","temperature":1.3,"top_p":0.9,"top_k":40,"min_p":0.05,
+      "presence_penalty":0.5,"frequency_penalty":-0.25,"repetition_penalty":1.1,"repeat_last_n":128,"seed":42})"), 16);
+  ASSERT_TRUE(r.ok()) << r.status().to_string();
+  const SamplingParams& sp = r->params.sampling;
+  EXPECT_FLOAT_EQ(sp.temperature, 1.3f);
+  EXPECT_FLOAT_EQ(sp.top_p, 0.9f);
+  EXPECT_EQ(sp.top_k, 40);
+  EXPECT_FLOAT_EQ(sp.min_p, 0.05f);
+  EXPECT_FLOAT_EQ(sp.presence_penalty, 0.5f);
+  EXPECT_FLOAT_EQ(sp.frequency_penalty, -0.25f);
+  EXPECT_FLOAT_EQ(sp.repetition_penalty, 1.1f);
+  EXPECT_EQ(sp.penalty_last_n, 128);
+  EXPECT_TRUE(sp.has_seed);
+  EXPECT_EQ(sp.seed, 42u);
+  // Defaults: the server's temperature (OpenAI: 1.0), no seed.
+  auto d = api::parse_completion_request(J(R"({"prompt":"p"})"), 16, 0.6f);
+  ASSERT_TRUE(d.ok());
+  EXPECT_FLOAT_EQ(d->params.sampling.temperature, 0.6f);
+  EXPECT_FALSE(d->params.sampling.has_seed);
+  for (const char* bad : {R"({"prompt":"p","temperature":3})", R"({"prompt":"p","top_p":0})",
+                          R"({"prompt":"p","top_k":1.5})", R"({"prompt":"p","presence_penalty":5})",
+                          R"({"prompt":"p","seed":"x"})", R"({"prompt":"p","min_p":-1})"}) {
+    EXPECT_FALSE(api::parse_completion_request(J(bad), 16).ok()) << bad;
+  }
 }
 
 TEST(OpenAiParse, Defaults) {
@@ -98,6 +125,7 @@ class ServerTest : public ::testing::Test {
     so.port = 0;
     so.model_id = "tiny";
     so.default_max_tokens = 16;
+    so.default_temperature = 0.0f;  // protocol tests compare outputs across requests
     so.http_threads = 4;
     server = std::make_unique<Server>(*eng, so);
     ASSERT_TRUE(server->start().ok());
@@ -344,6 +372,19 @@ TEST_F(ServerTest, MetricsCoverSpecList) {
         "engine_queue_latency_ms_avg", "engine_ttft_ms_bucket", "engine_itl_ms_bucket", "engine_tpot_ms_bucket"}) {
     EXPECT_NE(m.find(name), std::string::npos) << name;
   }
+}
+
+TEST_F(ServerTest, SeededSamplingIsReproducible) {
+  const char* body = R"({"prompt":"seed","max_tokens":12,"temperature":1.2,"top_p":0.9,"seed":9,"ignore_eos":true})";
+  auto a = client->Post("/v1/completions", body, "application/json");
+  auto b = client->Post("/v1/completions", body, "application/json");
+  ASSERT_TRUE(a && b);
+  ASSERT_EQ(a->status, 200) << a->body;
+  EXPECT_EQ(J(a->body.c_str()).find("choices")->as_array()[0].find("text")->as_string(),
+            J(b->body.c_str()).find("choices")->as_array()[0].find("text")->as_string());
+  auto bad = client->Post("/v1/completions", R"({"prompt":"x","top_p":1.5})", "application/json");
+  ASSERT_TRUE(bad);
+  EXPECT_EQ(bad->status, 400);
 }
 
 TEST(ServerStatus, EngineErrorsMapToHttp) {

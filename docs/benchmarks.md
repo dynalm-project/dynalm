@@ -601,3 +601,17 @@ How to read this:
   are small (512 × 1024), and the Q4_K fused dot does more work per byte than Q8_0.
 - **Cold start.** The first request after start-up page-faults the memory-mapped weights:
   16 s TTFT through the Docker bind mount, versus 0.8 s warm (TODO: prefetch at load).
+
+## Phase 26 — sampling cost (`bench_sampling`, 151,936-entry row, flat N(0, 3²) logits)
+
+| config | first version p50 µs | final p50 µs |
+|---|---|---|
+| greedy | 440 | **70** |
+| temperature 1 | 661 | 580 |
+| top_k 40 | 1180 | 844 |
+| top_p 0.9 | 2789 | 878 |
+| min_p 0.05 | 285 | 167 |
+| top_k 40 + top_p 0.95 + repetition 1.1 | 1073 | 843 |
+
+The row copy alone is 15 µs. Flat synthetic logits are the worst case for top-p, since the
+nucleus is large. Worst case is under 1 ms per token, 2–3% of a Qwen2.5-0.5B decode step.
