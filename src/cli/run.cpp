@@ -1,5 +1,6 @@
 // `dynalm run <model> -p <prompt> [options]`: streamed generation through the
-// Engine (the same path the HTTP server uses).
+// Engine (the same path the HTTP server uses). Without -p (or as `dynalm chat`)
+// it starts an interactive chat (cli/chat.cpp).
 
 #include <algorithm>
 #include <charconv>
@@ -7,6 +8,7 @@
 #include <string>
 
 #include "backends/backend_registry.h"
+#include "cli/chat.h"
 #include "cli/commands.h"
 #include "common/timer.h"
 #include "logging/log.h"
@@ -24,9 +26,10 @@ constexpr double kMiB = 1024.0 * 1024.0;
 
 void usage() {
   std::fprintf(stderr,
-               "usage: dynalm run <model> -p <prompt> [options]\n"
+               "usage: dynalm run <model> -p <prompt> [options]   one answer, then exit\n"
+               "       dynalm run <model> [options]               interactive chat (same as dynalm chat)\n"
                "  -p, --prompt TEXT     prompt text\n"
-               "  -n, --max-tokens N    tokens to generate (default 128)\n"
+               "  -n, --max-tokens N    tokens to generate (default 128; chat: 2048 per reply)\n"
                "  --chat                wrap the prompt in the model's chat template (default)\n"
                "  --raw                 use the prompt as-is (no chat template)\n"
                "  --system TEXT         system message (chat mode)\n"
@@ -37,7 +40,7 @@ void usage() {
                "  --kv f16|f32          KV cache dtype (default f16)\n"
                "  --backend cpu         compute backend (GPU backends are not built yet)\n"
                "  --no-stream           print only the final text\n"
-               "sampling (default: greedy):\n"
+               "sampling (default: greedy; chat: temp 0.8, top-k 40, top-p 0.9, repeat-penalty 1.1):\n"
                "  --temp T              temperature (0 = greedy)\n"
                "  --top-k K, --top-p P, --min-p P\n"
                "  --repeat-penalty R, --presence-penalty P, --frequency-penalty F, --repeat-last-n N\n"
@@ -165,6 +168,7 @@ int run_speculative(const std::string& path, const std::string& spec, int k, con
 }  // namespace
 
 int cmd_run(std::span<const std::string_view> args) {
+  bool max_set = false, sampling_set = false;
   std::string path, prompt, system;
   int max_tokens = 128, threads = 0, ctx = 4096, batch = 256;
   bool chat = true, stream = true;
@@ -180,7 +184,7 @@ int cmd_run(std::span<const std::string_view> args) {
     if (a == "-p" || a == "--prompt") prompt = value();
     else if (a == "--system") system = value();
     else if (a == "--stop") params.stop.emplace_back(value());
-    else if (a == "-n" || a == "--max-tokens") ok = parse_int(value(), max_tokens);
+    else if (a == "-n" || a == "--max-tokens") ok = parse_int(value(), max_tokens), max_set = true;
     else if (a == "-t" || a == "--threads") ok = parse_int(value(), threads);
     else if (a == "-c" || a == "--ctx") ok = parse_int(value(), ctx);
     else if (a == "--batch") ok = parse_int(value(), batch);
@@ -213,13 +217,31 @@ int cmd_run(std::span<const std::string_view> args) {
       opts.kv_dtype = v == "f32" ? DType::kF32 : DType::kF16;
     } else if (path.empty() && !a.starts_with("-")) path = a;
     else ok = false;
+    if (a.starts_with("--temp") || a.starts_with("--top-") || a == "--min-p" || a.ends_with("-penalty") ||
+        a == "--repeat-last-n" || a == "--seed") {
+      sampling_set = true;
+    }
     if (!ok) {
       std::fprintf(stderr, "run: invalid argument '%.*s'\n", static_cast<int>(a.size()), a.data());
       usage();
       return 1;
     }
   }
-  if (path.empty() || prompt.empty() || max_tokens <= 0 || threads < 0 || ctx <= 0 || batch <= 0) {
+  const bool interactive = prompt.empty();
+  if (interactive && (!chat || !spec.empty())) {
+    std::fprintf(stderr, "run: interactive chat needs chat mode (no --raw, no --spec); pass -p for one prompt\n");
+    return 1;
+  }
+  if (interactive) {
+    if (!max_set) max_tokens = 2048;
+    if (!sampling_set) {  // conversational defaults: greedy decoding tends to loop in long replies
+      params.sampling.temperature = 0.8f;
+      params.sampling.top_k = 40;
+      params.sampling.top_p = 0.9f;
+      params.sampling.repetition_penalty = 1.1f;
+    }
+  }
+  if (path.empty() || max_tokens <= 0 || threads < 0 || ctx <= 0 || batch <= 0) {
     usage();
     return 1;
   }
@@ -254,6 +276,13 @@ int cmd_run(std::span<const std::string_view> args) {
   LOG_INFO("Load time: {:.1f} ms", load_timer.elapsed_ms());
 
   params.max_tokens = max_tokens;
+  if (interactive) {
+    ChatSettings cs;
+    cs.system = system;
+    cs.params = params;
+    cs.context = ctx;
+    return run_chat_session(e, std::move(cs));
+  }
   const Stopwatch request_timer;
   Result<std::shared_ptr<RequestStream>> s = InvalidArgument("unreachable");
   if (chat) {

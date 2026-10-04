@@ -74,7 +74,7 @@ if(ENABLE_AVX2)
   engine_set_isa(AVX2 backends/cpu/avx2/kernels_avx2.cpp)
 endif()
 
-add_executable(dynalm cli/main.cpp cli/benchmark.cpp cli/inspect.cpp cli/manage.cpp cli/pull.cpp cli/run.cpp)
+add_executable(dynalm cli/main.cpp cli/benchmark.cpp cli/inspect.cpp cli/manage.cpp cli/chat.cpp cli/pull.cpp cli/run.cpp)
 if(WIN32)
   target_sources(dynalm PRIVATE cli/dynalm.manifest)  # UTF-8 process code page
 endif()

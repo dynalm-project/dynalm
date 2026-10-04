@@ -1187,3 +1187,38 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   - Downloaded and run end to end:
     - Qwen3-0.6B Q8_0: 22.1 tok/s, correct answer;
     - Llama-3.2-1B Q4_K_M: "The capital of France is Paris.", 13.2 tok/s with 1.6 GB free RAM.
+
+## DD-049: Interactive chat re-sends the history and relies on the prefix cache
+
+- **Decision:**
+  - `dynalm chat` (and `dynalm run` without `-p`) is a read-eval-print loop on one in-process Engine.
+  - Each turn sends system + history + the new message through `generate_chat`.
+  - The history is trimmed from the oldest exchange when the rendered prompt plus 32 tokens would exceed
+    the context.
+  - Thinking (`<think>...</think>`) is shown, but dropped from the stored history.
+  - Chat has its own defaults: temp 0.8, top-k 40, top-p 0.9, repeat-penalty 1.1 and 2048 tokens.
+    One-shot `run` stays greedy.
+- **Reason:**
+  - Users compared DynaLM with `ollama run`. Its "one answer, then exit" model reloaded the weights for
+    every question and kept no memory of the conversation.
+  - Re-sending the whole conversation keeps chat stateless on the engine side, and the radix prefix cache
+    (DD-031) makes it cheap. A follow-up with 101 prompt tokens gets its first token in 254 ms
+    (Qwen2.5-1.5B Q4_K_M), because only the new message is prefilled.
+- **Alternatives:**
+  - A persistent sequence whose KV the chat appends to: faster in principle, but it needs a new
+    engine API (pinned sequences), and the cache already captures most of the gain.
+  - A chat client for a running `dynalm serve`: the right shape for a resident multi-model server, which
+    is still a roadmap item. It can reuse this loop.
+- **Tradeoffs:**
+  - Trimming is by whole exchanges. A single message longer than the context is rejected with a hint
+    to raise `-c`.
+  - `/think` only toggles Qwen3, the family with a documented `/no_think` switch.
+- **Evidence:**
+  - Scripted sessions on Windows:
+    - Qwen2.5-1.5B remembered a name across turns and forgot it after `/clear`;
+    - `"""` multi-line input, `/set`, `/show`, `/stats` and unknown commands behaved as documented;
+    - with Qwen3-4B, `/think off` gave direct answers with the empty think block hidden;
+    - Gemma reports that it has no thinking switch.
+  - `ThinkFilterTest` (3 tests) covers chunk splits, including a `</think>` split across deltas. That
+    case was a bug the test found.
+  - 360/360 Linux tests pass.

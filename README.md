@@ -15,6 +15,7 @@ no GPU and no Python.**
 
 ```sh
 dynalm pull Qwen/Qwen3-4B-GGUF/Qwen3-4B-Q4_K_M.gguf        # download a model from Hugging Face
+dynalm chat  models/Qwen3-4B-Q4_K_M.gguf                  # interactive chat, like `ollama run`
 dynalm run   models/Qwen3-4B-Q4_K_M.gguf -p "What is the capital of France?"
 dynalm serve models/Qwen3-4B-Q4_K_M.gguf --port 8000       # OpenAI-compatible server
 ```
@@ -79,6 +80,7 @@ dynalm pull <link> --check                    # will DynaLM run it? (reads 256 K
 dynalm list                                   # models in ./models, with a support status for each
 dynalm rm <model>                             # delete a downloaded model (asks first; -y skips)
 dynalm inspect models/model.gguf              # architecture, quantization, memory estimate
+dynalm chat models/model.gguf                 # interactive chat (/help inside for commands)
 dynalm run models/model.gguf -p "Hi" --temp 0.7 --top-p 0.9
 dynalm serve models/model.gguf --port 8000    # OpenAI-compatible server
 dynalm stop                                   # drain in-flight requests and exit
@@ -136,6 +138,10 @@ and edge devices. If you have a GPU, llama.cpp, Ollama or vLLM will be faster to
 
 ## FAQ
 
+**How do I chat with a model like in Ollama?**
+Run `dynalm chat models/<model>.gguf` (or `dynalm run` without `-p`). It keeps the model loaded, remembers the
+conversation, and supports `/clear`, `/system`, `/set temp`, `/think off` and `/bye`. See [docs/cmd.md](docs/cmd.md).
+
 **How do I run an LLM locally on a CPU without a GPU?**
 Install DynaLM, download a quantized GGUF model with `dynalm pull`, then use `dynalm run` to chat or
 `dynalm serve` for an API. A 4B model in Q4_K_M needs about 3 GB of RAM.
@@ -180,6 +186,7 @@ Yes. DynaLM is licensed under Apache-2.0. The models you run have their own lice
 
 ## Documentation
 
+- [docs/cmd.md](docs/cmd.md): every command and option, chat commands, HTTP endpoints, Ollama equivalents.
 - [docs/model-support.md](docs/model-support.md): every supported model, with download commands.
 - [docs/development.md](docs/development.md): building, testing, configuration, serving.
 - [docs/architecture.md](docs/architecture.md): how the engine is put together.

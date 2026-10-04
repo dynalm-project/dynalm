@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Interactive chat
+- `dynalm chat <model>` (and `dynalm run <model>` without `-p`): an Ollama-style multi-turn chat.
+  - The model is loaded once. History is re-sent each turn and the prefix cache reuses it, so a follow-up
+    starts in about 0.25 s (Qwen2.5-1.5B).
+  - The oldest exchanges are dropped when the context is full.
+  - Commands: `/help`, `/bye`, `/clear`, `/system`, `/think on|off` (Qwen3), `/set temp|top_p|top_k|min_p|
+    repeat_penalty|max_tokens|seed`, `/show`, `/stats`, `"""` for multi-line input; Ctrl+C stops a reply.
+  - Conversational defaults (temp 0.8, top-k 40, top-p 0.9, repeat-penalty 1.1, 2048 tokens per reply).
+  - UTF-8 console input on Windows.
+  - `ThinkFilter` hides the empty `<think></think>` block Qwen3 emits with reasoning off and streams real
+    thinking live (unit-tested across chunk splits).
+- `docs/cmd.md`: every command, option, chat command, HTTP endpoint and environment variable, plus a table of
+  Ollama equivalents.
+
 ### Fixes
 - **Windows: emoji and non-English output.** Model output (UTF-8) showed as garbage in consoles using a legacy
   code page; an emoji printed as "ƒÿè". `dynalm` now switches the console to UTF-8 while it runs and restores

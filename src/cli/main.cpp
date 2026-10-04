@@ -58,6 +58,7 @@ void print_usage() {
       "  info                 print detected hardware and selected CPU backend\n"
       "  inspect <model>      show model metadata, config and memory estimate\n"
       "  run <model> -p TEXT  generate from a prompt (dynalm run for options)\n"
+      "  chat <model>         interactive chat, like `ollama run` (also: run <model> without -p)\n"
       "  serve <model>        OpenAI-compatible HTTP server (dynalm serve for options)\n"
       "  benchmark <model>    load test (in-process or --url server), P50-P99 latency\n"
       "  pull <link>          download a GGUF model (Hugging Face link or URL) into ./models\n"
@@ -170,6 +171,7 @@ int main(int argc, char** argv) {
   if (cmd == "info") return cmd_info();
   if (cmd == "inspect") return engine::cli::cmd_inspect(std::span(args).subspan(i + 1));
   if (cmd == "run") return engine::cli::cmd_run(std::span(args).subspan(i + 1));
+  if (cmd == "chat") return engine::cli::cmd_run(std::span(args).subspan(i + 1));  // run without -p
 #if ENGINE_HAS_SERVER
   if (cmd == "serve") return engine::cli::cmd_serve(std::span(args).subspan(i + 1));
 #else

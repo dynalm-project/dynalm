@@ -12,6 +12,7 @@
 #include "runtime/engine.h"
 #include "runtime/generator.h"
 #include "runtime/text_stream.h"
+#include "runtime/think_filter.h"
 
 namespace engine {
 namespace {
@@ -86,6 +87,37 @@ TEST_F(Streamer, HoldsBackOnlyTheMinimalSuffix) {
 
 TEST_F(Streamer, EarliestOfSeveralStops) {
   EXPECT_EQ(run("one two three", {"three", "two"}).first, "one ");
+}
+
+// --- ThinkFilter (chat display of reasoning models) ---
+
+std::string filter_all(const std::vector<std::string>& deltas) {
+  ThinkFilter f;
+  std::string out;
+  for (const std::string& d : deltas) out += f.feed(d);
+  return out + f.finish();
+}
+
+TEST(ThinkFilterTest, HidesEmptyBlockAcrossAnySplit) {
+  // How Qwen3 answers with /no_think, delivered in different chunkings.
+  EXPECT_EQ(filter_all({"<think>", "\n\n", "</think>", "\n\n", "5"}), "5");
+  EXPECT_EQ(filter_all({"<think>\n\n</think>\n\nHello"}), "Hello");
+  EXPECT_EQ(filter_all({"<th", "ink>", "\n", "\n</thi", "nk>\n", "\n", "Hi ", "there"}), "Hi there");
+}
+
+TEST(ThinkFilterTest, ShowsRealThinkingAndPlainText) {
+  EXPECT_EQ(filter_all({"<think>", "Let me see", "</think>", "\n\n4"}), "<think>Let me see</think>\n\n4");
+  EXPECT_EQ(filter_all({"Hello", " world"}), "Hello world");
+  EXPECT_EQ(filter_all({"<", "b>bold"}), "<b>bold");  // starts like a tag, is not one
+  EXPECT_EQ(filter_all({"<thi"}), "<thi");            // reply ended while undecided
+  EXPECT_EQ(filter_all({"<think>", "\n"}), "<think>\n");  // never closed: shown as is
+}
+
+TEST(ThinkFilterTest, StreamsThinkingAsItArrives) {
+  ThinkFilter f;
+  EXPECT_EQ(f.feed("<think>"), "");             // undecided: could be the empty block
+  EXPECT_EQ(f.feed("Hmm"), "<think>Hmm");       // real thinking: released at once
+  EXPECT_EQ(f.feed(" more"), " more");          // then passed straight through
 }
 
 // --- Engine ---

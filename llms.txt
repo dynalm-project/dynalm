@@ -9,6 +9,7 @@ Key facts:
 - **Command-line tool:** `dynalm`.
   - `pull`: download a GGUF from Hugging Face.
   - `run`: generate from a prompt.
+  - `chat`: interactive multi-turn chat, like `ollama run`.
   - `serve`: OpenAI-compatible server on port 8000.
   - `list`, `rm`, `inspect`, `benchmark`.
 - **Model formats:** GGUF (as used by llama.cpp and Ollama), Hugging Face SafeTensors, GPTQ and AWQ.
