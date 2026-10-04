@@ -1,6 +1,6 @@
 #pragma once
 
-// Configuration sources for CLI commands (spec §42): a config file, environment
+// Configuration sources for CLI commands: a config file, environment
 // variables and the command line, merged into one argument list that the
 // command's own parser consumes. Later sources override earlier ones:
 //

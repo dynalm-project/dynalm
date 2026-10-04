@@ -1,6 +1,6 @@
 #pragma once
 
-// Token selection (spec §26, DD-043).
+// Token selection (DD-043).
 //
 // Pipeline per token, on the logits row (modified in place):
 //   1. penalties over the last `penalty_last_n` context tokens:

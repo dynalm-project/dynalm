@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.24)
 project(dynalm
   VERSION 0.1.0
   DESCRIPTION "DynaLM: CPU-first LLM inference engine"
-  HOMEPAGE_URL "https://github.com/dynalm/dynalm"
+  HOMEPAGE_URL "https://github.com/dynalm-project/dynalm"
   LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -100,11 +100,12 @@ endif()
 #   cpack --config build/CPackConfig.cmake      -> dynalm-<ver>-<os>-<arch>.zip/.tar.gz
 include(GNUInstallDirs)
 install(TARGETS dynalm RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(FILES README.md CHANGELOG.md DESTINATION ${CMAKE_INSTALL_DOCDIR})
+install(FILES README.md CHANGELOG.md LICENSE NOTICE DESTINATION ${CMAKE_INSTALL_DOCDIR})
 install(DIRECTORY docs/ DESTINATION ${CMAKE_INSTALL_DOCDIR}/docs)
 set(CPACK_PACKAGE_NAME dynalm)
 set(CPACK_PACKAGE_VENDOR "DynaLM")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "${PROJECT_DESCRIPTION}")
+set(CPACK_RESOURCE_FILE_LICENSE "${PROJECT_SOURCE_DIR}/LICENSE")
 string(TOLOWER "${CMAKE_SYSTEM_NAME}" _dynalm_os)
 set(CPACK_PACKAGE_FILE_NAME "dynalm-${PROJECT_VERSION}-${_dynalm_os}-${DYNALM_ARCH}")
 if(WIN32)

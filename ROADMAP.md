@@ -1,7 +1,10 @@
-# TODO
+# Roadmap
 
-Phases run strictly in order. A phase is done only when it builds, its tests
-pass, its benchmarks have run, the docs are updated, and it is committed.
+DynaLM was built in 29 milestones (0–28), each finished only when it built, its tests passed, its
+benchmarks ran, and its docs were updated. All are complete. The open items below are where help is
+welcome (see [CONTRIBUTING.md](CONTRIBUTING.md)).
+
+## Completed milestones
 
 - [x] Phase 0 — Project foundation
 - [x] Phase 1 — Tensor + dtype system (DType incl. GGUF block types, TensorShape/Layout/View, aligned allocator)
@@ -51,7 +54,7 @@ pass, its benchmarks have run, the docs are updated, and it is committed.
 - GPU backends (CUDA first) per docs/gpu-backend.md; device top-k routing and sampling ops; tensor/pipeline parallelism.
 - Open-loop (Poisson arrival) mode for the load generator (DD-037).
 - Token-authenticated admin endpoint for deployments behind a same-host proxy (DD-039).
-- CPU affinity / thread pinning / NUMA placement (spec §32), measured against the baselines.
+- CPU affinity / thread pinning / NUMA placement, measured against the baselines.
 - AVX2 Q5_K/Q2_K/Q3_K/Q5_1 fused kernels (they use the chunked fallback today).
 - Cold-start TTFT: prefetch mmapped weights at load (first forward is page-fault bound).
 

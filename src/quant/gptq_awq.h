@@ -1,6 +1,6 @@
 #pragma once
 
-// GPTQ and AWQ packed integer weights (spec §5 "Future: GPTQ, AWQ", §6).
+// GPTQ and AWQ packed integer weights.
 //
 // These checkpoints store each linear layer as several tensors:
 //   qweight  int32, packed integer codes

@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use DynaLM in your work, please cite it as below."
+title: "DynaLM: a CPU-first LLM inference engine"
+type: software
+authors:
+  - name: "The DynaLM Authors"
+repository-code: "https://github.com/dynalm-project/dynalm"
+license: Apache-2.0
+version: 0.1.0
+date-released: "2026-10-04"
+keywords:
+  - large language models
+  - LLM inference
+  - CPU inference
+  - GGUF
+  - quantization
+  - continuous batching
+  - OpenAI-compatible API
+abstract: >-
+  DynaLM is a C++20 inference engine that runs open large language models (Llama, Qwen, Gemma,
+  Phi, Mistral, Granite and mixture-of-experts models) on ordinary CPUs. It loads GGUF,
+  Hugging Face SafeTensors and GPTQ/AWQ checkpoints, uses hand-written AVX2 and NEON kernels,
+  and serves an OpenAI-compatible HTTP API with continuous batching, a paged KV cache,
+  chunked prefill and prefix caching.

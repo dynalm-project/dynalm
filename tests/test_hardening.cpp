@@ -1,4 +1,4 @@
-// Phase 22: robustness under abuse (spec §39/§40). Many clients on a small KV
+// Phase 22: robustness under abuse. Many clients on a small KV
 // pool (forcing preemption), random cancellations, timeouts, invalid and
 // oversized requests, and engine shutdown with requests in flight. Every
 // request must end with exactly one final event, failures must stay isolated,

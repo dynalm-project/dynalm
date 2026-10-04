@@ -86,7 +86,7 @@ struct Server::Impl {
   std::atomic<bool> draining{false};
   std::atomic<int> active{0};
 
-  // Metrics (spec §44).
+  // Metrics.
   metrics::Counter requests_total, requests_failed, requests_cancelled, requests_rejected;
   metrics::Histogram ttft_ms{metrics::latency_buckets_ms()};
   metrics::Histogram itl_ms{metrics::latency_buckets_ms()};

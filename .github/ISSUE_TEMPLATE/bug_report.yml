@@ -1,0 +1,29 @@
+name: Bug report
+description: Something crashes, gives wrong output, or does not build
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you ran, what you expected, and what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: version
+    attributes:
+      label: dynalm version and dynalm info
+      description: Paste the output of `dynalm version` and `dynalm info`.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      description: The Hugging Face link or file name of the model, if one is involved.
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and CPU
+      placeholder: e.g. Ubuntu 24.04 on Ryzen 7 7840U, macOS 15 on M3, Windows 11 on i7-1255U

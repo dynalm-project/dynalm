@@ -3,7 +3,7 @@
 # load generator as tools/compare_baselines.sh. Register the same GGUF first:
 #
 #   printf 'FROM ./qwen2.5-0.5b-instruct-q4_k_m.gguf\n' > models/Modelfile.q4km
-#   (cd models && ollama create cpu-llama-qwen05-q4km -f Modelfile.q4km)
+#   (cd models && ollama create dynalm-qwen05-q4km -f Modelfile.q4km)
 #   bash tools/bench_ollama.sh [model.gguf] [ollama-model] [out.jsonl]
 #
 # Caveats (DD-037): Ollama runs natively, not in the benchmark container; it
@@ -12,7 +12,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 MODEL="${1:-qwen2.5-0.5b-instruct-q4_k_m.gguf}"
-OLLAMA_MODEL="${2:-cpu-llama-qwen05-q4km}"
+OLLAMA_MODEL="${2:-dynalm-qwen05-q4km}"
 OUT="${3:-results/ollama.jsonl}"
 CONC="${CONC:-1,4,16}"
 PROMPTS="${PROMPTS:-128,512}"

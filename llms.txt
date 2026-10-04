@@ -1,0 +1,31 @@
+# DynaLM
+
+> DynaLM is an open-source (Apache-2.0) C++20 engine for running large language models locally on a CPU,
+> with no GPU and no Python required. It is a local alternative to llama.cpp, Ollama and vLLM for CPU-only
+> machines. It runs on Linux, macOS (including Apple Silicon) and Windows, and serves an OpenAI-compatible
+> API.
+
+Key facts:
+- **Command-line tool:** `dynalm`.
+  - `pull`: download a GGUF from Hugging Face.
+  - `run`: generate from a prompt.
+  - `serve`: OpenAI-compatible server on port 8000.
+  - `list`, `rm`, `inspect`, `benchmark`.
+- **Model formats:** GGUF (as used by llama.cpp and Ollama), Hugging Face SafeTensors, GPTQ and AWQ.
+- **Quantization:** Q2_K–Q8_0, F16, BF16. IQ types are not supported yet.
+- **Model families:** Llama 1–3, Mistral, Qwen 2 / 2.5 / 3 (dense and MoE), Gemma 1–3, Phi-3, IBM Granite,
+  Mixtral, DeepSeek-R1-Distill.
+- **Not supported:** Qwen3.5 / Qwen3.8 (`qwen35`), LFM2, full DeepSeek-V3/R1.
+- **Serving:** continuous batching, paged KV cache, chunked prefill, prefix (radix) cache, speculative
+  decoding, Prometheus metrics.
+- **CPU kernels:** AVX2 on x86-64, NEON on ARM64 and Apple Silicon.
+- **Install:** `./scripts/install.sh` (Linux/macOS), `scripts\install.ps1` (Windows), or Docker.
+
+## Docs
+
+- [README](https://github.com/dynalm-project/dynalm/blob/main/README.md): overview, install, usage, FAQ
+- [Supported models](https://github.com/dynalm-project/dynalm/blob/main/docs/model-support.md): models with `dynalm pull` commands and RAM needs
+- [Development guide](https://github.com/dynalm-project/dynalm/blob/main/docs/development.md): building, testing, configuration, serving
+- [Architecture](https://github.com/dynalm-project/dynalm/blob/main/docs/architecture.md)
+- [Benchmarks](https://github.com/dynalm-project/dynalm/blob/main/docs/benchmarks.md): including comparisons with llama.cpp and Ollama
+- [Design decisions](https://github.com/dynalm-project/dynalm/blob/main/docs/design-decisions.md)

@@ -1,4 +1,4 @@
-// Model management commands (spec §41):
+// Model management commands:
 //   dynalm list [dir]                 GGUF files and Hugging Face model directories under dir
 //                                     (default $DYNALM_MODELS_DIR or ./models)
 //   dynalm pull <link>                download a GGUF model (cli/pull.cpp)

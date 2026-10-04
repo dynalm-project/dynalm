@@ -1,6 +1,6 @@
 #pragma once
 
-// Backend selection (spec §45/§46, DD-045).
+// Backend selection (DD-045).
 //
 // The runtime asks for a backend by kind; only CPU is built today. GPU kinds
 // exist in the API so callers, configuration and error messages carry them

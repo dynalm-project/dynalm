@@ -87,7 +87,7 @@ GPTQ and AWQ. Download them with `huggingface-cli download <repo> --local-dir mo
 | Mistral 7B (dense) | via LlamaArchitecture (GGUF arch `llama`) | ✅ same code path as Llama (DD-021) |
 | Gemma / Gemma 2 / Gemma 3 (text) | GemmaArchitecture (`gemma`, `gemma2`, `gemma3`) | ✅ tiny-model golden; Gemma-3-270M real golden |
 | Phi-3 / 3.5 / 4-mini (dense) | PhiArchitecture (`phi3`) | ✅ tiny-model golden (no real checkpoint fits the dev machine) |
-| DeepSeek dense (LLM/Coder, R1-Distill) | via Llama / Qwen adapters | ⚠ R1-Distill-Qwen OK; DeepSeek-LLM needs its pre-tokenizer (TODO) |
+| DeepSeek dense (LLM/Coder, R1-Distill) | via Llama / Qwen adapters | ⚠ R1-Distill-Qwen OK; DeepSeek-LLM needs its pre-tokenizer (ROADMAP.md) |
 | Mixtral (MoE) | LlamaArchitecture (GGUF `llama` + experts; HF `mixtral`) | ✅ tiny golden + HF/GGUF equivalence (DD-042) |
 | Qwen2-MoE / Qwen1.5-MoE, Qwen3-MoE | QwenArchitecture (`qwen2moe`, `qwen3moe`) | ✅ tiny goldens (shared expert, raw vs renormalized gating) |
 | IBM Granite / Granite-MoE | LlamaArchitecture (`granite`, `granitemoe`) | ✅ tiny golden; Granite-3.1-1B-A400M real golden |

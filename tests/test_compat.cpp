@@ -1,4 +1,4 @@
-// Phase 22: model compatibility suite (spec §38). For every supported
+// Phase 22: model compatibility suite. For every supported
 // architecture: loading, metadata validation, tokenizer, short generation,
 // long generation, KV (prefix) reuse and concurrent generation — through the
 // same Engine path the server uses. Runs on the committed tiny fixtures; real

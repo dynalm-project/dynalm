@@ -22,6 +22,10 @@ RUN cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
     && cmake --install build --prefix /opt/dynalm
 
 FROM ubuntu:24.04
+LABEL org.opencontainers.image.title="DynaLM" \
+      org.opencontainers.image.description="CPU-first LLM inference engine with an OpenAI-compatible server" \
+      org.opencontainers.image.source="https://github.com/dynalm-project/dynalm" \
+      org.opencontainers.image.licenses="Apache-2.0"
 COPY --from=build /opt/dynalm /opt/dynalm
 ENV PATH=/opt/dynalm/bin:$PATH \
     DYNALM_HOST=0.0.0.0 \

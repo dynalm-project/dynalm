@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Open source
+- Licensed under Apache-2.0 (`LICENSE`, `NOTICE` with third-party components).
+- Added `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, issue templates (bug, model request), a
+  pull request template, `CITATION.cff` and `llms.txt`.
+- README rewritten for new users: FAQ, comparison with llama.cpp / Ollama / vLLM, badges.
+- `TODO.md` became `ROADMAP.md`. Removed references to the internal build specification.
+- CMake homepage URL fixed. Packages and the Docker image carry the license and OCI labels.
+
 ### Model downloads
 - `dynalm pull <link>` downloads a GGUF into `./models` (or `-o DIR`, `$DYNALM_MODELS_DIR`) from a Hugging Face
   file link (page or download form), the short form `<owner>/<repo>/<file>.gguf`, or any http(s) URL.
@@ -154,7 +162,7 @@
   `engine_requests_timed_out_total`, `engine_queue_latency_ms_max`.
 - CLI: `engine list [dir]`, `engine stop|unload [--host --port]`. The structured startup
   summary now includes RAM required and the KV size.
-- Tests: `test_config`, `test_compat` (spec §38 suite for every tiny architecture plus real
+- Tests: `test_config`, `test_compat` (compatibility suite for every tiny architecture plus real
   models when present), `test_hardening` (abuse/leak/shutdown), and 7 new `test_server` cases.
 
 ### Phase 21 — Benchmark framework

@@ -1,6 +1,6 @@
 #pragma once
 
-// Benchmark load generator (spec §34–36).
+// Benchmark load generator.
 //
 // Drives a target (the in-process Engine, or any OpenAI-compatible HTTP
 // server) with `concurrency` closed-loop clients, each sending prompts of a

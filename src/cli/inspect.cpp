@@ -1,5 +1,5 @@
 // `dynalm inspect <model> [--metadata] [--tensors]`: a GGUF file, or a Hugging
-// Face model directory / .safetensors file (spec §16).
+// Face model directory / .safetensors file.
 
 #include <cstdio>
 #include <map>

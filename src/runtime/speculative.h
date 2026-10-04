@@ -1,6 +1,6 @@
 #pragma once
 
-// Speculative decoding (spec §47, DD-044).
+// Speculative decoding (DD-044).
 //
 // A cheap Drafter proposes up to k next tokens; the target model scores all
 // of them in ONE forward pass (logits for every drafted position), and the

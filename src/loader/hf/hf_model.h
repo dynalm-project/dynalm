@@ -3,7 +3,7 @@
 // Hugging Face model directories: config.json + *.safetensors (+ tokenizer
 // files). Translates HF conventions to the same ModelConfig / TensorRegistry
 // the GGUF loader produces, so adapters and the runtime never see the
-// difference (spec §5):
+// difference:
 //
 //   GGUF loader ────────┐
 //   SafeTensors loader ─┴─► TensorRegistry + ModelConfig ─► adapters ─► runtime

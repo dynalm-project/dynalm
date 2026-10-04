@@ -95,7 +95,7 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
 - **Decision:** `DType` is the engine's own enum. GGML type IDs are mapped only inside
   `loader/gguf`. Types the engine can't run (IQ*, TQ*, MXFP4) still get their geometry
   checked, so the file is validated, and they're reported as unsupported.
-- **Reason:** Keeps the core free of GGUF (spec §5). A SafeTensors loader maps its own
+- **Reason:** Keeps the core free of GGUF. A SafeTensors loader maps its own
   dtype strings the same way.
 
 ## DD-009: Memory-map GGUF weights; zero-copy tensors
@@ -138,7 +138,7 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
 - **Tradeoffs:** Loaders need role tables, and new tensor kinds need a new enum value.
   That's deliberate: every weight the engine uses has a named meaning.
 - **Precision:** `PrecisionConfig` keeps activation, accumulator and KV dtypes separate.
-  Weight dtypes are per tensor (spec §6).
+  Weight dtypes are per tensor.
 
 ## DD-012: Hand-written pre-tokenizers, verified against HF
 
@@ -197,7 +197,7 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   ...) that take `TensorView`s. `CpuBackend` implements them, with an inner
   `CpuKernels` table selected by ISA.
 - **Reason:** A CUDA backend can implement the same ops with device pointers and no
-  scheduler or model changes (spec §45). A virtual call per op is negligible:
+  scheduler or model changes. A virtual call per op is negligible:
   about 300 ops per token versus milliseconds of compute.
 - **Tradeoffs:** Cross-op fusion must be expressed as new, fused ops (Phase 18),
   not discovered automatically.
@@ -289,7 +289,7 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   transition releases KV blocks.
 - **Reason:** The scheduler (Phases 11–14) needs exactly this: whether a sequence needs
   prefill or decode work, how much, and where its KV lives. It never needs to know
-  the model. Making prefill/decode an explicit state (spec §22) instead of two loops
+  the model. Making prefill/decode an explicit state instead of two loops
   lets chunked prefill and decode interleave later without new logic.
 - **Evidence:** Unit tests cover every transition, including KV release on finish,
   cancel and error, and KV exhaustion. All goldens pass unchanged through the
@@ -311,7 +311,7 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   with 4 threads doing nothing else. Real demand is one allocation per 16 tokens per
   sequence, about 100/s even at 64 concurrent sequences, so the mutex costs roughly
   0.004% of one core. A lock-free free list would add ABA hazards and complexity for no
-  measurable gain (spec §20: no lock-free code for appearance). Phase 11 re-measures
+  measurable gain (no lock-free code for appearance). Phase 11 re-measures
   under real concurrent load.
 - **Invariant:** A shared block is never written. Writers only touch blocks made
   exclusive with make_writable, and the prefix cache shares only full blocks.
@@ -346,10 +346,10 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   it's requeued at the front to recompute prompt + generated tokens.
   Submission and cancellation use a mutex-guarded handoff swapped once per step. The
   iteration itself holds no lock.
-- **Reason:** Sequences join and leave at any iteration (spec §21). Preemption by
+- **Reason:** Sequences join and leave at any iteration. Preemption by
   recompute keeps requests alive under memory pressure without swap space. On CPU,
   recomputing a short prefix is cheap next to failing a request. The per-step handoff
-  avoids a global scheduler mutex (spec §49).
+  avoids a global scheduler mutex.
 - **Alternatives:** swap-out preemption (copy KV to a secondary store; unnecessary while
   KV and weights share host RAM); fail on exhaustion (poor UX); static batching.
 - **Evidence:** Tests require every request's tokens to equal an isolated greedy run under
@@ -691,7 +691,7 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
 - **Evidence:**
   - `test_server`: overload 503 with no leaked slot, health under overload, an 8-client
     admission storm (only 200 or 503, every slot returned), drain, loopback admin and
-    disable, 504 on timeout with KV freed, spec §44 metric names, and status mapping.
+    disable, 504 on timeout with KV freed, Prometheus metric names, and status mapping.
   - `test_hardening`: 96 mixed requests (invalid, oversized, timeouts, cancellations) on a
     10-block KV pool. Every request ends exactly once, good requests succeed, no KV block
     leaks, and the engine stays usable. Oversized requests are rejected before compute.
@@ -1094,7 +1094,7 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
     - the Docker build.
 
     `release.yml` packages all four platforms on a version tag.
-- **Reason:** The user asked for DynaLM with installs on Linux, macOS and Windows. Without CI,
+- **Reason:** DynaLM targets installs on Linux, macOS and Windows. Without CI,
   only the developer's machine is ever tested. Without NEON, Apple Silicon (the most common
   Mac) would run only scalar kernels.
 - **Alternatives:**
@@ -1103,9 +1103,9 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   - Renaming internal names too: churn, no user value.
 - **Tradeoffs:**
   - Builds need network access once (cpp-httplib) unless the header is provided.
-  - macOS has not been built on a Mac yet; the CI job covers it once the repository is on
-    GitHub. No GitHub remote exists today, so no workflow has run.
-  - NEON performance is unmeasured: there is no ARM hardware here, only emulation.
+  - NEON performance is not benchmarked yet. Correctness runs on GitHub's ARM64 and Apple
+    Silicon runners: the full test suite passes on both, plus the installers on all three OSes
+    (CI, October 2026).
   - Windows Smart App Control may block freshly built, unsigned binaries on some machines.
 - **Evidence:**
   - **Linux x86-64.** 352/352 tests with gcc 13 and with clang 18, a clean build
@@ -1143,7 +1143,7 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   - Needs `curl` on PATH (a clear error says so if missing).
   - The pre-check sees only header metadata. Tensor types are listed after the tokenizer arrays, so
     IQ-quantized files of a supported architecture are only reported after the download.
-  - Single files only. No repo browsing or sharded GGUFs yet (TODO).
+  - Single files only. No repo browsing or sharded GGUFs yet (see ROADMAP.md).
 - **Evidence:**
   - Windows, real Hugging Face:
     - the `ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF` IQ3_S link was refused in about 1 s

@@ -1,6 +1,6 @@
 # GPU backend architecture
 
-Status: **designed and enforced by tests; no GPU backend is implemented** (spec §45–§47, DD-045).
+Status: **designed and enforced by tests; no GPU backend is implemented** (DD-045).
 This page is the contract a CUDA, HIP, Metal or Vulkan backend implements, and it lists what
 the rest of the engine already guarantees.
 
@@ -58,7 +58,7 @@ them with the launch, or caches them; the tables are constant.
   device top-k/top-p op can replace it behind `Sampler` later.
 - **Streams:** one per backend; `synchronize` before `download` returns.
 
-## Extension points already in place (spec §47)
+## Extension points already in place
 
 | feature | where |
 |---|---|

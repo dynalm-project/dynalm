@@ -1,0 +1,14 @@
+DynaLM
+Copyright 2026 The DynaLM Authors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Third-party components (not stored in this repository; fetched at build time):
+- cpp-httplib v0.18.3 (MIT License), https://github.com/yhirose/cpp-httplib
+  Used by the HTTP server; the exact header is verified by SHA-256.
+- GoogleTest v1.15.2 (BSD 3-Clause License), https://github.com/google/googletest
+  Used only to build the tests.
+
+Test data: tests/data/granite31_chat_template.jinja is the chat template of IBM
+Granite 3.1 (Apache License 2.0). The tiny models under tests/data are generated
+with random weights by the scripts in tools/ and contain no third-party weights.

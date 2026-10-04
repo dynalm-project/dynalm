@@ -411,7 +411,7 @@ cold page faults of the memory-mapped weights on the first forward pass, not by 
 | 4096 | 27.0 | 22.9 |
 
 The remaining long-context cost is memory traffic: about 94 MB of K/V per token at 4K, and each
-GQA KV head is read once per query head (3×). Grouped GQA attention is the next step (TODO).
+GQA KV head is read once per query head (3×). Grouped GQA attention is the next step (see ROADMAP.md).
 
 ### End to end through the scheduler (`bench_scheduler`, SmolLM2 Q8_0, budgets 64/64)
 
@@ -469,7 +469,7 @@ How to read this:
   prefill over steps (64-token budget), so each step is slower but no stream stalls (p99
   638 ms). This is the TTFT ↔ ITL tradeoff from DD-027 and DD-028. TPOT ends up equal at c=16.
 - **Remaining gap.** At c=4, decode TPOT is 66 vs 51 ms (prompt 128). The next kernel steps
-  are a multi-row fused decode kernel and GQA-grouped attention (TODO).
+  are a multi-row fused decode kernel and GQA-grouped attention (see ROADMAP.md).
 
 ### The regression the first run exposed (DD-036)
 
@@ -641,4 +641,4 @@ How to read this:
   bandwidth-bound: 0.47 vs 1.1 GB). The draft's 4 sequential passes, plus a 5-row
   verification pass that costs more than a 1-row decode (expand path, DD-036), eat the gain.
   Draft models pay off when the cost ratio is around 10× or more (for example 0.5B drafting
-  for 7B), or once the multi-row fused decode kernel (TODO) makes verification nearly free.
+  for 7B), or once the multi-row fused decode kernel (see ROADMAP.md) makes verification nearly free.

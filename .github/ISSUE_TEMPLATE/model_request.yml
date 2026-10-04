@@ -1,0 +1,21 @@
+name: Model request
+description: Ask for support for a model or architecture
+labels: [model-request]
+body:
+  - type: input
+    id: link
+    attributes:
+      label: Hugging Face link
+      placeholder: https://huggingface.co/<owner>/<repo>
+    validations:
+      required: true
+  - type: textarea
+    id: check
+    attributes:
+      label: Output of dynalm pull <link-to-a-.gguf-file> --check
+      render: text
+  - type: textarea
+    id: why
+    attributes:
+      label: Why this model?
+      description: What you want to use it for, and on which hardware.
