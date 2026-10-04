@@ -75,6 +75,9 @@ if(ENABLE_AVX2)
 endif()
 
 add_executable(dynalm cli/main.cpp cli/benchmark.cpp cli/inspect.cpp cli/manage.cpp cli/pull.cpp cli/run.cpp)
+if(WIN32)
+  target_sources(dynalm PRIVATE cli/dynalm.manifest)  # UTF-8 process code page
+endif()
 target_link_libraries(dynalm PRIVATE engine_core)
 
 # HTTP server (cpp-httplib: pinned single header, verified by SHA256).

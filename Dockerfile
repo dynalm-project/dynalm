@@ -12,7 +12,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends g++ cmake ninja-build ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-COPY CMakeLists.txt CMakePresets.json README.md CHANGELOG.md ./
+COPY CMakeLists.txt CMakePresets.json README.md CHANGELOG.md LICENSE NOTICE ./
 COPY cmake cmake
 COPY src src
 COPY docs docs

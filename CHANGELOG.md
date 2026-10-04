@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixes
+- **Windows: emoji and non-English output.** Model output (UTF-8) showed as garbage in consoles using a legacy
+  code page; an emoji printed as "ƒÿè". `dynalm` now switches the console to UTF-8 while it runs and restores
+  the previous code page on exit.
+- **Windows: UTF-8 everywhere else.** An embedded manifest makes UTF-8 the process code page (Windows 10
+  1903+), so non-English prompts in `-p` and non-ASCII file paths arrive intact.
+- **Docker image.** The build copies `LICENSE` and `NOTICE`, which the install step now packages.
+- **Docs.** A README FAQ on CPU speed (memory bandwidth, RAM pressure, `serve`, Qwen3 `/no_think`).
+
 ### Open source
 - Licensed under Apache-2.0 (`LICENSE`, `NOTICE` with third-party components).
 - Added `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, issue templates (bug, model request), a

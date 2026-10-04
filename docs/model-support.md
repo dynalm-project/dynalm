@@ -56,6 +56,9 @@ Copy a line into `dynalm pull`, for example
 | Qwen3-30B-A3B | `unsloth/Qwen3-30B-A3B-GGUF/Qwen3-30B-A3B-Q4_K_M.gguf` | 18.6 GB | checked |
 | Mixtral-8x7B | `TheBloke/Mixtral-8x7B-Instruct-v0.1-GGUF/mixtral-8x7b-instruct-v0.1.Q4_K_M.gguf` | 26 GB | checked |
 
+**Speed tip.** Qwen3 models think out loud in a `<think>` block before answering. Add `/no_think` to a prompt
+(or the system message) for a direct answer: "Hello" took 93 tokens with thinking and 14 without.
+
 **With caveats:**
 - **Phi-3.5-mini** (`bartowski/Phi-3.5-mini-instruct-GGUF`) passes the pre-check, but it uses LongRoPE
   scaling, which is not implemented. Expect poor quality beyond short contexts.

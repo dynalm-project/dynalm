@@ -160,6 +160,17 @@ size. IQ quantizations are not supported yet.
 About the size of the model file, plus a little for the context: 1 GB for 1B models, 3 GB for 4B, 5–6 GB
 for 7–8B in Q4_K_M. `dynalm inspect <model>` prints an estimate.
 
+**Why is generation slow, and how do I speed it up?**
+On a CPU, generating each token reads the whole model from RAM, so speed is set by memory bandwidth. A
+laptop with about 15 GB/s produces roughly 6 tokens/s on a 2.4 GB model (Qwen3-4B Q4_K_M), and about
+13 tokens/s on a 1B model. To go faster:
+- Use a smaller model or quantization (Qwen3-1.7B, Llama-3.2-1B, or Q4_K_M instead of Q8_0).
+- Keep the model fully in free RAM. If it has to be read back from disk, the first token can take 10 s
+  instead of 1 s. Close memory-heavy apps such as Docker/WSL or browsers.
+- Use `dynalm serve`, so the model stays loaded between requests.
+- For Qwen3, add `/no_think` to the prompt to skip the long `<think>` section. One test reply went from 93
+  tokens to 14.
+
 **Does it support GPUs?**
 Not yet. The backend interface is designed and tested for GPUs (see [docs/gpu-backend.md](docs/gpu-backend.md)),
 but only the CPU backend is implemented.

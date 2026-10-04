@@ -1,6 +1,7 @@
-// `engine` command-line entry point.
+// `dynalm` command-line entry point.
 
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -11,7 +12,38 @@
 #include "platform/cpu_info.h"
 #include "platform/isa.h"
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef NOGDI
+#define NOGDI
+#endif
+#include <windows.h>
+#endif
+
 namespace {
+
+#if defined(_WIN32)
+// Model output is UTF-8. A Windows console in its default code page shows the
+// bytes of every non-ASCII character as garbage, so
+// switch the console to UTF-8 while dynalm runs and restore it on exit.
+UINT g_prev_output_cp = 0;
+void restore_console_cp() { SetConsoleOutputCP(g_prev_output_cp); }
+
+void use_utf8_console() {
+  const UINT cp = GetConsoleOutputCP();
+  if (cp == 0 || cp == CP_UTF8 || !SetConsoleOutputCP(CP_UTF8)) return;  // no console, or already UTF-8
+  g_prev_output_cp = cp;
+  std::atexit(restore_console_cp);
+}
+// Arguments, paths and std::filesystem are UTF-8 too: cli/dynalm.manifest sets
+// the process code page to UTF-8 (Windows 10 1903+), so non-English prompts
+// reaches the tokenizer intact.
+#endif
 
 using engine::CpuIsa;
 
@@ -101,6 +133,9 @@ int cmd_info() {
 }  // namespace
 
 int main(int argc, char** argv) {
+#if defined(_WIN32)
+  use_utf8_console();
+#endif
   std::vector<std::string_view> args(argv + 1, argv + argc);
 
   // Global options precede the command.
