@@ -95,7 +95,24 @@ dynalm pull https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/blob/main/qwe
 ## Supported models
 
 Llama 1–3 (incl. Mistral, SmolLM, DeepSeek-distilled), Qwen 2 / 2.5 / 3, Gemma 1 / 2 / 3, Phi-3,
-IBM Granite, and mixture-of-experts models: Mixtral, Qwen-MoE, Granite-MoE. Details:
+IBM Granite, and mixture-of-experts models: Mixtral, Qwen-MoE, Granite-MoE.
+
+Good starting points:
+
+| RAM | Model | Command |
+|---|---|---|
+| any | Qwen3-0.6B | `dynalm pull Qwen/Qwen3-0.6B-GGUF/Qwen3-0.6B-Q8_0.gguf` |
+| any | Llama-3.2-1B | `dynalm pull bartowski/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct-Q4_K_M.gguf` |
+| 8 GB | Qwen3-4B | `dynalm pull Qwen/Qwen3-4B-GGUF/Qwen3-4B-Q4_K_M.gguf` |
+| 8 GB | Gemma-3-4B | `dynalm pull unsloth/gemma-3-4b-it-GGUF/gemma-3-4b-it-Q4_K_M.gguf` |
+| 16 GB | Qwen2.5-Coder-7B | `dynalm pull Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/qwen2.5-coder-7b-instruct-q4_k_m.gguf` |
+| 16 GB | Llama-3.1-8B | `dynalm pull bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf` |
+
+**Not supported yet:**
+- Qwen3.5 / Qwen3.8 (`qwen35`), LFM2, full DeepSeek-V3/R1.
+- IQ-quantized files.
+
+`dynalm pull` refuses these before downloading. The full list, with sizes, test status and caveats, is in
 [docs/model-support.md](docs/model-support.md).
 
 ## Documentation
