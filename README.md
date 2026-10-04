@@ -58,6 +58,7 @@ docker run --rm -p 8000:8000 -v "$PWD/models:/models" dynalm serve /models/model
 
 ```sh
 dynalm pull Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q4_k_m.gguf   # download into ./models
+dynalm rm qwen2.5-0.5b-instruct-q4_k_m        # delete a downloaded model (asks first; -y skips)
 dynalm list                                   # models in ./models (GGUF and Hugging Face folders)
 dynalm inspect models/model.gguf              # architecture, quantization, memory estimate, support
 dynalm run models/model.gguf -p "Hi" --temp 0.7 --top-p 0.9

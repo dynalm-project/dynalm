@@ -1153,3 +1153,37 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
     - a missing file reported the HTTP error with the gated-model hint.
   - Unit tests (`ModelSource.*`, 5): link forms, the header peek on truncated and HTML input, and the
     support verdict on synthetic GGUFs with an unknown architecture and an iq3_s tensor.
+
+## DD-048: `dynalm rm` deletes only model artifacts, and asks first
+
+- **Decision:** `dynalm rm <model>... [-y]` (alias `delete`) resolves a name the way `dynalm list` prints
+  it (with or without `.gguf`, or a `.part`) under the models directory, or a path. It deletes only:
+  - regular files ending in `.gguf` or `.gguf.part`;
+  - directories that `hf::is_hf_model` recognizes.
+
+  Anything else is refused. It asks `[y/N]` (EOF means no) unless `-y` is given. `dynalm list` now
+  shows partial downloads so they can be found and removed. `dynalm pull --check` checks support
+  without downloading.
+- **Reason:**
+  - Models are multi-GB, and users asked for a remove command to go with `pull`.
+  - Accepting paths makes a typo potentially destructive, so the target type is checked first.
+- **Alternatives:**
+  - Delete any path: simpler, but `dynalm rm ~/Documents` must never work.
+  - A model registry or manifest (Ollama-style blobs): DynaLM uses plain files users can see, so the
+    filesystem is the registry.
+- **Tradeoffs:**
+  - On Windows, a model that a running server has mmapped cannot be deleted; the error suggests
+    `dynalm stop`.
+- **Evidence (Windows and Linux/gcc):**
+  - "n" keeps the model; `-y` deletes it.
+  - A `.gguf.part` is deleted by its base name.
+  - An HF directory is deleted recursively.
+  - `notes.txt` and a plain folder are refused (exit 1).
+  - An unknown name gives "no model".
+  - `pull --check` was used on 35 Hugging Face repositories:
+    - Qwen3.5/3.8 (`qwen35`), Qwen3.8-Flash (`qwen4exp`) and LFM2 (`lfm2`) were refused;
+    - Qwen3, Qwen3-MoE, Qwen2.5, Llama 3.x, Gemma 2/3, Phi-3/3.5, Mistral, Mixtral and
+      DeepSeek-R1-Distill passed.
+  - Downloaded and run end to end:
+    - Qwen3-0.6B Q8_0: 22.1 tok/s, correct answer;
+    - Llama-3.2-1B Q4_K_M: "The capital of France is Paris.", 13.2 tok/s with 1.6 GB free RAM.

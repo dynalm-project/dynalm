@@ -111,6 +111,7 @@ void print_usage() {
                "             Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q4_k_m.gguf\n"
                "  -o DIR   where to save (default $DYNALM_MODELS_DIR or ./models)\n"
                "  --force  download even if the model looks unsupported, or is already present\n"
+               "  --check  only check whether DynaLM supports the model (reads 256 KiB, saves nothing)\n"
                "\n"
                "Interrupted downloads resume when the same command is run again.\n"
                "Gated models: accept the license on Hugging Face, then set HF_TOKEN.\n");
@@ -121,9 +122,10 @@ void print_usage() {
 int cmd_pull(std::span<const std::string_view> args) {
   std::string link, dir = "models";
   if (const char* env = std::getenv("DYNALM_MODELS_DIR"); env && *env) dir = env;
-  bool force = false;
+  bool force = false, check_only = false;
   for (size_t i = 0; i < args.size(); ++i) {
     if (args[i] == "--force") force = true;
+    else if (args[i] == "--check") check_only = true;
     else if ((args[i] == "-o" || args[i] == "--output") && i + 1 < args.size()) dir = args[++i];
     else if (args[i] == "-h" || args[i] == "--help") { print_usage(); return 0; }
     else if (link.empty() && !args[i].starts_with("-")) link = args[i];
@@ -149,7 +151,7 @@ int cmd_pull(std::span<const std::string_view> args) {
     return 1;
   }
   const fs::path dest = fs::path(dir) / name;
-  const bool present = fs::exists(dest, ec);
+  const bool present = !check_only && fs::exists(dest, ec);
 
   std::vector<std::string> common = {"curl", "-fL", "--retry", "5", "--retry-delay", "3"};
   TempFile header;
@@ -162,7 +164,7 @@ int cmd_pull(std::span<const std::string_view> args) {
     common.insert(common.end(), {"-H", "@" + header.path});
   }
 
-  if (!present || force) {
+  if (!present || force || check_only) {
     // 1. Check the header before downloading gigabytes. --max-filesize stops a
     //    server that ignores the range request from sending the whole file.
     std::printf("checking %s\n", url->c_str());
@@ -182,19 +184,27 @@ int cmd_pull(std::span<const std::string_view> args) {
         if (find_architecture(*arch) == nullptr) {
           std::fprintf(stderr, "pull: architecture '%s' is not supported by DynaLM, so this model cannot run\n",
                        arch->c_str());
+          if (check_only) return 1;
           if (!force) {
             std::fprintf(stderr, "      (supported models: docs/model-support.md; download anyway with --force)\n");
             return 1;
           }
         } else {
           std::printf("architecture %s: supported\n", arch->c_str());
+          if (check_only) return 0;
         }
+      } else if (arch.status().code() == StatusCode::kNotFound && check_only) {
+        std::printf("could not read the architecture from the file header\n");
+        return 1;
       } else if (arch.status().code() == StatusCode::kNotFound) {
         std::printf("note: could not read the architecture from the file header; downloading anyway\n");
       } else {
         std::fprintf(stderr, "pull: %s\n", arch.status().message().c_str());
         return 1;
       }
+    } else if (rc == 63 && check_only) {
+      std::printf("the server does not support partial downloads; cannot check without downloading\n");
+      return 1;
     } else if (rc == 63) {
       std::printf("note: the server does not support partial downloads; skipping the pre-check\n");
     } else {

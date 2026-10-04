@@ -46,6 +46,11 @@ Weight types that run today: f32, f16, bf16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q2_K,
 Q5_K, Q6_K (so every common GGUF file type: Q8_0, Q6_K, Q5_K_M, Q4_K_M, Q3_K_*, Q2_K).
 IQ* / TQ* / MXFP4 are recognized but not executable yet.
 
+Also run end to end via `dynalm pull`: Qwen3-0.6B Q8_0 (`qwen3`), Llama-3.2-1B-Instruct Q4_K_M (Llama 3 RoPE
+factors). Architecture pre-check passed (not yet run): Qwen3-1.7B/4B/8B, Qwen3-30B-A3B, Qwen2.5-3B/7B/Coder-7B,
+Llama-3.2-3B, Llama-3.1-8B, Gemma-3-1B/4B, Gemma-2-2B, Phi-3-mini-4k, Phi-3.5-mini, Mistral-7B-v0.3,
+Mixtral-8x7B, DeepSeek-R1-Distill-Qwen-1.5B/7B.
+
 Verified real files: SmolLM2-135M f16 + Q8_0, Qwen2.5-0.5B f16 + Q4_K_M (golden),
 Qwen2.5-0.5B Q8_0 (runs), Gemma-3-270M f16 (golden).
 

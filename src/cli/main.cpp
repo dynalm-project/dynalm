@@ -29,6 +29,7 @@ void print_usage() {
       "  serve <model>        OpenAI-compatible HTTP server (dynalm serve for options)\n"
       "  benchmark <model>    load test (in-process or --url server), P50-P99 latency\n"
       "  pull <link>          download a GGUF model (Hugging Face link or URL) into ./models\n"
+      "  rm <model>...        delete downloaded models (asks first; -y to skip)\n"
       "  list [dir]           GGUF models under dir (default ./models or $DYNALM_MODELS_DIR)\n"
       "  stop | unload        ask a local server to drain and exit (--host, --port)\n");
 }
@@ -144,6 +145,7 @@ int main(int argc, char** argv) {
 #endif
   if (cmd == "benchmark") return engine::cli::cmd_benchmark(std::span(args).subspan(i + 1));
   if (cmd == "pull") return engine::cli::cmd_pull(std::span(args).subspan(i + 1));
+  if (cmd == "rm" || cmd == "delete") return engine::cli::cmd_rm(std::span(args).subspan(i + 1));
   if (cmd == "list") return engine::cli::cmd_list(std::span(args).subspan(i + 1));
   // One model per server process (DD-039): unloading it means stopping it.
   if (cmd == "stop" || cmd == "unload") return engine::cli::cmd_stop(std::span(args).subspan(i + 1));

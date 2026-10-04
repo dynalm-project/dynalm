@@ -172,6 +172,8 @@ shutdown-timeout = 30    # drain time on SIGTERM / dynalm stop
 ```sh
 DYNALM_PORT=9000 dynalm serve --config engine.conf --threads 8
 dynalm pull <owner>/<repo>/<file>.gguf   # download a GGUF from Hugging Face (resumable, pre-checked)
+dynalm pull <link> --check               # only check whether DynaLM supports it (256 KiB read)
+dynalm rm <model> [-y]                   # delete a downloaded model (GGUF, .part, or HF directory)
 dynalm list models          # GGUF files with architecture, quantization, context, support status
 dynalm stop --port 9000     # drain in-flight requests, then exit (alias: unload)
 ```

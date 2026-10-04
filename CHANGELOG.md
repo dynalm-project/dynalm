@@ -8,7 +8,13 @@
   - Reads the first 256 KiB first and refuses unsupported architectures before the full download (`--force` overrides).
   - Resumable (`<file>.part`), retried, gated models via `HF_TOKEN`; verifies every tensor type afterwards.
   - Uses the system `curl` (DD-047).
-- `dynalm list` names the blocker: `unsupported architecture 'qwen35'` or `unsupported tensor types: iq3_s, ...`.
+  - `--check` only checks support (reads 256 KiB, saves nothing).
+- `dynalm rm <model>... [-y]` (alias `delete`) deletes downloaded models by the name `dynalm list` shows (the
+  `.gguf` extension is optional) or by path.
+  - Asks before deleting unless `-y` is given.
+  - Deletes only GGUF files, partial downloads and Hugging Face model directories, never other files or folders.
+- `dynalm list` names the blocker (`unsupported architecture 'qwen35'` or `unsupported tensor types: iq3_s, ...`)
+  and shows partial downloads.
 - CI: all 11 jobs green (Linux x64 gcc/clang/ASAN/TSAN, Linux ARM64, macOS, Windows, three installers, Docker).
 
 ### DynaLM: name, installs, CI, NEON
