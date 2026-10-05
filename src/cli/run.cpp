@@ -5,7 +5,9 @@
 #include <algorithm>
 #include <charconv>
 #include <cstdio>
+#include <chrono>
 #include <string>
+#include <thread>
 
 #include "backends/backend_registry.h"
 #include "cli/chat.h"
@@ -342,6 +344,13 @@ int cmd_run(std::span<const std::string_view> args) {
                ev.prompt_tokens, ttft_ms, ev.completion_tokens,
                decode_s > 0 ? (ev.completion_tokens - 1) / decode_s : 0.0,
                std::string(stream_finish_name(ev.finish)).c_str(), pct(50), pct(90), pct(99));
+  // Engine-side view of the same run: mean forward time of a decode step.
+  for (int i = 0; i < 100 && e.stats().scheduler.running != 0; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  if (const SchedulerStats ss = e.stats().scheduler; ss.steps_decode_only > 0) {
+    std::fprintf(stderr, "[engine] decode step %.1f ms (forward, %llu steps)\n",
+                 ss.forward_decode_only_ms / static_cast<double>(ss.steps_decode_only),
+                 static_cast<unsigned long long>(ss.steps_decode_only));
+  }
   return 0;
 }
 

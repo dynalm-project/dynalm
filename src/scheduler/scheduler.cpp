@@ -321,9 +321,12 @@ bool Scheduler::step() {
   for (const SeqBatch& b : batch_) n_logits += b.want_logits ? 1 : 0;
   const auto vocab = static_cast<size_t>(model_.config().vocab_size);
   logits_.resize(n_logits * vocab);
+  // How this batch runs on this hardware (DD-051); part of planning time.
+  const ExecutionPlan plan = model_.planner().plan(batch_);
+  if (plan.kernels.attention_full == AttentionStrategy::kSplitK) ++stats_.steps_split_attention;
   const int64_t t_fwd = now_ns();
   stats_.plan_ms += static_cast<double>(t_fwd - t_plan) * 1e-6;
-  const Status st = model_.forward_batch(batch_, kv_, logits_);
+  const Status st = model_.forward_batch(batch_, kv_, logits_, &plan);
   const int64_t t_post = now_ns();
   const double fwd_ms = static_cast<double>(t_post - t_fwd) * 1e-6;
   stats_.forward_ms += fwd_ms;

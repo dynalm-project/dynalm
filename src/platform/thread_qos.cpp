@@ -1,0 +1,37 @@
+#include "platform/thread_qos.h"
+
+#include "common/platform.h"
+
+#if ENGINE_OS_WINDOWS
+#include <windows.h>
+#elif ENGINE_OS_MACOS
+#include <pthread.h>
+#include <pthread/qos.h>
+#endif
+
+namespace engine {
+
+void request_full_speed_process() {
+#if ENGINE_OS_WINDOWS
+  // ControlMask selects the policy; StateMask 0 = "do not throttle".
+  PROCESS_POWER_THROTTLING_STATE s{};
+  s.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+  s.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED;
+  s.StateMask = 0;
+  SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &s, sizeof(s));
+#endif
+}
+
+void request_full_speed_thread() {
+#if ENGINE_OS_WINDOWS
+  THREAD_POWER_THROTTLING_STATE s{};
+  s.Version = THREAD_POWER_THROTTLING_CURRENT_VERSION;
+  s.ControlMask = THREAD_POWER_THROTTLING_EXECUTION_SPEED;
+  s.StateMask = 0;
+  SetThreadInformation(GetCurrentThread(), ThreadPowerThrottling, &s, sizeof(s));
+#elif ENGINE_OS_MACOS
+  pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);
+#endif
+}
+
+}  // namespace engine

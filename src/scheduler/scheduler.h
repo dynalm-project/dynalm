@@ -121,6 +121,7 @@ struct SchedulerStats {
   double forward_mixed_ms = 0;
   uint64_t decode_rows_total = 0;
   uint64_t prefill_rows_total = 0;
+  uint64_t steps_split_attention = 0;  // planner chose split-K attention (DD-051)
 };
 
 class Scheduler {

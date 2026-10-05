@@ -17,6 +17,7 @@
 #include <span>
 #include <string_view>
 
+#include "backends/kernel_plan.h"
 #include "common/status.h"
 #include "kv_cache/kv_layout.h"
 #include "memory/storage.h"
@@ -61,6 +62,12 @@ class Backend {
   virtual Result<Tensor> upload(const Tensor& host) = 0;
   // Copies fp32 rows of a device tensor [rows, cols] to dense host memory.
   virtual void download(const TensorView& src, std::span<float> dst) = 0;
+
+  // Execution decisions for the next forward pass, from the planner (DD-051).
+  // Backends without per-step choices ignore it.
+  virtual void set_kernel_plan(const KernelPlan& plan) { (void)plan; }
+  // Independent workers kernels can use (CPU: thread-pool size).
+  virtual int32_t parallelism() const { return 1; }
 
   // Whether matmul/embedding accept this weight dtype.
   virtual bool supports_weight_type(DType type) const = 0;

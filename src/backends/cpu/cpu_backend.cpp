@@ -46,16 +46,7 @@ inline float apply_act(Activation a, float x) {
 }  // namespace
 
 CpuBackend::CpuBackend(ThreadPool& pool, CpuIsa isa)
-    : pool_(pool), k_(make_cpu_kernels(isa)), name_("CPU/" + std::string(isa_name(k_.isa))) {
-  // Tuning override for experiments / the AutoTuner (multiple of 256; 0 = off).
-  if (const char* kc = std::getenv("DYNALM_GEMM_KC")) {
-    const long v = std::strtol(kc, nullptr, 10);
-    gemm_kc_ = v > 0 ? v / 256 * 256 : 0;
-  }
-  if (const char* em = std::getenv("DYNALM_MATMUL_EXPAND_MIN")) {
-    expand_min_rows_ = std::max<long>(1, std::strtol(em, nullptr, 10));
-  }
-}
+    : pool_(pool), k_(make_cpu_kernels(isa)), name_("CPU/" + std::string(isa_name(k_.isa))) {}
 
 Result<std::shared_ptr<Storage>> CpuBackend::allocate(size_t bytes) { return Storage::allocate_host(bytes); }
 
@@ -149,23 +140,23 @@ void CpuBackend::matmul(const TensorView& x, const TensorView& w, const TensorVi
   // Few activation rows (decode): fused dequantize-dot straight from the
   // packed weights. Many rows (prefill): expand each weight row once and
   // reuse it for every activation row.
-  const bool expand = wt != DType::kF32 && m >= expand_min_rows_;
+  const bool expand = wt != DType::kF32 && m >= plan_.expand_min_rows;
 
   // Prefill path: panels of kPanel weight rows are expanded to fp32 once and
   // multiplied against all activation rows by the register-blocked kernel.
   constexpr int64_t kPanel = 4;
   const bool x_dense = x.stride(0) == k * static_cast<int64_t>(sizeof(float));
-  const bool f32_panel = wt == DType::kF32 && m >= expand_min_rows_ && x_dense;
+  const bool f32_panel = wt == DType::kF32 && m >= plan_.expand_min_rows && x_dense;
   if ((expand || f32_panel) && x_dense) {
     const size_t panels = static_cast<size_t>((n + kPanel - 1) / kPanel);
     const int64_t y_stride = y.stride(0) / static_cast<int64_t>(sizeof(float));
     const auto* xp = x.data_as<const float>();
     auto* yp = y.data_as<float>();
-    // K-blocking (gemm_kc_ > 0): slices of gemm_kc_ columns, so a slice of
+    // K-blocking (gemm_k_block > 0): slices of gemm_k_block columns, so a slice of
     // all activation rows stays cache-resident while a thread sweeps its
     // panels; partial sums accumulate into y. Slices start on multiples of
     // 256, so every block format dequantizes slice by slice.
-    const int64_t kc = (gemm_kc_ > 0 && gemm_kc_ < k) ? gemm_kc_ : k;
+    const int64_t kc = (plan_.gemm_k_block > 0 && plan_.gemm_k_block < k) ? plan_.gemm_k_block : k;
     pool_.parallel_for(panels, grain_for(panels, pool_.size(), 1), [&](size_t begin, size_t end) {
       thread_local std::vector<float> panel;
       panel.resize(static_cast<size_t>(kPanel * kc));
@@ -366,8 +357,12 @@ void CpuBackend::attention(const AttentionParams& p) {
 
   // Split-K when (row, head) pairs alone cannot occupy the pool (decode) and
   // contexts are long enough to amortize the merge.
-  constexpr int64_t kChunk = 256;
-  const bool split = pairs < static_cast<size_t>(2 * pool_.size()) && longest > 2 * kChunk;
+  // Strategy from the planner (DD-051); without a plan, the same rule per call.
+  const int64_t kChunk = plan_.attention_chunk;
+  const AttentionStrategy strategy = p.sliding_window > 0 ? plan_.attention_window : plan_.attention_full;
+  const bool split = strategy == AttentionStrategy::kSplitK ||
+                     (strategy == AttentionStrategy::kAuto &&
+                      attention_should_split(static_cast<int64_t>(pairs), longest, pool_.size(), plan_.attention_chunk));
   if (!split) {
     pool_.parallel_for(pairs, 1, [&](size_t begin, size_t end) {
       for (size_t job = begin; job < end; ++job) {

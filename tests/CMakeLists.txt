@@ -136,3 +136,6 @@ engine_add_test(test_speculative
 
 engine_add_test(test_device_backend
   test_device_backend.cpp)
+
+engine_add_test(test_execution
+  test_execution_planner.cpp)

@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Performance program P2 + throttling fix
+- **Execution planner (DD-051):** `src/execution/BatchPlanner` decides per step the phase, shape and
+  `KernelPlan`. The `KernelPlan` holds the matmul expand threshold, GEMM K-block, and the attention
+  strategy for full and sliding-window layers. Results are bit-identical, at ≤ 0.09 ms/step of
+  planning.
+- **Compute threads opt out of OS power throttling (DD-052):** Windows EcoQoS, and the macOS QoS
+  class. A quiet process such as `dynalm serve` or `dynalm benchmark` had run its forward pass
+  1.6× slower. Qwen2.5-0.5B Q4_K_M serving throughput: 18.6→31.5 tok/s at c=1, 40.1→71.1 at c=8,
+  54.7→88.5 at c=64.
+- **AVX2 GEMM micro-kernel:** a 4×3 tile (12 accumulators) for batched decode, 3–27% faster on
+  real tensors and bit-identical. `bench_decode_matmul` measures decode matmuls on a model's real,
+  DRAM-resident weights.
+- `dynalm run` prints the engine's mean decode-step forward time.
+- The benchmark clock sampler and profiling run only with diagnostics.
+
 ### Performance program P1: measurement (DD-050)
 - **Scheduler step accounting** (always on): plan, prefix lookup, KV reservation, forward split by
   decode-only / prefill-only / mixed steps, sampling, emit, prefix insert, and mean decode rows per step.

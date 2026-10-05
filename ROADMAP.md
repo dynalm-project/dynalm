@@ -44,7 +44,7 @@ reports Before / After / Delta from measurement (method: [docs/performance.md](d
 
 - [x] P1 — Measurement: engine/scheduler timing, thread-pool and OS/hardware counters, bandwidth
   ceiling and traffic model, bottleneck classifier, sweep + 8 graphs (DD-050)
-- [ ] P2 — Execution planner: BatchPlanner, ExecutionPlan / PrefillPlan / DecodePlan / KernelPlan
+- [x] P2 — Execution planner: BatchPlanner → ExecutionPlan / KernelPlan, per-step decisions in one place (DD-051)
 - [ ] P3 — Multi-row decode: specialized M = 1/2/4/8/16/32 decode matmuls (weights read once per tile)
 - [ ] P4 — Weight packing: persistent CPU execution layouts, built at load
 - [ ] P5 — GQA decode attention: each KV head read once per query group; dynamic split-K
@@ -52,7 +52,7 @@ reports Before / After / Delta from measurement (method: [docs/performance.md](d
 - [ ] P7 — KV: layout, traversal, block-size study, optional Q8 KV (with accuracy measurement)
 - [ ] P8 — Prefill GEMM: tiled, cache-blocked
 - [ ] P9 — INT8 activations / AVX-VNNI
-- [ ] P10 — CPU topology: affinity, P/E-core placement, NUMA
+- [ ] P10 — CPU topology: affinity, P/E-core placement, NUMA (power-throttling opt-out already done: DD-052)
 - [ ] P11 — MoE: grouped expert execution
 - [ ] P12 — Adaptive scheduler: THROUGHPUT_FIRST / BALANCED / LATENCY_FIRST
 - [ ] P13 — Adaptive speculation (judged on output tok/s)

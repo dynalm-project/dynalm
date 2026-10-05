@@ -152,6 +152,49 @@ void gemm_panel(const float* w, int nr, const float* x, int64_t x_stride, int64_
   const float* w2 = w + 2 * k;
   const float* w3 = w + 3 * k;
   int64_t i = 0;
+  // 4 weight rows x 3 activation rows: 12 accumulators + 3 x + 1 w = all 16
+  // registers; 12 FMAs per 7 loads, versus 8 per 6 for the 4x2 tile below.
+  for (; i + 3 <= m; i += 3) {
+    const float* xa = x + i * x_stride;
+    const float* xb = xa + x_stride;
+    const float* xc = xb + x_stride;
+    __m256 a0 = _mm256_setzero_ps(), a1 = a0, a2 = a0, a3 = a0, b0 = a0, b1 = a0, b2 = a0, b3 = a0;
+    __m256 c0 = a0, c1 = a0, c2 = a0, c3 = a0;
+    for (int64_t kk = 0; kk < k; kk += 8) {
+      const __m256 va = _mm256_loadu_ps(xa + kk), vb = _mm256_loadu_ps(xb + kk), vc = _mm256_loadu_ps(xc + kk);
+      __m256 vw = _mm256_loadu_ps(w0 + kk);
+      a0 = _mm256_fmadd_ps(vw, va, a0);
+      b0 = _mm256_fmadd_ps(vw, vb, b0);
+      c0 = _mm256_fmadd_ps(vw, vc, c0);
+      vw = _mm256_loadu_ps(w1 + kk);
+      a1 = _mm256_fmadd_ps(vw, va, a1);
+      b1 = _mm256_fmadd_ps(vw, vb, b1);
+      c1 = _mm256_fmadd_ps(vw, vc, c1);
+      vw = _mm256_loadu_ps(w2 + kk);
+      a2 = _mm256_fmadd_ps(vw, va, a2);
+      b2 = _mm256_fmadd_ps(vw, vb, b2);
+      c2 = _mm256_fmadd_ps(vw, vc, c2);
+      vw = _mm256_loadu_ps(w3 + kk);
+      a3 = _mm256_fmadd_ps(vw, va, a3);
+      b3 = _mm256_fmadd_ps(vw, vb, b3);
+      c3 = _mm256_fmadd_ps(vw, vc, c3);
+    }
+    float* ya = y + i * y_stride;
+    float* yb = ya + y_stride;
+    float* yc = yb + y_stride;
+    put(ya[0], hsum(a0));
+    put(ya[1], hsum(a1));
+    put(ya[2], hsum(a2));
+    put(ya[3], hsum(a3));
+    put(yb[0], hsum(b0));
+    put(yb[1], hsum(b1));
+    put(yb[2], hsum(b2));
+    put(yb[3], hsum(b3));
+    put(yc[0], hsum(c0));
+    put(yc[1], hsum(c1));
+    put(yc[2], hsum(c2));
+    put(yc[3], hsum(c3));
+  }
   for (; i + 2 <= m; i += 2) {
     const float* xa = x + i * x_stride;
     const float* xb = xa + x_stride;

@@ -5,6 +5,7 @@
 #include "common/timer.h"
 #include "logging/log.h"
 #include "platform/cpu_info.h"
+#include "platform/thread_qos.h"
 #include "runtime/sequence.h"
 #include "runtime/text_stream.h"
 
@@ -90,6 +91,7 @@ int64_t auto_kv_tokens(const ModelConfig& c, DType kv_dtype, int64_t weight_byte
 }
 
 Result<std::unique_ptr<Engine>> Engine::create(EngineOptions opts) {
+  request_full_speed_process();  // DD-052
   std::unique_ptr<Engine> e(new Engine());
   ENGINE_ASSIGN_OR_RETURN(e->model_, load_model(opts.model_path));
   const ModelConfig& c = e->model_->config;
@@ -133,6 +135,7 @@ Engine::~Engine() {
 }
 
 void Engine::loop() {
+  request_full_speed_thread();  // the scheduler thread also runs kernel chunks (DD-052)
   // Throughput window: restarts whenever the engine wakes from idle.
   int64_t window_start = 0;
   uint64_t window_gen = 0, window_prefill = 0, prefill_total = 0;

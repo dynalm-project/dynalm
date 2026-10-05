@@ -144,7 +144,7 @@ TEST(Kernels, GemmPanelMatchesDots) {
   std::normal_distribution<float> nd(0, 1);
   for (int64_t k : {8, 24, 64, 13}) {
     for (int nr = 1; nr <= 4; ++nr) {
-      for (int64_t m : {1, 2, 3, 7}) {
+      for (int64_t m : {1, 2, 3, 5, 6, 7}) {
         std::vector<float> w(static_cast<size_t>(nr * k)), x(static_cast<size_t>(m * k));
         for (auto& v : w) v = nd(rng);
         for (auto& v : x) v = nd(rng);

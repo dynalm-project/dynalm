@@ -4,6 +4,7 @@
 #include <cassert>
 
 #include "common/timer.h"
+#include "platform/thread_qos.h"
 
 #if ENGINE_ARCH_X86_64
 #include <immintrin.h>
@@ -28,7 +29,12 @@ inline void cpu_relax() {
 ThreadPool::ThreadPool(int num_threads) {
   const int workers = std::max(0, num_threads - 1);
   workers_.reserve(static_cast<size_t>(workers));
-  for (int i = 0; i < workers; ++i) workers_.emplace_back([this] { worker_loop(); });
+  for (int i = 0; i < workers; ++i) {
+    workers_.emplace_back([this] {
+      request_full_speed_thread();  // compute threads must not be power-throttled (DD-052)
+      worker_loop();
+    });
+  }
 }
 
 ThreadPool::~ThreadPool() {

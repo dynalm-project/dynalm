@@ -41,6 +41,7 @@ Result<std::unique_ptr<Transformer>> Transformer::create(const ModelConfig& conf
   if (max_batch_tokens <= 0) return InvalidArgument("max_batch_tokens must be > 0");
   std::unique_ptr<Transformer> t(new Transformer(config, backend));
   ENGINE_RETURN_IF_ERROR(t->init(weights, max_batch_tokens));
+  t->planner_ = std::make_unique<BatchPlanner>(config, HardwareProfile::detect(backend.parallelism(), backend.name()));
   return t;
 }
 
@@ -354,7 +355,8 @@ Status Transformer::forward(std::span<const TokenId> tokens, std::span<const int
   return forward_batch({&one, 1}, cache, logits);
 }
 
-Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& cache, std::span<float> logits) {
+Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& cache, std::span<float> logits,
+                                  const ExecutionPlan* plan) {
   const ModelConfig& c = config_;
   // --- validate and flatten the batch ---
   batch_tokens_.clear();
@@ -392,6 +394,12 @@ Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& c
     return InvalidArgument("forward: logits buffer must hold " + std::to_string(logit_rows_.size()) + " rows");
   }
   const auto m = static_cast<int64_t>(batch_tokens_.size());
+  // How this exact batch runs on this hardware (DD-051).
+  if (plan) {
+    backend_.set_kernel_plan(plan->kernels);
+  } else {
+    backend_.set_kernel_plan(planner_->plan(seqs).kernels);
+  }
   const std::span<const TokenId> tokens = batch_tokens_;
   const std::span<const int32_t> positions = batch_pos_;
   const std::span<const int32_t> row_seq = batch_seq_;

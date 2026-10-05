@@ -1310,3 +1310,40 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   - The plan is computed for the whole step, so it cannot vary per layer except through the
     full/window split.
 - **Evidence:** see P2 in docs/benchmarks.md (bit-identical outputs; neutral performance).
+
+## DD-052: Compute threads opt out of OS power throttling
+
+- **Decision:** `platform/thread_qos`.
+  - `Engine::create` calls `request_full_speed_process()`. On Windows this sets `ProcessPowerThrottling`
+    with `EXECUTION_SPEED` control and state 0, which opts out of EcoQoS.
+  - Every thread-pool worker and the engine's scheduler thread call `request_full_speed_thread()`:
+    - Windows: `ThreadPowerThrottling`, same opt-out.
+    - macOS: `QOS_CLASS_USER_INITIATED`, eligible for performance cores.
+    - Linux: no-op.
+- **Reason:** Measurement found it (P1). The same engine code ran its decode forward pass at
+  25.1–26.0 ms/step inside `dynalm run`, which streams output to a console, but at 37–45 ms inside
+  `dynalm benchmark`, a quiet process. With 2 threads the gap was 39 vs 74 ms.
+  - Ruled out one by one: profiling, the clock sampler, prompt length, KV size, stdout streaming
+    and thread count.
+  - Only the process's apparent activity differed. Windows 11 power-throttles processes it
+    considers background, which moves them to efficiency cores and lower clocks. A server
+    (`dynalm serve`) is exactly such a process.
+- **Alternatives:**
+  - Raise thread priority: doesn't affect EcoQoS placement, and can starve the UI.
+  - Pin threads to P-cores: P10 work; on its own it is undone by throttling and loses E-core
+    throughput.
+  - Document "run in the foreground": not actionable for a server.
+- **Tradeoffs:**
+  - Higher power draw while generating. That's the intended trade for an inference engine, and
+    idle workers still sleep after ~100 µs of spinning.
+  - Linux has no equivalent hint; there, P10 handles placement.
+- **Evidence:**
+  - After the change, back-to-back runs give `run` 25.9/26.8 vs benchmark 25.8/25.4 ms per step
+    at 10 threads, and 38.2/37.8 vs 39.4/38.0 at 2 threads.
+  - Serving throughput, Qwen2.5-0.5B Q4_K_M, prompt 128 / output 64:
+
+    | | c=1 | c=8 | c=16 | c=64 |
+    |---|---|---|---|---|
+    | tok/s before | 18.6 | 40.1 | 48.0 | 54.7 |
+    | tok/s after | 31.5 | 71.1 | 78.9 | 88.5 |
+    | change | +69% | +77% | +64% | +62% |

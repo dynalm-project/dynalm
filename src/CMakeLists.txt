@@ -10,12 +10,14 @@ add_library(engine_core STATIC
   bench/analysis.cpp
   bench/loadgen.cpp
   backends/backend_registry.cpp
+  backends/kernel_plan.cpp
   backends/cpu/cpu_backend.cpp
   backends/cpu/generic/kernels_generic.cpp
   chat_template/chat_template.cpp
   common/status.cpp
   config/config.cpp
   dtype/dtype.cpp
+  execution/batch_planner.cpp
   kv_cache/kv_cache.cpp
   logging/log.cpp
   memory/host_memory.cpp
@@ -44,6 +46,7 @@ add_library(engine_core STATIC
   platform/isa.cpp
   platform/perf_counters.cpp
   platform/process_stats.cpp
+  platform/thread_qos.cpp
   quant/dequant.cpp
   quant/gptq_awq.cpp
   quant/quant_formats.cpp

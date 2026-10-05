@@ -702,3 +702,44 @@ Per-op share of forward time, roughly the same at every concurrency:
    dense model of similar depth: P11, P6.
 6. **Single-stream Q4_K_M decode is near the bandwidth limit** (MEMORY_BOUND for 1.5B, 4B and
    Granite at c=1). Gains there come from moving fewer bytes (packing, KV), not from compute.
+
+**Correction to the P1 baseline (found by P1's own diagnostics, DD-052).** The baseline process was
+power-throttled by Windows (EcoQoS). The same engine ran its decode forward pass 1.6× faster inside
+`dynalm run`. After opting compute threads out of throttling (`results/p1-qos.jsonl`):
+
+| Qwen2.5-0.5B Q4_K_M | c=1 | c=2 | c=4 | c=8 | c=16 | c=32 | c=64 |
+|---|---|---|---|---|---|---|---|
+| output tok/s, P1 baseline | 18.6 | 27.7 | 32.8 | 40.1 | 48.0 | 52.4 | 54.7 |
+| output tok/s, with DD-052 | **31.5** | **45.5** | **54.2** | **71.1** | **78.9** | **86.7** | **88.5** |
+| decode step ms (rows) | 26.2 (1) | 33.2 (2) | 47.9 (3.7) | 59.2 (7) | 88.6 (12.6) | 101.5 (21) | 101.0 (26.1) |
+| class | MEMORY | MIXED | MIXED | COMPUTE | COMPUTE | COMPUTE | COMPUTE |
+
+Every later phase compares against this corrected curve. The other P1 findings (relative costs of
+K-quant unpacking, scheduling, context length and MoE dispatch) still hold, and are re-measured as
+each phase runs.
+
+## P2 — execution planner (DD-051)
+
+- **Correctness:** outputs are bit-identical with and without the planner (`test_execution`:
+  llama, gemma2 with sliding-window layers, qwen2), and the split-K and per-pair strategies agree
+  when forced. 385/385 tests pass.
+- **Cost:** all scheduler planning (cancellation, admission, prefix lookup, KV reservation, batch
+  building, planning) takes 0.007 ms/step at c=1 and at most 0.09 ms/step at c=32, against 30–290 ms
+  of forward time: performance-neutral.
+
+## P3 (part 1) — decode matmul micro-kernel (`bench_decode_matmul`, Qwen2.5-0.5B Q4_K_M weights)
+
+- **Method:** `bench_decode_matmul` times each matmul path for M = 1–32 on the model's real tensors,
+  cycling through every layer's copy so the weights come from DRAM, as in a real step. A first
+  version timed one cache-hot tensor and overstated throughput 2–3×; it was replaced.
+- **The 4 weight rows × 3 activation rows micro-kernel:** 12 accumulators, 12 FMAs per 7 loads
+  against 8 per 6 for the 4×2 tile. Each output keeps the same FMA chain, so results are
+  bit-identical.
+- **A/B:** median of 3 runs each, 10 threads, expand path. The 4×3 runs went first, so warm-up
+  slightly favours them:
+
+| tensor | type | M=3 | M=6 | M=12 | M=24 |
+|---|---|---|---|---|---|
+| ffn_gate [4864, 896] | q5_0 | −11.9% | −11.0% | −6.4% | −9.2% |
+| ffn_down [896, 4864] | q6_K | −26.4% | 0.0% | −2.8% | −23.7% |
+| lm_head [151936, 896] | q8_0 | −17.1% | −21.5% | −27.2% | −24.4% |

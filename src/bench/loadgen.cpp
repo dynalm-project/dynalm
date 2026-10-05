@@ -229,7 +229,8 @@ PointResult run_point(Target& target, const Tokenizer& tokenizer, const PointCon
   for (int32_t i = 0; i < cfg.requests; ++i) prompts.push_back(make_prompt(tokenizer, prompt_len(i), base + i));
 
   Engine* engine = target.engine();
-  if (engine) engine->set_profiling(true);  // per-op + thread-pool accounting (a few clock reads per op)
+  // Per-op + thread-pool accounting (a few clock reads per op), with diagnostics only.
+  if (engine) engine->set_profiling(ctx.perf != nullptr);
 
   // Uncounted warm-up: pages in mmapped weights / server caches so the first
   // measured request doesn't carry cold-start cost.
@@ -244,8 +245,9 @@ PointResult run_point(Target& target, const Tokenizer& tokenizer, const PointCon
   std::atomic<bool> done{false};
   // CPU clock sampled through the run (frequency drops under sustained load).
   std::vector<double> mhz;
+  // Only with diagnostics: on Windows the clock query may interrupt cores.
   std::thread clock_sampler([&] {
-    while (!done.load()) {
+    while (ctx.perf && !done.load()) {
       if (const double f = cpu_current_mhz(); f > 0) mhz.push_back(f);
       for (int i = 0; i < 25 && !done.load(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }

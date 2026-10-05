@@ -18,25 +18,14 @@
 
 #include "backends/backend.h"
 #include "common/status.h"
+#include "execution/batch_planner.h"
 #include "kv_cache/kv_cache.h"
 #include "model_ir/model_config.h"
+#include "model/seq_batch.h"
 #include "model_ir/tensor_registry.h"
 #include "tokenizer/tokenizer.h"
 
 namespace engine {
-
-// One sequence's slice of a batched forward pass: `tokens` occupy positions
-// [start_pos, start_pos + tokens.size()) of the sequence whose KV lives at
-// `block_table`.
-struct SeqBatch {
-  std::span<const TokenId> tokens;
-  int32_t start_pos = 0;
-  std::span<const int32_t> block_table;
-  bool want_logits = true;  // compute logits for this sequence's last token
-  // With want_logits: logits for the last `logits_last` tokens (speculative
-  // verification scores every drafted position in one pass).
-  int32_t logits_last = 1;
-};
 
 // Optional per-op timing of forward passes (off by default; profiling adds
 // one timestamp per op).
@@ -75,7 +64,13 @@ class Transformer {
   // Every weight is read once for the whole batch. Logits for the last
   // `logits_last` tokens of each sequence with want_logits are written to
   // `logits` in order, one row of vocab_size floats each.
-  Status forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& cache, std::span<float> logits);
+  // `plan` comes from the scheduler's planner call; null = plan here with
+  // planner() (direct callers: generator, speculative decoding, tests).
+  Status forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& cache, std::span<float> logits,
+                       const ExecutionPlan* plan = nullptr);
+
+  // Plans batches for this model on this backend (DD-051).
+  const BatchPlanner& planner() const { return *planner_; }
 
   void set_profiling(bool on) { profiling_ = on; }
   const ForwardProfile& profile() const { return profile_; }
@@ -113,6 +108,7 @@ class Transformer {
   ModelConfig config_;
   Backend& backend_;
   int32_t max_batch_ = 0;
+  std::unique_ptr<BatchPlanner> planner_;
 
   TensorView tok_embd_, output_norm_, output_norm_b_, lm_head_;
   std::vector<float> rope_freq_factors_;
