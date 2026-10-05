@@ -7,6 +7,7 @@
 #include <cstring>
 #include <vector>
 
+#include "common/fast_exp.h"
 #include "dtype/fp16.h"
 
 namespace engine {
@@ -353,33 +354,62 @@ void CpuBackend::attend_group(const AttentionParams& p, size_t r, int32_t kvh, i
   thread_local std::vector<float> scores;  // [group][len]
   scores.resize(static_cast<size_t>(group) * len);
 
-  for (int32_t gi = 0; gi < group; ++gi) mx_out[gi] = -INFINITY;
-  for (int64_t t = t0; t < t1; ++t) {
+  // KV positions are contiguous within a block of one head: walk block runs
+  // and hand each run to the block kernels (DD-056). Results depend only on
+  // the row's own data (never on the batch), so batching stays invariant.
+  const int32_t bs = g.block_size;
+  // With several heads sharing the KV head, an fp16 run is converted to fp32
+  // once and every head reads the fp32 copy (one conversion per group, not
+  // one per head).
+  const bool convert = !f32 && group > 1;
+  const DequantFn to_f32 = k_.dequant_for(DType::kF16);
+  thread_local std::vector<float> kv_f32;
+  if (convert) kv_f32.resize(static_cast<size_t>(bs) * std::max(hd, hdv));
+  for (int64_t t = t0; t < t1;) {
+    const int64_t n = std::min<int64_t>(t1 - t, bs - t % bs);
     const int64_t off = kv.k_offset(t, kvh);
+    if (convert) to_f32(static_cast<const uint16_t*>(kv.k) + off, kv_f32.data(), n * hd);
     for (int32_t gi = 0; gi < group; ++gi) {
       const float* q = q0 + static_cast<int64_t>(gi) * hd;
-      float s = (f32 ? k_.dot_f32(q, static_cast<const float*>(kv.k) + off, hd)
-                     : k_.dot_f16_f32(static_cast<const uint16_t*>(kv.k) + off, q, hd)) *
-                p.scale;
-      if (p.softcap > 0) s = p.softcap * std::tanh(s / p.softcap);
-      scores[static_cast<size_t>(gi) * len + static_cast<size_t>(t - t0)] = s;
-      mx_out[gi] = std::max(mx_out[gi], s);
-    }
-  }
-  for (int32_t gi = 0; gi < group; ++gi) sum_out[gi] = 0;
-  std::fill(acc, acc + static_cast<size_t>(group) * hdv, 0.0f);
-  for (int64_t t = t0; t < t1; ++t) {
-    const int64_t off = kv.v_offset(t, kvh);
-    for (int32_t gi = 0; gi < group; ++gi) {
-      const float e = std::exp(scores[static_cast<size_t>(gi) * len + static_cast<size_t>(t - t0)] - mx_out[gi]);
-      sum_out[gi] += e;
-      float* a = acc + static_cast<int64_t>(gi) * hdv;
-      if (f32) {
-        k_.axpy_f32(e, static_cast<const float*>(kv.v) + off, a, hdv);
+      float* s = scores.data() + static_cast<size_t>(gi) * len + static_cast<size_t>(t - t0);
+      if (f32 || convert) {
+        k_.attn_scores_f32(convert ? kv_f32.data() : static_cast<const float*>(kv.k) + off, n, hd, q, p.scale, s);
       } else {
-        k_.axpy_f16(e, static_cast<const uint16_t*>(kv.v) + off, a, hdv);
+        k_.attn_scores_f16(static_cast<const uint16_t*>(kv.k) + off, n, hd, q, p.scale, s);
       }
     }
+    t += n;
+  }
+  for (int32_t gi = 0; gi < group; ++gi) {
+    float* s = scores.data() + static_cast<size_t>(gi) * len;
+    float mx = -INFINITY;
+    for (size_t i = 0; i < len; ++i) {
+      if (p.softcap > 0) s[i] = p.softcap * std::tanh(s[i] / p.softcap);
+      mx = std::max(mx, s[i]);
+    }
+    mx_out[gi] = mx;
+    sum_out[gi] = 0;
+  }
+  std::fill(acc, acc + static_cast<size_t>(group) * hdv, 0.0f);
+  thread_local std::vector<float> w;  // softmax numerators of one block run
+  w.resize(static_cast<size_t>(bs));
+  for (int64_t t = t0; t < t1;) {
+    const int64_t n = std::min<int64_t>(t1 - t, bs - t % bs);
+    const int64_t off = kv.v_offset(t, kvh);
+    if (convert) to_f32(static_cast<const uint16_t*>(kv.v) + off, kv_f32.data(), n * hdv);
+    for (int32_t gi = 0; gi < group; ++gi) {
+      const float* s = scores.data() + static_cast<size_t>(gi) * len + static_cast<size_t>(t - t0);
+      const float m = mx_out[gi];
+      for (int64_t j = 0; j < n; ++j) w[static_cast<size_t>(j)] = exp_nonpos(s[j] - m);  // vectorizes
+      for (int64_t j = 0; j < n; ++j) sum_out[gi] += w[static_cast<size_t>(j)];
+      float* a = acc + static_cast<int64_t>(gi) * hdv;
+      if (f32 || convert) {
+        k_.attn_accum_f32(convert ? kv_f32.data() : static_cast<const float*>(kv.v) + off, n, hdv, w.data(), a);
+      } else {
+        k_.attn_accum_f16(static_cast<const uint16_t*>(kv.v) + off, n, hdv, w.data(), a);
+      }
+    }
+    t += n;
   }
 }
 

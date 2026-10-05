@@ -63,6 +63,14 @@ struct CpuKernels {
   std::array<VecDotFn, static_cast<size_t>(DType::kCount)> vec_dot{};
   std::array<DequantFn, static_cast<size_t>(DType::kCount)> dequant{};
 
+  // Block-wise attention over n contiguous KV positions of one head (P7,
+  // DD-056): scores[t] = scale * dot(q, k[t]); acc += sum_t w[t] * v[t].
+  // k/v rows are `dim` elements apart (fp16 or fp32 KV).
+  void (*attn_scores_f16)(const uint16_t* k, int64_t n, int32_t dim, const float* q, float scale, float* scores) = nullptr;
+  void (*attn_accum_f16)(const uint16_t* v, int64_t n, int32_t dim, const float* w, float* acc) = nullptr;
+  void (*attn_scores_f32)(const float* k, int64_t n, int32_t dim, const float* q, float scale, float* scores) = nullptr;
+  void (*attn_accum_f32)(const float* v, int64_t n, int32_t dim, const float* w, float* acc) = nullptr;
+
   // int8 activation path: entries are null for types without an integer kernel
   // (the backend then uses vec_dot / dequant).
   QuantizeActFn quantize_act = nullptr;

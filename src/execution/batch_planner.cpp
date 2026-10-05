@@ -63,6 +63,20 @@ ExecutionPlan BatchPlanner::plan(std::span<const SeqBatch> seqs) const {
   p.kernels.attention_full = choose(p.max_context);
   p.kernels.attention_window =
       has_window_layers_ ? choose(std::min<int64_t>(p.max_context, sliding_window_)) : p.kernels.attention_full;
+
+  // Dynamic split-K partition (DD-056): keep chunks at least the base size,
+  // but round the number of chunks up so (row, KV head) units x chunks fills
+  // whole waves of the thread pool. With a fixed 256-token chunk, one 4K
+  // decode row was 2 x 16 = 32 tasks on 10 threads: a fourth wave of 2.
+  if (p.kernels.attention_full == AttentionStrategy::kSplitK && pairs > 0) {
+    const int64_t base = base_.attention_chunk;
+    const int64_t chunks = (p.max_context + base - 1) / base;
+    const int64_t waves = (pairs * chunks + hw_.threads - 1) / hw_.threads;
+    const int64_t balanced = (waves * hw_.threads + pairs - 1) / pairs;  // chunks per unit
+    // Chunk length for that many chunks, rounded to whole 16-token runs.
+    const int64_t len = ((p.max_context + balanced - 1) / balanced + 15) / 16 * 16;
+    p.kernels.attention_chunk = static_cast<int32_t>(std::max<int64_t>(16, len));
+  }
   return p;
 }
 

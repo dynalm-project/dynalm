@@ -464,6 +464,42 @@ void dequant_q6_K(const void* w, float* out, int64_t n) {
   }
 }
 
+// --- block-wise attention (P7, DD-056) -------------------------------------------
+// Same per-position arithmetic as dot_f16_f32 / axpy_f16 (results identical),
+// without a call and a re-dispatch per position; the value accumulator stays in
+// registers across the block.
+void attn_scores_f16(const uint16_t* k, int64_t n, int32_t dim, const float* q, float scale, float* scores) {
+  for (int64_t t = 0; t < n; ++t) scores[t] = dot_f16_f32(k + t * dim, q, dim) * scale;
+}
+
+void attn_accum_f16(const uint16_t* v, int64_t n, int32_t dim, const float* w, float* acc) {
+  int32_t i = 0;
+  for (; i + 8 <= dim; i += 8) {
+    __m256 a = _mm256_loadu_ps(acc + i);
+    for (int64_t t = 0; t < n; ++t) a = _mm256_fmadd_ps(_mm256_set1_ps(w[t]), load_f16x8(v + t * dim + i), a);
+    _mm256_storeu_ps(acc + i, a);
+  }
+  for (; i < dim; ++i) {
+    for (int64_t t = 0; t < n; ++t) acc[i] += w[t] * fp16_to_fp32(v[t * dim + i]);
+  }
+}
+
+void attn_scores_f32(const float* k, int64_t n, int32_t dim, const float* q, float scale, float* scores) {
+  for (int64_t t = 0; t < n; ++t) scores[t] = dot_f32(q, k + t * dim, dim) * scale;
+}
+
+void attn_accum_f32(const float* v, int64_t n, int32_t dim, const float* w, float* acc) {
+  int32_t i = 0;
+  for (; i + 8 <= dim; i += 8) {
+    __m256 a = _mm256_loadu_ps(acc + i);
+    for (int64_t t = 0; t < n; ++t) a = _mm256_fmadd_ps(_mm256_set1_ps(w[t]), _mm256_loadu_ps(v + t * dim + i), a);
+    _mm256_storeu_ps(acc + i, a);
+  }
+  for (; i < dim; ++i) {
+    for (int64_t t = 0; t < n; ++t) acc[i] += w[t] * v[t * dim + i];
+  }
+}
+
 // --- int8 activation path (DD-053) ----------------------------------------------
 // Weights stay packed; each block is unpacked once to int8 codes and multiplied
 // against up to four int8 activation rows held in registers. maddubs does 32
@@ -659,6 +695,10 @@ bool register_avx2_kernels(CpuKernels& k) {
   k.dot_f16_f32 = dot_f16_f32;
   k.axpy_f16 = axpy_f16;
   k.gemm_panel = gemm_panel;
+  k.attn_scores_f16 = attn_scores_f16;
+  k.attn_accum_f16 = attn_accum_f16;
+  k.attn_scores_f32 = attn_scores_f32;
+  k.attn_accum_f32 = attn_accum_f32;
   k.vec_dot[static_cast<size_t>(DType::kF32)] = vec_dot_f32;
   k.vec_dot[static_cast<size_t>(DType::kF16)] = vec_dot_f16;
   k.vec_dot[static_cast<size_t>(DType::kBF16)] = vec_dot_bf16;

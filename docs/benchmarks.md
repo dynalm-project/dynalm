@@ -799,3 +799,17 @@ One decode row left 2 tasks for 10 threads. The sub-group split removed it.
 The p99 values are OS preemption and vary run to run. A Qwen2.5-0.5B decode step runs ~207
 regions, so dispatch is ~0.5 ms of ~23 ms. The measured `sleep_for(2 ms)` took ~15.5 ms: Windows'
 default 15.6 ms timer resolution, which matters for any code that sleeps.
+
+## P7 — KV traversal (`bench_decode_context`, Qwen2.5-0.5B Q4_K_M, f16 KV, 10 threads)
+
+Attention ms per decode step (the other ops are flat at ~22 ms and at bandwidth):
+
+| context | before | block runs | + shared conversion + vector exp | + dynamic chunks |
+|---|---|---|---|---|
+| 64 | 0.4 | 0.3 | 0.3 | 0.3 |
+| 1,024 | 3.4 | 3.1 | 2.6–2.8 | 2.1–2.4 |
+| 2,048 | 4.4 | 4.8 | 4.0–4.3 | 3.7–4.2 |
+| 4,096 | 9.7 | 7.1 | 6.6–6.7 | 6.8–6.9 |
+
+Whole decode step at 4K: 32.8 → ~29.5 ms. Block size 64 instead of 16: 4K step 33.9 → 32.0 ms (~5%),
+other contexts unchanged.

@@ -53,7 +53,8 @@ reports Before / After / Delta from measurement (method: [docs/performance.md](d
   4K-context decode −21% (DD-054). Dynamic split-K chunking moves to P7
 - [x] P6 — Decode synchronization: measured fork/join at 2.5 µs (~2% of a step); wake-up lock and notify
   only when workers sleep (−16% region cost); region fusion not justified (DD-055)
-- [ ] P7 — KV: layout, traversal, block-size study, optional Q8 KV (with accuracy measurement)
+- [x] P7 — KV: block-run attention kernels, per-group fp16 conversion, vector exp, dynamic split-K;
+  4K-context attention 9.7 → 6.6 ms; block-size study (keep 16); Q8 KV deferred, not bandwidth-bound (DD-056)
 - [ ] P8 — Prefill GEMM: tiled, cache-blocked
 - [ ] P9 — INT8 activations / AVX-VNNI
 - [ ] P10 — CPU topology: affinity, P/E-core placement, NUMA (power-throttling opt-out already done: DD-052)

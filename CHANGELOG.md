@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Performance program P7 (DD-056)
+- **Block-run attention kernels** (`attn_scores_*`, `attn_accum_*` for generic, AVX2 and NEON). Each
+  fp16 run is converted once per query group, and softmax uses the vectorized `exp_nonpos` (now
+  `common/fast_exp.h`). Qwen2.5-0.5B attention at 4K context: 9.7 → 6.6 ms per decode step.
+- **The planner sizes split-K chunks** to fill whole thread waves: 1K-context attention −15%.
+- `bench_decode_context` prints per-op time per decode step.
+- Block size kept at 16; Q8 KV deferred (attention moves ~7.6 GB/s, so it is not bandwidth-bound).
+
 ### Performance program P6 (DD-055)
 - **`bench_thread_pool`** measures fork/join: 2.5 µs p50 at 10 threads, ~2% of a 0.5B decode step.
 - **The thread pool locks and notifies only when a worker sleeps:** a seq_cst handshake; region

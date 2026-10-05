@@ -376,6 +376,20 @@ void dequant_q6_K(const void* w, float* out, int64_t n) {
   }
 }
 
+// Block-wise attention (DD-056): per position exactly this tier's dot / axpy.
+void attn_scores_f16(const uint16_t* k, int64_t n, int32_t dim, const float* q, float scale, float* scores) {
+  for (int64_t t = 0; t < n; ++t) scores[t] = dot_f16_f32(k + t * dim, q, dim) * scale;
+}
+void attn_accum_f16(const uint16_t* v, int64_t n, int32_t dim, const float* w, float* acc) {
+  for (int64_t t = 0; t < n; ++t) axpy_f16(w[t], v + t * dim, acc, dim);
+}
+void attn_scores_f32(const float* k, int64_t n, int32_t dim, const float* q, float scale, float* scores) {
+  for (int64_t t = 0; t < n; ++t) scores[t] = dot_f32(q, k + t * dim, dim) * scale;
+}
+void attn_accum_f32(const float* v, int64_t n, int32_t dim, const float* w, float* acc) {
+  for (int64_t t = 0; t < n; ++t) axpy_f32(w[t], v + t * dim, acc, dim);
+}
+
 }  // namespace
 
 bool register_neon_kernels(CpuKernels& k) {
@@ -385,6 +399,10 @@ bool register_neon_kernels(CpuKernels& k) {
   k.dot_f16_f32 = dot_f16_f32;
   k.axpy_f16 = axpy_f16;
   k.gemm_panel = gemm_panel;
+  k.attn_scores_f16 = attn_scores_f16;
+  k.attn_accum_f16 = attn_accum_f16;
+  k.attn_scores_f32 = attn_scores_f32;
+  k.attn_accum_f32 = attn_accum_f32;
   auto set = [&](DType t, VecDotFn dot, DequantFn dq) {
     k.vec_dot[static_cast<size_t>(t)] = dot;
     if (dq) k.dequant[static_cast<size_t>(t)] = dq;

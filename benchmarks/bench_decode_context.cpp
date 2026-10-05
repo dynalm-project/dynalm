@@ -53,7 +53,9 @@ int main(int argc, char** argv) {
       }
     }
     std::vector<double> ms;
+    (*t)->set_profiling(true);
     for (int step = 0; step < 24; ++step) {
+      if (step == 4) (*t)->reset_profile();
       const TokenId tok = 100;
       const int32_t p = ctx + step;
       const Stopwatch sw;
@@ -61,7 +63,15 @@ int main(int argc, char** argv) {
       if (step >= 4) ms.push_back(sw.elapsed_ms());  // skip warm-up steps
     }
     const auto s = bench::summarize(ms);
-    std::printf("%8d %10.2f %10.2f %10.2f %10.1f\n", ctx, s.p50, s.p90, s.p99, 1000.0 / s.p50);
+    (*t)->set_profiling(false);
+    const ForwardProfile& prof = (*t)->profile();
+    std::printf("%8d %10.2f %10.2f %10.2f %10.1f   per step:", ctx, s.p50, s.p90, s.p99, 1000.0 / s.p50);
+    const double steps = static_cast<double>(prof.calls > 0 ? prof.calls : 1);
+    for (size_t op = 0; op < prof.ns.size(); ++op) {
+      const double op_ms = static_cast<double>(prof.ns[op]) * 1e-6 / steps;
+      if (op_ms >= 0.3) std::printf(" %s %.1f", std::string(forward_op_name(static_cast<ForwardOp>(op))).c_str(), op_ms);
+    }
+    std::printf("\n");
   }
   return 0;
 }

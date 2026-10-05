@@ -1480,3 +1480,43 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   - Lock-free work stealing: no measured contention to remove.
 - **Tradeoffs:** none measurable. The handshake relies on seq_cst ordering, which is documented
   next to the code.
+
+## DD-056: KV traversal by block runs; per-group fp16 conversion; vector exp; dynamic split-K; Q8 KV deferred
+
+- **Decision (P7):**
+  - **Block-run traversal:** attention walks the KV in runs of contiguous positions (one block of
+    one head). Per run:
+    - one kernel call computes all scores (`attn_scores_f16/f32`);
+    - one call accumulates all weighted values (`attn_accum_f16/f32`, accumulator held in
+      registers);
+    - this replaces a function call, an offset computation and a conversion per position and head.
+  - **Shared conversion:** when several query heads share the KV head, each fp16 run is converted
+    to fp32 once and all heads read the copy.
+  - **Vector exp:** softmax weights use `exp_nonpos`, moved to `common/fast_exp.h`. It is the
+    sampler's libm-free exp (~1e-7 relative error) and vectorizes.
+  - **Dynamic split-K:** the planner sizes the chunks so (row, KV head) units × chunks fill whole
+    waves of the pool, never below 256-token chunks (spec §8).
+  - **Block size:** stays at 16 tokens.
+  - **Q8 KV:** deferred.
+- **Reason:** `bench_decode_context` with per-op timing showed attention growing to 9.7 ms per
+  decode step at 4K context (Qwen2.5-0.5B), about 5 GB/s effective against a 20 GB/s ceiling.
+  Every other op stayed flat and at bandwidth.
+- **Evidence (decode step at 4K context, two runs each):**
+
+  | step | attention, ms/step | whole step, ms |
+  |---|---|---|
+  | before P7 | 9.7 | 32.8 |
+  | block runs | 7.1 | — |
+  | + shared conversion + vector exp | 6.6 | 29.2–29.5 |
+  | + dynamic chunks | 6.8–6.9 (4K), 2.1–2.4 at 1K (was 2.6–2.8) | 29.6–30.0 |
+
+  - Block size 16 vs 64: 33.9 vs 32.0 ms at 4K (~5%, near noise), identical elsewhere. 16-token
+    blocks keep prefix-cache reuse finer, so 16 stays.
+  - Q8 KV would halve KV bytes, but attention now moves ~7.6 GB/s: it is not bandwidth-bound, so a
+    lossy format (with its accuracy risk) is not justified yet.
+  - 393/393 tests pass, including golden references and the naive-softmax GQA tests.
+- **Tradeoffs:**
+  - The shared conversion and `exp_nonpos` change attention numerics by float rounding against
+    the per-head fp16 path. Results still depend only on a row's own data, so batch invariance
+    (DD-031) holds.
+  - fp32 conversion scratch is 16 × head_dim floats per thread.
