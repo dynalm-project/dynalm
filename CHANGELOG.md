@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Performance program P14 (DD-063)
+- **`-DDYNALM_LTO=ON`** build option for link-time optimization (off by default: no measured gain on
+  this CPU). A sweep of the kernel-plan settings found the defaults best; no tuning cache added.
+
 ### Performance program P13 (DD-062)
 - **Adaptive speculative decoding** (default for `dynalm run --spec`): k is chosen per round from
   {0, 3, K} by measured output tok/s, so speculation switches off when it is slower and back on

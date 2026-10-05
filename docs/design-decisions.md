@@ -1727,3 +1727,45 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   - Exploration has a floor cost: about 10 measured warm-up rounds plus 3-round probes.
   - The rate is wall-clock, so other load on the machine shifts the choice. That is intended:
     the goal is delivered tok/s.
+
+## DD-063: LTO available but off; PGO deferred; no autotuning cache
+
+- **Decision (P14):**
+  - **LTO:** `-DDYNALM_LTO=ON` turns on interprocedural optimization through CMake's
+    `CheckIPOSupported` (MSVC `/GL` + `/LTCG`, GCC/Clang `-flto`). It is **off by default**.
+  - **PGO:** not adopted, because it is not measured (see Evidence).
+  - **Autotuning cache:** none. The existing environment overrides (`DYNALM_GEMM_KC`,
+    `DYNALM_MATMUL_EXPAND_MIN`, `DYNALM_INT8_DECODE_ROWS`) remain the way to tune a new machine.
+- **Reason:** the spec adopts an optimization only when measurement shows a gain. Neither LTO nor
+  any tuned setting beat the default build and the default plan here beyond noise.
+- **Evidence:**
+  - **LTO** (MSVC, Qwen2.5-0.5B Q4_K_M, prompt 128 / output 64, three alternating runs,
+    `results/p14-{release,lto}.jsonl`):
+    - output tok/s at c=1: 32.6–35.4 default vs 30.7–33.2 LTO;
+    - at c=8: 71.4–81.0 vs 71.5–73.7.
+
+    Why no gain: the hot loops are SIMD kernels in their own translation units, reached through
+    the ISA dispatch table (function pointers), so cross-module inlining cannot reach them.
+    Decode is bandwidth-bound (DD-050).
+  - **Tuning sweep** (Qwen2.5-0.5B Q4_K_M, prompt 512 / output 64, two runs,
+    `results/p14-tune.jsonl`), output tok/s at c=1 / c=8:
+
+    | setting | c=1 | c=8 |
+    |---|---|---|
+    | defaults (KC 1024, expand from 2 rows, int8 ≤ 4 rows) | 17.2–17.5 | 27.1–28.3 |
+    | `DYNALM_GEMM_KC=512` | 16.0–16.7 | 23.2–25.7 |
+    | `DYNALM_GEMM_KC=2048` | 17.1–17.9 | 27.0–27.2 |
+    | `DYNALM_GEMM_KC=0` (no K-blocking) | 17.9–18.0 | 26.9–27.2 |
+    | `DYNALM_MATMUL_EXPAND_MIN=4` | 17.5–18.1 | 27.9–28.0 |
+    | `DYNALM_INT8_DECODE_ROWS=8` | 16.8–17.7 | 27.5–27.6 |
+
+    Only KC=512 is clearly worse. A cache would store the defaults on this machine, and its value
+    on other CPUs cannot be checked here.
+  - **PGO:** a GCC `-fprofile-generate` / `-fprofile-use` trial in the Linux container crashed the
+    Docker VM during the training run (about 2 GB of host memory available). It was not repeated
+    on this machine. It is deferred to a machine with more memory or CI; the expected gain is
+    small for the same reason as LTO.
+- **Alternatives:** a `dynalm tune` command that sweeps these settings and stores the best per
+  CPU model. Worth building once a second machine shows different optima.
+- **Tradeoffs:** LTO roughly doubles link time and memory, for no measured benefit, which is why
+  it is off by default.

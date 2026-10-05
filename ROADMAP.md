@@ -67,7 +67,8 @@ reports Before / After / Delta from measurement (method: [docs/performance.md](d
   trade TTFT vs ITL (c=64 TTFT 21 s → 3.8 s with throughput); adaptive boost measured and rejected (DD-061)
 - [x] P13 — Adaptive speculation: k chosen from {0, 3, K} by measured tok/s with backed-off probes; ngram
   recovers plain speed (fixed loses up to 28%), good drafts keep +18–24% (DD-062)
-- [ ] P14 — LTO / PGO / autotuning cache
+- [x] P14 — LTO option (`-DDYNALM_LTO=ON`, off: no measured gain); tuning sweep found defaults best,
+  no cache; PGO deferred (trial ran out of memory here) (DD-063)
 - [ ] P15 — AVX-512 / AMX (needs hardware or an emulator to verify)
 - [ ] P16 — CUDA (after the CPU planner is stable; needs an NVIDIA GPU to verify)
 

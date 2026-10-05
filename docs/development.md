@@ -204,3 +204,6 @@ PYTHONUTF8=1 python tools/bench_report.py results/baselines.jsonl
 
 Tuning knobs for experiments (not for production): `DYNALM_GEMM_KC` (GEMM K-slice) and
 `DYNALM_MATMUL_EXPAND_MIN` (rows from which matmul expands weights, DD-036).
+`DYNALM_INT8_DECODE_ROWS` sets the largest row count that uses int8 activations (DD-053).
+A sweep on the development laptop found the defaults best (DD-063).
+Configure with `-DDYNALM_LTO=ON` for link-time optimization. It is off by default because it showed no measured gain.
