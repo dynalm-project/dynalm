@@ -292,7 +292,15 @@ void Transformer::moe_mlp(const Layer& L, const TensorView& xn, const TensorView
   mark(ForwardOp::kMoeScatter);
   backend_.matmul_many(up_jobs_);
   backend_.act_mul(c.activation, cols_of(ap, 0, fe), cols_of(ap, fe, fe), cols_of(bp, 0, fe));
+  // Same int8 exclusion as the dense down projection (outlier channels, DD-053).
+  const bool down_switch = !kernels_.int8_ffn_down && kernels_.int8_decode_max_rows > 0;
+  if (down_switch) {
+    KernelPlan down = kernels_;
+    down.int8_decode_max_rows = 0;
+    backend_.set_kernel_plan(down);
+  }
   backend_.matmul_many(down_jobs_);
+  if (down_switch) backend_.set_kernel_plan(kernels_);
   mark(ForwardOp::kMoeExperts);
   backend_.scatter_add_rows(yp, gather_idx_, scatter_w_, out);
   mark(ForwardOp::kMoeScatter);

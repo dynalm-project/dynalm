@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Performance program P11 (DD-060)
+- **Grouped MoE execution:** `matmul_many` runs every expert in one parallel region, each with its
+  own path (int8 rows, fused, or GEMM panel), including strided rows. Granite-MoE: 1,857 → 313
+  regions per step; +7% tok/s at c=4, +5% at c=16. Accuracy within the contract (perplexity +0.27%).
+- `matmul` takes the int8 path for strided rows too (same numerics alone or grouped).
+
 ### Performance program P10 (DD-059)
 - **`CpuInfo::core_first_cpu`:** the first logical CPU of each physical core, P-cores first
   (Windows, Linux).

@@ -1591,3 +1591,44 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   the trade-off may differ. That could not be measured on this machine.
 - **NUMA:** not applicable to this single-socket machine. Per-node memory placement is left for
   multi-socket hardware.
+
+## DD-060: Grouped MoE expert execution: one region per projection, per-expert path
+
+- **Decision (P11):** `CpuBackend::matmul_many` runs all jobs (one per active expert) in a single
+  parallel region, for any job sizes.
+  - **Chunks:** every job's output rows are cut into 16-row chunks. Each chunk takes its job's
+    path:
+    - int8 rows kernel for ≤ `int8_decode_max_rows` rows (activations quantized once, before the
+      region);
+    - fused dequantize-dot for a single row;
+    - dequantized 4-row panels through the GEMM tile otherwise.
+  - **Strided rows:** rows may be strided (MoE slices). The int8 path quantizes row by row and the
+    panel path passes the row stride. `matmul` now also accepts strided rows on its int8 path, so a
+    job gets the same numerics whether it runs alone or grouped.
+  - **Down projection:** MoE expert down projections get the same int8 exclusion as the dense FFN
+    (DD-053).
+- **Reason:**
+  - **Before:** the old fused region applied only when every expert had ≤ 3 rows. Otherwise each
+    expert's gate, up and down ran as separate `matmul` calls, which meant 1,292–1,857 parallel
+    regions per decode step for Granite-3.1-1B-A400M (32 experts, 8 active).
+  - **Why that hurt:** each expert matrix is small (512 × 1024) with ~4 rows, so fork/join cost
+    and idle threads dominated.
+- **Evidence:** Granite-3.1-1B-A400M Q4_K_M, prompt 128 / output 64,
+  `results/p11-{before,after}.jsonl`.
+
+  | | c=1 | c=4 | c=16 |
+  |---|---|---|---|
+  | regions per step | 323 → 223 | 1,292 → 313 | 1,857 → 313 |
+  | decode step, ms | 18.5 → 18.3 | 42.5 → 39.0 | 108.9 → 99.6 |
+  | output tok/s | 36.7 → 37.2 | 56.8 → 60.7 (+7%) | 66.1 → 69.6 (+5%) |
+  | TTFT p50, ms | 547 → 519 | 1,077 → 1,051 | 1,811 → 1,614 |
+
+  - Accuracy (`bench_int8_accuracy`; int8 now reaches expert gate/up): perplexity +0.27% (was
+    +0.76%), mean KL 0.0014, top-1 99.5%, greedy identical for 65 of 65 tokens.
+  - Tests: 394/394, including `GroupedMatmul.EveryPathMatchesIndividualMatmuls` (jobs of 1/3/5/9
+    rows, strided input and output, int8 on and off).
+- **Tradeoffs:**
+  - One region means all experts share one dynamic chunk queue. Very uneven expert loads balance
+    automatically, at 16-row granularity.
+  - MoE prefill with large expert batches now uses whole-k panels without K-blocking. These are
+    fine at expert widths (≤ a few thousand); dense layers keep the K-blocked path.

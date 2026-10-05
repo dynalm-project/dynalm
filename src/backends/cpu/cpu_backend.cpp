@@ -97,33 +97,104 @@ void CpuBackend::scatter_add_rows(const TensorView& src, std::span<const int32_t
 }
 
 void CpuBackend::matmul_many(std::span<const MatmulJob> jobs) {
-  // Jobs with several rows (MoE prefill) get the full GEMM path one by one.
-  // Few-row jobs (decode) are small: one parallel region over all jobs'
-  // output rows, fused dequantize-dot, instead of one dispatch per job.
-  constexpr int64_t kMaxFusedRows = 3, kChunk = 16;
-  bool fused = true;
-  for (const MatmulJob& j : jobs) fused = fused && rows(j.x) <= kMaxFusedRows;
-  if (!fused || jobs.size() <= 1) {
-    for (const MatmulJob& j : jobs) matmul(j.x, j.w, nullptr, j.y);
+  // Grouped execution (P11, DD-060): every job's output rows are cut into
+  // chunks of 16 and all chunks of all jobs run in ONE parallel region; each
+  // chunk uses its job's own path (int8 rows kernel for <= int8 max rows,
+  // fused dequantize-dot for single rows, dequantized 4-row panels through the
+  // GEMM tile otherwise). MoE layers issue one call per projection, so a step
+  // no longer pays a fork/join per expert per projection.
+  if (jobs.empty()) return;
+  if (jobs.size() == 1) {
+    matmul(jobs[0].x, jobs[0].w, nullptr, jobs[0].y);
     return;
   }
+  constexpr int64_t kChunk = 16;
+  enum class Path : uint8_t { kInt8, kFused, kPanel };
+  struct JobPlan {
+    Path path;
+    int64_t act_offset;  // into act_q8_ (int8 path)
+  };
+  thread_local std::vector<JobPlan> plans;
   thread_local std::vector<size_t> first_chunk;  // prefix sums of per-job chunk counts
+  plans.clear();
   first_chunk.assign(1, 0);
-  for (const MatmulJob& j : jobs) first_chunk.push_back(first_chunk.back() + static_cast<size_t>((rows(j.w) + kChunk - 1) / kChunk));
+  int64_t act_blocks = 0;
+  for (const MatmulJob& j : jobs) {
+    const int64_t m = rows(j.x), k = cols(j.x);
+    const DType wt = j.w.dtype();
+    // Rows may be strided (MoE slices of a wider buffer): quantization works
+    // row by row and the GEMM tile takes a row stride, so neither needs dense x.
+    JobPlan p{Path::kFused, 0};
+    if (m <= plan_.int8_decode_max_rows && int8_accelerated_ && k % kActQ8Block == 0 &&
+        k_.dot_q8_rows_for(wt) != nullptr) {
+      p = {Path::kInt8, act_blocks};
+      act_blocks += m * (k / kActQ8Block);
+    } else if (m >= plan_.expand_min_rows && wt != DType::kF32) {
+      p.path = Path::kPanel;
+    }
+    plans.push_back(p);
+    first_chunk.push_back(first_chunk.back() + static_cast<size_t>((rows(j.w) + kChunk - 1) / kChunk));
+  }
+  // Quantize the int8 jobs' activations once, before the region.
+  act_q8_.resize(static_cast<size_t>(act_blocks));
+  for (size_t ji = 0; ji < jobs.size(); ++ji) {
+    if (plans[ji].path != Path::kInt8) continue;
+    const int64_t m = rows(jobs[ji].x), k = cols(jobs[ji].x), nb = k / kActQ8Block;
+    for (int64_t r = 0; r < m; ++r) {
+      k_.quantize_act(row_ptr<const float>(jobs[ji].x, r), act_q8_.data() + plans[ji].act_offset + r * nb, k);
+    }
+  }
   const size_t total = first_chunk.back();
   const std::vector<size_t>& offsets = first_chunk;  // read by the workers below
+  const std::vector<JobPlan>& job_plans = plans;
+  const ActBlockQ8* act = act_q8_.data();
   pool_.parallel_for(total, grain_for(total, pool_.size(), 1), [&](size_t begin, size_t end) {
+    thread_local std::vector<float> panel;
     for (size_t c = begin; c < end; ++c) {
       const size_t ji = static_cast<size_t>(std::upper_bound(offsets.begin(), offsets.end(), c) - offsets.begin()) - 1;
       const MatmulJob& j = jobs[ji];
       const int64_t m = rows(j.x), k = cols(j.x), n = rows(j.w);
-      const VecDotFn vec_dot = k_.vec_dot_for(j.w.dtype());
-      const int64_t w_row_bytes = dtype_row_bytes(j.w.dtype(), k);
+      const DType wt = j.w.dtype();
+      const int64_t w_row_bytes = dtype_row_bytes(wt, k);
       const auto* wbase = static_cast<const std::byte*>(j.w.data());
       const int64_t n0 = static_cast<int64_t>(c - offsets[ji]) * kChunk, n1 = std::min(n, n0 + kChunk);
-      for (int64_t r = n0; r < n1; ++r) {
-        for (int64_t i = 0; i < m; ++i) {
-          row_ptr<float>(j.y, i)[r] = vec_dot(wbase + r * w_row_bytes, row_ptr<const float>(j.x, i), k);
+      switch (job_plans[ji].path) {
+        case Path::kInt8: {
+          const DotQ8RowsFn dot_rows = k_.dot_q8_rows_for(wt);
+          const int64_t nb = k / kActQ8Block;
+          const ActBlockQ8* xr[kDotRowsMax];
+          float out[kDotRowsMax];
+          for (int64_t r = n0; r < n1; ++r) {
+            for (int64_t r0 = 0; r0 < m; r0 += kDotRowsMax) {
+              const int mm = static_cast<int>(std::min<int64_t>(kDotRowsMax, m - r0));
+              for (int t = 0; t < mm; ++t) xr[t] = act + job_plans[ji].act_offset + (r0 + t) * nb;
+              dot_rows(wbase + r * w_row_bytes, xr, mm, k, out);
+              for (int t = 0; t < mm; ++t) row_ptr<float>(j.y, r0 + t)[r] = out[t];
+            }
+          }
+          break;
+        }
+        case Path::kFused: {
+          const VecDotFn vec_dot = k_.vec_dot_for(wt);
+          for (int64_t r = n0; r < n1; ++r) {
+            for (int64_t i = 0; i < m; ++i) {
+              row_ptr<float>(j.y, i)[r] = vec_dot(wbase + r * w_row_bytes, row_ptr<const float>(j.x, i), k);
+            }
+          }
+          break;
+        }
+        case Path::kPanel: {
+          const DequantFn dequant = k_.dequant_for(wt);
+          constexpr int64_t kPanel = 4;
+          panel.resize(static_cast<size_t>(kPanel * k));
+          const int64_t y_stride = j.y.stride(0) / static_cast<int64_t>(sizeof(float));
+          for (int64_t j0 = n0; j0 < n1; j0 += kPanel) {
+            const int nr = static_cast<int>(std::min<int64_t>(kPanel, n1 - j0));
+            for (int r = 0; r < nr; ++r) dequant(wbase + (j0 + r) * w_row_bytes, panel.data() + r * k, k);
+            k_.gemm_panel(panel.data(), nr, j.x.data_as<const float>(), j.x.stride(0) / static_cast<int64_t>(sizeof(float)),
+                          m, k, j.y.data_as<float>() + j0, y_stride, /*accumulate=*/false);
+          }
+          break;
         }
       }
     }
@@ -144,8 +215,9 @@ void CpuBackend::matmul(const TensorView& x, const TensorView& w, const TensorVi
   // Decode-shaped batches: int8 activations + integer dot against the packed
   // weights, each weight block unpacked once for up to 4 rows (DD-053). Only
   // where this tier accelerates it, and only as the planner allows.
-  if (m <= plan_.int8_decode_max_rows && int8_accelerated_ && k % kActQ8Block == 0 &&
-      x.stride(0) == k * static_cast<int64_t>(sizeof(float))) {
+  // Rows are quantized one by one, so strided x (MoE slices) is fine and gets
+  // the same path as in matmul_many.
+  if (m <= plan_.int8_decode_max_rows && int8_accelerated_ && k % kActQ8Block == 0) {
     if (const DotQ8RowsFn dot_rows = k_.dot_q8_rows_for(wt)) {
       const int64_t nb = k / kActQ8Block;
       act_q8_.resize(static_cast<size_t>(m * nb));

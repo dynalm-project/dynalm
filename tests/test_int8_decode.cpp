@@ -171,5 +171,53 @@ TEST(Int8Matmul, BackendPathMatchesFp32WithinQuantizationError) {
   }
 }
 
+// P11 (DD-060): grouped matmul_many runs jobs of different sizes (int8 rows,
+// fused single rows, 4-row panels) in one region, with strided inputs and
+// outputs like MoE slices. Each job must match its own matmul.
+TEST(GroupedMatmul, EveryPathMatchesIndividualMatmuls) {
+  ThreadPool pool(4);
+  CpuBackend be(pool, select_best_isa(cpu_info().features));
+  std::mt19937 rng(21);
+  std::normal_distribution<float> nd(0, 1);
+  const int64_t k = 256, n = 40, wide = 2 * k;  // x rows are slices of a wider buffer
+  auto wbytes = random_weights(DType::kQ4_K, n * k, rng);
+  auto w = Tensor::empty(DType::kQ4_K, {n, k});
+  std::memcpy(w->data(), wbytes.data(), wbytes.size());
+  for (int int8 : {0, 4}) {
+    KernelPlan kp = KernelPlan::defaults();
+    kp.int8_decode_max_rows = int8;
+    be.set_kernel_plan(kp);
+    std::vector<int64_t> rows = {1, 3, 5, 9};
+    std::vector<Tensor> xs, ys, refs;
+    std::vector<Backend::MatmulJob> jobs;
+    for (int64_t m : rows) {
+      auto xbuf = Tensor::empty(DType::kF32, {m, wide});
+      for (int64_t i = 0; i < m * wide; ++i) xbuf->data_as<float>()[i] = nd(rng);
+      auto ybuf = Tensor::zeros(DType::kF32, {m, 2 * n});
+      auto ref = Tensor::zeros(DType::kF32, {m, n});
+      xs.push_back(std::move(*xbuf));
+      ys.push_back(std::move(*ybuf));
+      refs.push_back(std::move(*ref));
+    }
+    for (size_t t = 0; t < rows.size(); ++t) {
+      const TensorView x = *xs[t].view().slice(1, 0, k);  // strided rows
+      const TensorView y = *ys[t].view().slice(1, n, n);  // strided output columns
+      jobs.push_back({x, *w, y});
+      be.matmul(x, *w, nullptr, refs[t]);
+    }
+    be.matmul_many(jobs);
+    for (size_t t = 0; t < rows.size(); ++t) {
+      for (int64_t i = 0; i < rows[t]; ++i) {
+        for (int64_t j = 0; j < n; ++j) {
+          const float got = ys[t].data_as<float>()[i * 2 * n + n + j];
+          const float want = refs[t].data_as<float>()[i * n + j];
+          ASSERT_NEAR(got, want, 1e-4f + 1e-4f * std::abs(want)) << "int8=" << int8 << " job rows " << rows[t];
+        }
+        EXPECT_EQ(ys[t].data_as<float>()[i * 2 * n], 0.0f);  // columns outside the view untouched
+      }
+    }
+  }
+}
+
 }  // namespace
 }  // namespace engine
