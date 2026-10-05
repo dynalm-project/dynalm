@@ -333,48 +333,64 @@ void CpuBackend::kv_store(const TensorView& k, const TensorView& v, std::span<co
 // acc = sum_t exp(s_t - mx) * v_t, with mx = max_t s_t and sum = sum_t exp(s_t - mx).
 // A full softmax is acc / sum; partials over disjoint ranges merge exactly
 // with log-sum-exp rescaling (split-K / flash-decoding).
-void CpuBackend::attend_range(const AttentionParams& p, size_t r, int32_t h, int64_t t0, int64_t t1, float* acc,
-                              float& mx_out, double& sum_out) {
+// GQA-grouped attention (DD-054): one pass over [t0, t1) of one KV head serves
+// all `G` query heads that share it. Each K/V vector is fetched from memory
+// once and reused from L1 for the group, instead of once per query head. Per
+// head, the arithmetic (the same dot/axpy primitives, positions in ascending
+// order) is exactly what a per-head pass computes, so results are identical.
+// Covers heads h0 .. h0 + count - 1 of the group (a sub-group when there are
+// fewer (row, KV head) units than threads). acc: count * head_dim_v floats
+// (head gi at acc + gi * hdv); mx/sum: count entries.
+void CpuBackend::attend_group(const AttentionParams& p, size_t r, int32_t kvh, int32_t group, int32_t h0,
+                              int32_t count, int64_t t0, int64_t t1, float* acc, float* mx_out, double* sum_out) {
   const KvGeometry& g = *p.kv.front().geom;
-  const int32_t kvh = h / (p.num_heads / g.num_kv_heads);
   const int32_t hd = g.head_dim, hdv = g.head_dim_v;
   const KvLayerView& kv = p.kv[static_cast<size_t>(p.row_seq[r])];
-  const float* q = row_ptr<const float>(p.q, static_cast<int64_t>(r)) + static_cast<int64_t>(h) * hd;
+  const float* q0 = row_ptr<const float>(p.q, static_cast<int64_t>(r)) + (static_cast<int64_t>(kvh) * group + h0) * hd;
+  group = count;  // from here on, the heads this call covers
   const bool f32 = g.dtype == DType::kF32;
-  thread_local std::vector<float> scores;
-  scores.resize(static_cast<size_t>(t1 - t0));
+  const auto len = static_cast<size_t>(t1 - t0);
+  thread_local std::vector<float> scores;  // [group][len]
+  scores.resize(static_cast<size_t>(group) * len);
 
-  float mx = -INFINITY;
+  for (int32_t gi = 0; gi < group; ++gi) mx_out[gi] = -INFINITY;
   for (int64_t t = t0; t < t1; ++t) {
     const int64_t off = kv.k_offset(t, kvh);
-    float s = (f32 ? k_.dot_f32(q, static_cast<const float*>(kv.k) + off, hd)
-                   : k_.dot_f16_f32(static_cast<const uint16_t*>(kv.k) + off, q, hd)) *
-              p.scale;
-    if (p.softcap > 0) s = p.softcap * std::tanh(s / p.softcap);
-    scores[static_cast<size_t>(t - t0)] = s;
-    mx = std::max(mx, s);
-  }
-  double sum = 0;
-  std::fill(acc, acc + hdv, 0.0f);
-  for (int64_t t = t0; t < t1; ++t) {
-    const float e = std::exp(scores[static_cast<size_t>(t - t0)] - mx);
-    sum += e;
-    const int64_t off = kv.v_offset(t, kvh);
-    if (f32) {
-      k_.axpy_f32(e, static_cast<const float*>(kv.v) + off, acc, hdv);
-    } else {
-      k_.axpy_f16(e, static_cast<const uint16_t*>(kv.v) + off, acc, hdv);
+    for (int32_t gi = 0; gi < group; ++gi) {
+      const float* q = q0 + static_cast<int64_t>(gi) * hd;
+      float s = (f32 ? k_.dot_f32(q, static_cast<const float*>(kv.k) + off, hd)
+                     : k_.dot_f16_f32(static_cast<const uint16_t*>(kv.k) + off, q, hd)) *
+                p.scale;
+      if (p.softcap > 0) s = p.softcap * std::tanh(s / p.softcap);
+      scores[static_cast<size_t>(gi) * len + static_cast<size_t>(t - t0)] = s;
+      mx_out[gi] = std::max(mx_out[gi], s);
     }
   }
-  mx_out = mx;
-  sum_out = sum;
+  for (int32_t gi = 0; gi < group; ++gi) sum_out[gi] = 0;
+  std::fill(acc, acc + static_cast<size_t>(group) * hdv, 0.0f);
+  for (int64_t t = t0; t < t1; ++t) {
+    const int64_t off = kv.v_offset(t, kvh);
+    for (int32_t gi = 0; gi < group; ++gi) {
+      const float e = std::exp(scores[static_cast<size_t>(gi) * len + static_cast<size_t>(t - t0)] - mx_out[gi]);
+      sum_out[gi] += e;
+      float* a = acc + static_cast<int64_t>(gi) * hdv;
+      if (f32) {
+        k_.axpy_f32(e, static_cast<const float*>(kv.v) + off, a, hdv);
+      } else {
+        k_.axpy_f16(e, static_cast<const uint16_t*>(kv.v) + off, a, hdv);
+      }
+    }
+  }
 }
 
 void CpuBackend::attention(const AttentionParams& p) {
   const KvGeometry& g = *p.kv.front().geom;  // all sequences share the pool geometry
   const int32_t hdv = g.head_dim_v;
+  const int32_t nkv = g.num_kv_heads;
+  const int32_t group = p.num_heads / nkv;
   const size_t m = p.positions.size();
-  const size_t pairs = m * static_cast<size_t>(p.num_heads);
+  // Work unit: one query row x one KV head (its whole query-head group).
+  const size_t units = m * static_cast<size_t>(nkv);
   auto range_of = [&](size_t r, int64_t& lo, int64_t& hi) {
     const int64_t pos = p.positions[r];
     lo = p.sliding_window > 0 ? std::max<int64_t>(0, pos - p.sliding_window + 1) : 0;
@@ -387,71 +403,103 @@ void CpuBackend::attention(const AttentionParams& p) {
     longest = std::max(longest, hi - lo);
   }
 
-  // Split-K when (row, head) pairs alone cannot occupy the pool (decode) and
-  // contexts are long enough to amortize the merge.
-  // Strategy from the planner (DD-051); without a plan, the same rule per call.
+  // Split-K when the units alone cannot occupy the pool (decode) and contexts
+  // are long enough to amortize the merge. Strategy from the planner
+  // (DD-051); without a plan, the same rule per call.
   const int64_t kChunk = plan_.attention_chunk;
   const AttentionStrategy strategy = p.sliding_window > 0 ? plan_.attention_window : plan_.attention_full;
   const bool split = strategy == AttentionStrategy::kSplitK ||
                      (strategy == AttentionStrategy::kAuto &&
-                      attention_should_split(static_cast<int64_t>(pairs), longest, pool_.size(), plan_.attention_chunk));
+                      attention_should_split(static_cast<int64_t>(units), longest, pool_.size(), plan_.attention_chunk));
   if (!split) {
-    pool_.parallel_for(pairs, 1, [&](size_t begin, size_t end) {
-      for (size_t job = begin; job < end; ++job) {
-        const size_t r = job / static_cast<size_t>(p.num_heads);
-        const auto h = static_cast<int32_t>(job % static_cast<size_t>(p.num_heads));
+    // Fewer units than threads (small batches): split each group's query heads
+    // into sub-groups so every thread has work; heads within a sub-group still
+    // share each K/V fetch.
+    const auto threads = static_cast<size_t>(pool_.size());
+    const int32_t subgroups =
+        units >= threads ? 1 : std::min(group, static_cast<int32_t>((threads + units - 1) / units));
+    const int32_t per = (group + subgroups - 1) / subgroups;
+    pool_.parallel_for(units * static_cast<size_t>(subgroups), 1, [&](size_t begin, size_t end) {
+      thread_local std::vector<float> mx;
+      thread_local std::vector<double> sum;
+      mx.resize(static_cast<size_t>(group));
+      sum.resize(static_cast<size_t>(group));
+      for (size_t task = begin; task < end; ++task) {
+        const size_t unit = task / static_cast<size_t>(subgroups);
+        const auto h0 = static_cast<int32_t>(task % static_cast<size_t>(subgroups)) * per;
+        const int32_t count = std::min(per, group - h0);
+        if (count <= 0) continue;
+        const size_t r = unit / static_cast<size_t>(nkv);
+        const auto kvh = static_cast<int32_t>(unit % static_cast<size_t>(nkv));
         int64_t lo, hi;
         range_of(r, lo, hi);
-        float* out = row_ptr<float>(p.out, static_cast<int64_t>(r)) + static_cast<int64_t>(h) * hdv;
-        float mx;
-        double sum;
-        attend_range(p, r, h, lo, hi, out, mx, sum);
-        const auto inv = static_cast<float>(1.0 / sum);
-        for (int32_t i = 0; i < hdv; ++i) out[i] *= inv;
+        // The group's heads are adjacent in the output row.
+        float* out = row_ptr<float>(p.out, static_cast<int64_t>(r)) + (static_cast<int64_t>(kvh) * group + h0) * hdv;
+        attend_group(p, r, kvh, group, h0, count, lo, hi, out, mx.data(), sum.data());
+        for (int32_t gi = 0; gi < count; ++gi) {
+          const auto inv = static_cast<float>(1.0 / sum[static_cast<size_t>(gi)]);
+          float* o = out + static_cast<int64_t>(gi) * hdv;
+          for (int32_t i = 0; i < hdv; ++i) o[i] *= inv;
+        }
       }
     });
     return;
   }
 
-  // Pass 1: every (pair, chunk) computes a partial into scratch.
+  // Pass 1: every (unit, chunk) computes the group's partials into scratch:
+  // per head, acc[hdv] followed by max and sum.
   const auto chunks = static_cast<size_t>((longest + kChunk - 1) / kChunk);
-  const size_t stride = static_cast<size_t>(hdv) + 2;  // acc[hdv], max, sum
-  split_scratch_.resize(pairs * chunks * stride);
+  const size_t stride = static_cast<size_t>(hdv) + 2;
+  const size_t job_stride = static_cast<size_t>(group) * stride;
+  split_scratch_.resize(units * chunks * job_stride);
   float* scratch = split_scratch_.data();
-  pool_.parallel_for(pairs * chunks, 1, [&](size_t begin, size_t end) {
+  pool_.parallel_for(units * chunks, 1, [&](size_t begin, size_t end) {
+    thread_local std::vector<float> acc, mx;
+    thread_local std::vector<double> sum;
+    acc.resize(static_cast<size_t>(group) * hdv);
+    mx.resize(static_cast<size_t>(group));
+    sum.resize(static_cast<size_t>(group));
     for (size_t job = begin; job < end; ++job) {
-      const size_t pair = job / chunks, c = job % chunks;
-      const size_t r = pair / static_cast<size_t>(p.num_heads);
-      const auto h = static_cast<int32_t>(pair % static_cast<size_t>(p.num_heads));
+      const size_t unit = job / chunks, c = job % chunks;
+      const size_t r = unit / static_cast<size_t>(nkv);
+      const auto kvh = static_cast<int32_t>(unit % static_cast<size_t>(nkv));
       int64_t lo, hi;
       range_of(r, lo, hi);
       const int64_t t0 = lo + static_cast<int64_t>(c) * kChunk, t1 = std::min(hi, t0 + kChunk);
-      float* part = scratch + job * stride;
+      float* parts = scratch + job * job_stride;
       if (t0 >= t1) {  // this row's context is shorter than the longest
-        part[hdv] = -INFINITY;
-        part[hdv + 1] = 0.0f;
+        for (int32_t gi = 0; gi < group; ++gi) {
+          parts[gi * stride + static_cast<size_t>(hdv)] = -INFINITY;
+          parts[gi * stride + static_cast<size_t>(hdv) + 1] = 0.0f;
+        }
         continue;
       }
-      float mx;
-      double sum;
-      attend_range(p, r, h, t0, t1, part, mx, sum);
-      part[hdv] = mx;
-      part[hdv + 1] = static_cast<float>(sum);
+      attend_group(p, r, kvh, group, 0, group, t0, t1, acc.data(), mx.data(), sum.data());
+      for (int32_t gi = 0; gi < group; ++gi) {
+        float* part = parts + gi * stride;
+        std::copy_n(acc.data() + static_cast<size_t>(gi) * hdv, hdv, part);
+        part[hdv] = mx[static_cast<size_t>(gi)];
+        part[hdv + 1] = static_cast<float>(sum[static_cast<size_t>(gi)]);
+      }
     }
   });
-  // Pass 2: merge partials per pair with log-sum-exp rescaling.
+  // Pass 2: merge each head's partials with log-sum-exp rescaling.
+  const size_t pairs = units * static_cast<size_t>(group);
   pool_.parallel_for(pairs, 1, [&](size_t begin, size_t end) {
     for (size_t pair = begin; pair < end; ++pair) {
-      const size_t r = pair / static_cast<size_t>(p.num_heads);
-      const auto h = static_cast<int32_t>(pair % static_cast<size_t>(p.num_heads));
-      float* out = row_ptr<float>(p.out, static_cast<int64_t>(r)) + static_cast<int64_t>(h) * hdv;
-      const float* parts = scratch + pair * chunks * stride;
+      const size_t unit = pair / static_cast<size_t>(group);
+      const auto gi = static_cast<int32_t>(pair % static_cast<size_t>(group));
+      const size_t r = unit / static_cast<size_t>(nkv);
+      const auto kvh = static_cast<int32_t>(unit % static_cast<size_t>(nkv));
+      float* out = row_ptr<float>(p.out, static_cast<int64_t>(r)) + (static_cast<int64_t>(kvh) * group + gi) * hdv;
       float gmax = -INFINITY;
-      for (size_t c = 0; c < chunks; ++c) gmax = std::max(gmax, parts[c * stride + static_cast<size_t>(hdv)]);
+      for (size_t c = 0; c < chunks; ++c) {
+        gmax = std::max(gmax, scratch[(unit * chunks + c) * job_stride + gi * stride + static_cast<size_t>(hdv)]);
+      }
       double total = 0;
       std::fill(out, out + hdv, 0.0f);
       for (size_t c = 0; c < chunks; ++c) {
-        const float* part = parts + c * stride;
+        const float* part = scratch + (unit * chunks + c) * job_stride + gi * stride;
         if (part[hdv] == -INFINITY) continue;
         const float w = std::exp(part[hdv] - gmax);
         total += static_cast<double>(w) * part[hdv + 1];

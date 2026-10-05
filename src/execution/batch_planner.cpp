@@ -29,7 +29,10 @@ std::string_view step_phase_name(StepPhase p) {
 }
 
 BatchPlanner::BatchPlanner(const ModelConfig& config, HardwareProfile hw, KernelPlan base)
-    : num_heads_(config.num_heads), sliding_window_(config.sliding_window), hw_(hw), base_(base) {
+    : num_kv_heads_(config.num_kv_heads > 0 ? config.num_kv_heads : config.num_heads),
+      sliding_window_(config.sliding_window),
+      hw_(hw),
+      base_(base) {
   has_window_layers_ = false;
   for (int l = 0; l < config.num_layers; ++l) has_window_layers_ = has_window_layers_ || config.layer_uses_sliding_window(l);
 }
@@ -49,10 +52,10 @@ ExecutionPlan BatchPlanner::plan(std::span<const SeqBatch> seqs) const {
   }
   p.phase = p.prefill_rows == 0 ? StepPhase::kDecode : p.decode_rows == 0 ? StepPhase::kPrefill : StepPhase::kMixed;
 
-  // Attention: every row runs every head, so the step has rows * heads
-  // independent (row, head) tasks. Split each one's context only when those
-  // tasks cannot occupy the threads (DD-032).
-  const int64_t pairs = static_cast<int64_t>(p.rows) * num_heads_;
+  // Attention runs one task per (row, KV head), covering that head's whole
+  // query group (DD-054). Split each task's context only when the tasks
+  // cannot occupy the threads (DD-032).
+  const int64_t pairs = static_cast<int64_t>(p.rows) * num_kv_heads_;
   auto choose = [&](int64_t longest) {
     return attention_should_split(pairs, longest, hw_.threads, base_.attention_chunk) ? AttentionStrategy::kSplitK
                                                                                       : AttentionStrategy::kPerPair;

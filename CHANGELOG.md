@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Performance program P4–P5 (DD-054)
+- **GQA-grouped attention:** each (row, KV head) task serves its whole query-head group, so K/V
+  is fetched once per group; heads split into sub-groups when tasks are fewer than threads.
+  Results are identical. Qwen2.5-0.5B 4K-context decode step 40.2 → 31.7 ms (−21%), TTFT −13%.
+- **P4 weight packing evaluated and deferred:** with the throttling fix and int8 decode, Q4_K_M is
+  the fastest format at c=8/16, so K-quant unpacking is no longer a bottleneck.
+
 ### Performance program P3: multi-row decode (DD-053)
 - **int8-activation decode kernels** (AVX2; scalar references) for Q8_0, Q4_0, Q5_0, Q4_K and Q6_K:
   integer dot products against packed weights, each block unpacked once for up to 4 rows.

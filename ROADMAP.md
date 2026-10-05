@@ -47,8 +47,10 @@ reports Before / After / Delta from measurement (method: [docs/performance.md](d
 - [x] P2 — Execution planner: BatchPlanner → ExecutionPlan / KernelPlan, per-step decisions in one place (DD-051)
 - [x] P3 — Multi-row decode: 4×3 fp32 GEMM tile; int8-activation integer-dot kernels for M ≤ 4 that
   unpack each weight block once per 4 rows (DD-053). Open: weight-row-tiled int8 for M > 4, NEON integer kernels
-- [ ] P4 — Weight packing: persistent CPU execution layouts, built at load
-- [ ] P5 — GQA decode attention: each KV head read once per query group; dynamic split-K
+- [~] P4 — Weight packing: evaluated and deferred. After DD-052/053, Q4_K_M is the fastest format at c=8/16
+  and every format costs the same per step, so unpacking is not the bottleneck (DD-054). Revisit with P9
+- [x] P5 — GQA decode attention: one K/V fetch per query group, head sub-groups for small batches;
+  4K-context decode −21% (DD-054). Dynamic split-K chunking moves to P7
 - [ ] P6 — Decode synchronization: fewer regions, barriers and hand-offs per step
 - [ ] P7 — KV: layout, traversal, block-size study, optional Q8 KV (with accuracy measurement)
 - [ ] P8 — Prefill GEMM: tiled, cache-blocked

@@ -1404,3 +1404,55 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   - Tests: 7 new (quantization bounds and tier identity; every format × M=1–4 against a
     dequantized reference; the backend path against fp32).
   - 392/392 pass under linux-release and ASAN/UBSAN.
+
+## DD-054: GQA-grouped attention with head sub-groups; P4 weight packing deferred on evidence
+
+- **Decision (P5):**
+  - **Unit of attention work:** one (query row, KV head) pair, covering every query head that
+    shares the KV head. Each K and V vector is fetched once and reused from L1 by the group,
+    instead of being fetched again for each query head.
+    - Per head, the arithmetic is exactly that of the former per-head pass: the same dot/axpy
+      primitives over positions in ascending order. Results are identical.
+  - **Small batches:** when there are fewer units than threads, each group's heads are divided
+    into sub-groups, so every thread has work while heads within a sub-group still share fetches.
+  - **Long contexts:** split-K as before, now over units. The planner's split rule counts
+    (row, KV head) units (DD-051).
+- **Reason:**
+  - Measured: decode at 4K context spent ~17 ms/step more than at 128 tokens. Yet the KV it needs
+    is ~50 MB (~2.5 ms at 20 GB/s).
+  - Qwen2.5-0.5B has 7 query heads per KV head, and each query head re-read the same KV.
+- **Alternatives:**
+  - Convert K/V blocks to fp32 once per group: fewer conversions, but changes the summation and
+    needs scratch.
+  - Grouping only (no sub-groups): measured a +16% decode-step regression at 128 tokens, because
+    one row gave 2 tasks for 10 threads.
+- **Tradeoffs:**
+  - Sub-groups re-read KV once per sub-group, which is cheap at the short contexts where they
+    apply.
+  - A dynamic split-K chunk (adapting chunk size to the context mix) is left for P7.
+- **Evidence:**
+  - Tests: all 393 pass, including golden references. `GqaAttention.OneRowMatchesNaiveInEveryLayout`
+    covers sub-grouped, split-K and auto layouts with F16/F32 KV against a naive softmax.
+  - Benchmarks: `results/p5-{before,after}-{c1,c8}.jsonl`.
+
+    | Qwen2.5-0.5B Q4_K_M | decode step before → after | other |
+    |---|---|---|
+    | c=1, 128 tokens | 22.7 → 23.4 ms | noise |
+    | c=1, 1,024 tokens | 25.1 → 25.3 ms | attention −12% |
+    | c=1, 4,096 tokens | 40.2 → 31.7 ms (−21%) | TTFT 32.6 → 28.3 s (−13%) |
+    | c=8, 1,024 tokens | 34.2 → 32.4 ms | +8% output tok/s |
+
+- **P4 (weight packing): evaluated, deferred.** P1 had shown batched Q4_K_M decode far slower than
+  Q8_0 (109.5 vs 60.0 ms at 7 rows), which suggested repacking K-quants at load. Re-measured after
+  DD-052 and DD-053:
+
+  | format | c=8 tok/s | c=16 tok/s |
+  |---|---|---|
+  | Q4_K_M | 89.7 | 94.2 |
+  | Q8_0 | 76.0 | 82.1 |
+  | F16 | 72.0 | 82.2 |
+
+  At c=16 all formats take ~83–85 ms per step, so the cost is the fp32 batched arithmetic, not
+  K-quant unpacking. The P1 gap was mostly the power-throttling artifact. A packed layout would
+  not address a measured bottleneck now, so it is deferred and re-evaluated with P9 (int8/VNNI for
+  larger batches), where a packed int8 layout may pay off.

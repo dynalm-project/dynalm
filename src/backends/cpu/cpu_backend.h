@@ -67,8 +67,10 @@ class CpuBackend final : public Backend {
   // reference implementations, slower than its fused fp32 path.
   bool int8_accelerated_ = false;  // split-K attention partials (scheduler thread only)
 
-  void attend_range(const AttentionParams& p, size_t r, int32_t h, int64_t t0, int64_t t1, float* acc, float& mx_out,
-                    double& sum_out);
+  // One query row, one KV head, query heads [kvh*group + h0, + count) of the
+  // group sharing it (DD-054).
+  void attend_group(const AttentionParams& p, size_t r, int32_t kvh, int32_t group, int32_t h0, int32_t count,
+                    int64_t t0, int64_t t1, float* acc, float* mx_out, double* sum_out);
   std::string name_;
 };
 

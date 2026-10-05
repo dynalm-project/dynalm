@@ -776,3 +776,15 @@ int8 is fastest up to M=4. From M=6 the fp32 GEMM wins, so the default threshold
 - **The 0.5B model at c=1:** most of its weights are Q5_0 and its LM head is Q8_0, whose fused M=1
   kernels were already near bandwidth (decode step 25.3 → 24.4 ms).
 - **The 1.5B model (Q4_K):** the single-stream step drops from 76.9 to 62.8 ms (12.8 → 15.7 GB/s).
+
+## P5 — GQA-grouped attention (DD-054), Qwen2.5-0.5B Q4_K_M, `results/p5-*.jsonl`
+
+| workload | decode step before → after | attention op total before → after | TTFT p50 before → after |
+|---|---|---|---|
+| c=1, prompt 128 | 22.7 → 23.4 ms | 70 → 76 ms | 371 → 367 ms |
+| c=1, prompt 1,024 | 25.1 → 25.3 ms | 2,133 → 1,881 ms | 3,808 → 3,673 ms |
+| c=1, prompt 4,096 | **40.2 → 31.7 ms** | 40,021 → 33,544 ms | 32,635 → 28,280 ms |
+| c=8, prompt 1,024 | 34.2 → 32.4 ms | 21,342 → 18,341 ms | 28,276 → 27,168 ms |
+
+The first version (grouping without sub-groups) measured 26.4 ms at 128 tokens, a +16% regression.
+One decode row left 2 tasks for 10 threads. The sub-group split removed it.

@@ -62,7 +62,7 @@ class BatchPlanner {
   const HardwareProfile& hardware() const { return hw_; }
 
  private:
-  int32_t num_heads_;
+  int32_t num_kv_heads_;
   int32_t sliding_window_;
   bool has_window_layers_;
   HardwareProfile hw_;

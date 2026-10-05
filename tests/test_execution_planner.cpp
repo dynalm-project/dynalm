@@ -12,6 +12,9 @@
 #include "execution/batch_planner.h"
 #include "loader/model_loader.h"
 #include "model/transformer.h"
+#include "dtype/fp16.h"
+#include "platform/cpu_info.h"
+#include "platform/isa.h"
 
 namespace engine {
 namespace {
@@ -177,6 +180,94 @@ TEST_P(PlannedForward, ExpandThresholdIsHonored) {
   double max_diff = 0;
   for (size_t i = 0; i < fused.size(); ++i) max_diff = std::max(max_diff, std::fabs(double{fused[i]} - expanded[i]));
   EXPECT_LT(max_diff, 1e-3);
+}
+
+// P5 (DD-054): GQA-grouped attention for one decode row (the case where
+// (row, KV head) units are fewer than threads, so heads are split into
+// sub-groups) against a naive per-head softmax, for every strategy.
+TEST(GqaAttention, OneRowMatchesNaiveInEveryLayout) {
+  for (DType kvt : {DType::kF32, DType::kF16}) {
+    ThreadPool tp(8);
+    CpuBackend be(tp, select_best_isa(cpu_info().features));
+    KvGeometry g;
+    g.num_layers = 1;
+    g.num_kv_heads = 2;
+    g.head_dim = 16;
+    g.head_dim_v = 16;
+    g.block_size = 16;
+    g.num_blocks = 80;  // 1280 tokens
+    g.dtype = kvt;
+    auto cache = KvBlockPool::create(g, be);
+    ASSERT_TRUE(cache.ok());
+    std::vector<int32_t> table(80);
+    for (int32_t i = 0; i < 80; ++i) table[static_cast<size_t>(i)] = (i * 13) % 80;
+    const KvLayerView kv = (*cache)->layer_view(0, table);
+    const int64_t T = 1100, H = 14;  // 7 query heads per KV head
+    std::mt19937 rng(4);
+    std::normal_distribution<float> nd(0, 1);
+    auto fill = [&](int64_t r, int64_t c) {
+      auto t = Tensor::empty(DType::kF32, {r, c});
+      for (int64_t i = 0; i < r * c; ++i) t->data_as<float>()[i] = nd(rng);
+      return std::move(*t);
+    };
+    Tensor k = fill(T, 32), v = fill(T, 32);
+    std::vector<int32_t> pos(T), row_seq(T, 0);
+    for (int64_t i = 0; i < T; ++i) pos[static_cast<size_t>(i)] = static_cast<int32_t>(i);
+    const KvLayerView views[] = {kv};
+    be.kv_store(k, v, pos, row_seq, views);
+    // KV as stored (fp16-rounded when kvt is F16), for the reference.
+    auto stored = [&](const Tensor& src, int64_t t, int64_t c) {
+      const float x = src.data_as<const float>()[t * 32 + c];
+      return kvt == DType::kF16 ? fp16_to_fp32(fp32_to_fp16(x)) : x;
+    };
+    Tensor q = fill(1, H * 16);
+    const int32_t qpos[] = {static_cast<int32_t>(T - 1)};
+    const int32_t qseq[] = {0};
+    // Naive reference.
+    std::vector<double> ref(static_cast<size_t>(H * 16));
+    for (int64_t h = 0; h < H; ++h) {
+      const int64_t kvh = h / 7;
+      std::vector<double> s(static_cast<size_t>(T));
+      double mx = -1e300;
+      for (int64_t t = 0; t < T; ++t) {
+        double d = 0;
+        for (int64_t c = 0; c < 16; ++c) d += double{q.data_as<float>()[h * 16 + c]} * stored(k, t, kvh * 16 + c);
+        s[static_cast<size_t>(t)] = d * 0.25;
+        mx = std::max(mx, s[static_cast<size_t>(t)]);
+      }
+      double z = 0;
+      for (int64_t t = 0; t < T; ++t) z += std::exp(s[static_cast<size_t>(t)] - mx);
+      for (int64_t c = 0; c < 16; ++c) {
+        double a = 0;
+        for (int64_t t = 0; t < T; ++t) a += std::exp(s[static_cast<size_t>(t)] - mx) / z * stored(v, t, kvh * 16 + c);
+        ref[static_cast<size_t>(h * 16 + c)] = a;
+      }
+    }
+    std::vector<std::vector<float>> results;
+    for (AttentionStrategy st : {AttentionStrategy::kPerPair, AttentionStrategy::kSplitK, AttentionStrategy::kAuto}) {
+      KernelPlan kp = KernelPlan::defaults();
+      kp.attention_full = st;
+      be.set_kernel_plan(kp);
+      auto out = Tensor::zeros(DType::kF32, {1, H * 16});
+      AttentionParams ap;
+      ap.q = q;
+      ap.out = *out;
+      ap.positions = qpos;
+      ap.row_seq = qseq;
+      ap.kv = views;
+      ap.num_heads = static_cast<int32_t>(H);
+      ap.scale = 0.25f;
+      be.attention(ap);
+      for (int64_t i = 0; i < H * 16; ++i) {
+        ASSERT_NEAR(out->data_as<float>()[i], ref[static_cast<size_t>(i)], 1e-4)
+            << dtype_name(kvt) << " strategy " << attention_strategy_name(st) << " i=" << i;
+      }
+      results.emplace_back(out->data_as<float>(), out->data_as<float>() + H * 16);
+    }
+    // kAuto picks split-K here (1 row, 1100 tokens); per-pair (sub-grouped)
+    // and split-K agree to float rounding, as above.
+    EXPECT_EQ(results[1], results[2]);
+  }
 }
 
 INSTANTIATE_TEST_SUITE_P(Arch, PlannedForward, ::testing::Values("llama", "gemma2", "qwen2"),
