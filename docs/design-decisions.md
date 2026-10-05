@@ -1549,3 +1549,20 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
     multiply-adds per instruction) can roughly double matmul throughput. That is P9.
 - **Alternatives:** larger register tiles, or packed fp32 weight panels kept at load. Both are
   bounded by the same FMA ceiling.
+
+## DD-058: P9 int8/VNNI GEMM prototype is slower than fp32; not adopted
+
+- **Decision:** no AVX-VNNI GEMM for prefill or for batched decode above 4 rows. The int8 decode
+  kernels for ≤ 4 rows (DD-053) stay.
+- **Evidence:** `tools/proto/vnni_gemm_proto.cpp`, single thread, Q8_0-shaped data, M=64,
+  N=1536, K=896. Three runs:
+  - fp32 path (dequantized 4-row panel + 4×3 FMA tile): 1.44–1.53 ms, 115–122 GFLOP/s.
+  - int8 `vpdpbusd` tile (3 weight × 4 activation rows, sign trick): 1.72–1.93 ms, 91–102 GFLOP/s.
+  - So int8 is 0.75–0.89× the fp32 speed, with a max difference of 4e-5 of a 147 range.
+- **Reason:** every 32-value block carries its own weight and activation scale. Each (weight row,
+  activation row) pair therefore needs a convert + scale + FMA per block on top of the `vpdpbusd`,
+  about as many instructions as the 4 fp32 FMAs it replaces. The fp32 path amortizes
+  dequantization over all M rows.
+- **Alternatives:** formats with one scale per row (per-channel int8 weights, a per-token
+  activation scale) would let int32 sums run across a whole row. That needs a requantized weight
+  copy (memory) and new accuracy validation. Recorded for the future, not done.

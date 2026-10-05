@@ -57,7 +57,8 @@ reports Before / After / Delta from measurement (method: [docs/performance.md](d
   4K-context attention 9.7 → 6.6 ms; block-size study (keep 16); Q8 KV deferred, not bandwidth-bound (DD-056)
 - [x] P8 — Prefill GEMM: measured at 300–360 GFLOP/s, ~70–80% of practical fp32 peak; M-blocking hypothesis
   refuted; no change. The lever is int8/VNNI (DD-057)
-- [ ] P9 — INT8 activations / AVX-VNNI
+- [x] P9 — INT8 activations / AVX-VNNI: int8 decode for ≤ 4 rows shipped in P3 (DD-053); a VNNI GEMM
+  prototype for larger M measured 0.75–0.89× fp32 (per-block scaling), so it was not adopted (DD-058)
 - [ ] P10 — CPU topology: affinity, P/E-core placement, NUMA (power-throttling opt-out already done: DD-052)
 - [ ] P11 — MoE: grouped expert execution
 - [ ] P12 — Adaptive scheduler: THROUGHPUT_FIRST / BALANCED / LATENCY_FIRST
