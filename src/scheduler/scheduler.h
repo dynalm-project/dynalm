@@ -28,6 +28,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <string_view>
 #include <vector>
 
 #include "common/status.h"
@@ -67,6 +68,18 @@ struct Request {
 // cost of spreading a prompt over more steps (TTFT). See DD-027.
 enum class PrefixCacheKind : uint8_t { kRadix, kHash };
 
+// How step budgets trade time-to-first-token against inter-token latency
+// (P12, DD-061). On a saturated CPU the aggregate output rate is about the
+// same for all three; they differ in who waits.
+enum class SchedulerPolicy : uint8_t {
+  kBalanced,         // the configured budgets (default 64 prompt + 64 decode tokens per step)
+  kLatencyFirst,     // small prompt budget (32): steady token streams, slower first tokens
+  kThroughputFirst,  // large prompt budget (128): fast admission, burstier streams
+};
+std::string_view scheduler_policy_name(SchedulerPolicy p);
+// "balanced" | "latency" | "throughput"; false if unknown.
+bool parse_scheduler_policy(std::string_view s, SchedulerPolicy& out);
+
 struct SchedulerConfig {
   int32_t decode_token_budget = 64;   // max decode rows per step
   int32_t prefill_token_budget = 64;  // max prefill rows per step (chunked prefill)
@@ -75,6 +88,7 @@ struct SchedulerConfig {
   // budget). Smaller values let several prompts prefill side by side, so a
   // short prompt is not stuck behind a long one (head-of-line blocking).
   int32_t max_prefill_chunk = 32;
+  SchedulerPolicy policy = SchedulerPolicy::kBalanced;
   // Reuse KV of shared prompt prefixes across requests (DD-029).
   bool enable_prefix_cache = true;
   PrefixCacheKind prefix_cache_kind = PrefixCacheKind::kRadix;

@@ -63,7 +63,8 @@ reports Before / After / Delta from measurement (method: [docs/performance.md](d
   map + opt-in pinning (`DYNALM_PIN_THREADS=1`), never better on Windows; NUMA needs multi-socket hardware (DD-059)
 - [x] P11 — MoE: grouped expert execution, one region per projection with per-expert paths;
   Granite-MoE regions 1,857 → 313 per step, +5–7% tok/s at c=4/16 (DD-060)
-- [ ] P12 — Adaptive scheduler: THROUGHPUT_FIRST / BALANCED / LATENCY_FIRST
+- [x] P12 — Scheduler policies `--policy latency|balanced|throughput`; aggregate tok/s is saturated at c ≥ 16, budgets
+  trade TTFT vs ITL (c=64 TTFT 21 s → 3.8 s with throughput); adaptive boost measured and rejected (DD-061)
 - [ ] P13 — Adaptive speculation (judged on output tok/s)
 - [ ] P14 — LTO / PGO / autotuning cache
 - [ ] P15 — AVX-512 / AMX (needs hardware or an emulator to verify)

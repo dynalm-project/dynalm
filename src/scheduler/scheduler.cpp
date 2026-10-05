@@ -9,8 +9,27 @@
 
 namespace engine {
 
+std::string_view scheduler_policy_name(SchedulerPolicy p) {
+  switch (p) {
+    case SchedulerPolicy::kBalanced: return "balanced";
+    case SchedulerPolicy::kLatencyFirst: return "latency";
+    case SchedulerPolicy::kThroughputFirst: return "throughput";
+  }
+  return "balanced";
+}
+
+bool parse_scheduler_policy(std::string_view s, SchedulerPolicy& out) {
+  if (s == "balanced") out = SchedulerPolicy::kBalanced;
+  else if (s == "latency") out = SchedulerPolicy::kLatencyFirst;
+  else if (s == "throughput") out = SchedulerPolicy::kThroughputFirst;
+  else return false;
+  return true;
+}
+
 Scheduler::Scheduler(Transformer& model, KvBlockPool& kv, const Tokenizer& tokenizer, SchedulerConfig config)
     : model_(model), kv_(kv), tokenizer_(tokenizer), config_(config) {
+  if (config_.policy == SchedulerPolicy::kLatencyFirst) config_.prefill_token_budget = 32;
+  if (config_.policy == SchedulerPolicy::kThroughputFirst) config_.prefill_token_budget = 128;
   // Both budgets together must fit one forward pass.
   const int32_t cap = model_.max_batch_tokens();
   config_.decode_token_budget = std::clamp(config_.decode_token_budget, 1, cap - 1);

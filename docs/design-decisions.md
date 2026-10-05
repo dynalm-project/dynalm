@@ -1632,3 +1632,35 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
     automatically, at 16-row granularity.
   - MoE prefill with large expert batches now uses whole-k panels without K-blocking. These are
     fine at expert widths (≤ a few thousand); dense layers keep the K-blocked path.
+
+## DD-061: Scheduler policies: explicit latency/throughput presets; adaptive budget rejected
+
+- **Decision (P12):** `SchedulerConfig::policy` (`--policy` on serve and benchmark):
+  - `balanced`: the default, unchanged (64 prompt + 64 decode tokens per step, 32-token chunks);
+  - `latency`: 32-token prompt budget;
+  - `throughput`: 128-token prompt budget.
+
+  `benchmark` also exposes `--prefill-budget`, `--decode-budget`, `--chunk` and `--batch` for
+  experiments. An adaptive rule (double the prompt budget while ≥ 8 or ≥ 16 prompts are pending)
+  was implemented, measured and removed.
+- **Reason:** on this CPU the aggregate output rate is saturated at c ≥ 16. Budgets mostly move
+  waiting between the first token (TTFT) and the gaps between tokens (ITL). Different deployments
+  want different trade-offs, so it is an explicit choice.
+- **Evidence:** Qwen2.5-0.5B Q4_K_M, prompt 128 / output 64, two runs each,
+  `results/p12-*.jsonl`. Run-to-run noise on this laptop is ±15%.
+
+  | c=64 | output tok/s | TTFT p50 | ITL p50 |
+  |---|---|---|---|
+  | latency | 85–86 | 35 s | 186 ms |
+  | balanced (default) | 93–96 | 21 s | 340 ms |
+  | throughput | 95–96 | 3.8 s | 616 ms |
+  | adaptive (≥ 8 pending) | 94–96 | 5.7–6.0 s | 497–509 ms |
+
+  At c=16, balanced gives TTFT p50 1.0–1.3 s, latency 0.97–1.04 s (ITL p50 174 ms) and
+  throughput 2.2 s. The adaptive rule doubled c=16 TTFT p50 (2.1–3.3 s): closed-loop bursts put
+  ≥ 16 prompts in flight, and splitting each step among more prompts finishes each one later.
+  Its c=64 gain is available explicitly as `throughput`.
+- **Alternatives:** a feedback controller targeting a TTFT/ITL SLO. It needs per-deployment
+  targets and a quieter benchmark machine to tune without overfitting noise.
+- **Tests:** `SchedulerPolicyTest.ParseAndSameOutputUnderEveryPolicy`. Policies change
+  scheduling only: greedy output is identical. 395/395.

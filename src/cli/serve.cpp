@@ -27,7 +27,7 @@ extern "C" void on_signal(int) { g_signals.fetch_add(1); }
 constexpr OptionSpec kServeOptions[] = {
     {"model"},        {"host"},        {"port"},           {"model-id"},         {"threads"},
     {"ctx"},          {"batch"},       {"kv"},             {"http-threads"},     {"max-tokens"},
-    {"max-active"},   {"request-timeout"}, {"temperature"}, {"backend"}, {"shutdown-timeout"}, {"disable-admin", false}, {"int8-decode"},
+    {"max-active"},   {"request-timeout"}, {"temperature"}, {"backend"}, {"shutdown-timeout"}, {"disable-admin", false}, {"int8-decode"}, {"policy"},
 };
 
 void usage() {
@@ -43,6 +43,8 @@ void usage() {
                "  --kv f16|f32            KV cache dtype (default f16)\n"
                "  --int8-decode N         int8 activations for matmuls of <= N rows (default 4, 0 = off;\n"
                "                          off makes outputs independent of batching, DD-053)\n"
+               "  --policy P              balanced (default) | latency | throughput: first-token wait vs\n"
+               "                          smooth streaming under load (DD-061)\n"
                "  --backend cpu           compute backend (GPU backends are not built yet)\n"
                "  --max-active N          concurrent requests before 503 (default 64)\n"
                "  --http-threads N|auto   HTTP workers (auto: max-active + 8)\n"
@@ -92,6 +94,7 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
     else if (a == "-c" || a == "--ctx") ok = parse_int_or_auto(value(), ctx);
     else if (a == "--batch") ok = parse_int_or_auto(value(), batch);
     else if (a == "--int8-decode") ok = parse_int(value(), eo.int8_decode_rows) && eo.int8_decode_rows >= 0;
+    else if (a == "--policy") ok = parse_scheduler_policy(value(), eo.scheduler.policy);
     else if (a == "--http-threads") ok = parse_int_or_auto(value(), http_threads);
     else if (a == "--max-tokens") ok = parse_int(value(), max_tokens);
     else if (a == "--max-active") ok = parse_int(value(), max_active);
@@ -150,8 +153,9 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
            gib(e.weight_bytes()), gib(e.kv_bytes()), gib(mem.available_bytes));
   LOG_INFO("KV cache: {} tokens ({}{})", e.kv_capacity_tokens(), eo.kv_dtype == DType::kF32 ? "f32" : "f16",
            ctx == 0 ? ", auto" : "");
-  LOG_INFO("Scheduler: continuous batching (prefill budget {}, decode budget {}, max batch {})",
-           eo.scheduler.prefill_token_budget, eo.scheduler.decode_token_budget, eo.max_batch_tokens);
+  LOG_INFO("Scheduler: continuous batching, {} policy (prefill budget {}, decode budget {}, max batch {})",
+           scheduler_policy_name(eo.scheduler.policy), eo.scheduler.prefill_token_budget,
+           eo.scheduler.decode_token_budget, eo.max_batch_tokens);
   LOG_INFO("Prefix cache: {}", eo.scheduler.enable_prefix_cache ? "enabled (radix)" : "disabled");
 
   Server server(e, so);

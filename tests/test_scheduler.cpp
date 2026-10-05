@@ -12,6 +12,7 @@
 
 #include "backends/cpu/cpu_backend.h"
 #include "loader/model_loader.h"
+#include "runtime/engine.h"
 #include "runtime/generator.h"
 
 namespace engine {
@@ -353,6 +354,42 @@ TEST_F(SchedulerTest, QueueLatencyIsTracked) {
   sched.run_until_idle();
   EXPECT_EQ(sched.stats().admitted, 3u);
   EXPECT_GT(sched.stats().queue_ms_max, 0.0);  // later requests waited for the first
+}
+
+// P12 (DD-061): policy names round-trip, and every policy completes requests
+// with the same greedy output (policies change scheduling, never results).
+TEST(SchedulerPolicyTest, ParseAndSameOutputUnderEveryPolicy) {
+  SchedulerPolicy p{};
+  for (const char* name : {"balanced", "latency", "throughput"}) {
+    ASSERT_TRUE(parse_scheduler_policy(name, p));
+    EXPECT_EQ(scheduler_policy_name(p), name);
+  }
+  EXPECT_FALSE(parse_scheduler_policy("fastest", p));
+  std::string reference;
+  for (SchedulerPolicy pol : {SchedulerPolicy::kBalanced, SchedulerPolicy::kLatencyFirst,
+                              SchedulerPolicy::kThroughputFirst}) {
+    EngineOptions o;
+    o.model_path = std::string(ENGINE_TEST_DATA_DIR) + "/tiny_llama.gguf";
+    o.threads = 2;
+    o.kv_tokens = 2048;
+    o.int8_decode_rows = 0;  // bit-exact batch invariance for the comparison
+    o.scheduler.policy = pol;
+    auto e = Engine::create(o);
+    ASSERT_TRUE(e.ok());
+    GenerateParams gp;
+    gp.max_tokens = 12;
+    auto s = (*e)->generate_text("policy check prompt", false, gp);
+    ASSERT_TRUE(s.ok());
+    std::string text;
+    StreamEvent ev;
+    while ((*s)->next(ev, std::chrono::milliseconds(30000))) {
+      text += ev.text;
+      if (ev.done) break;
+    }
+    EXPECT_EQ(ev.completion_tokens, 12);
+    if (reference.empty()) reference = text;
+    EXPECT_EQ(text, reference) << scheduler_policy_name(pol);
+  }
 }
 
 }  // namespace

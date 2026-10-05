@@ -212,6 +212,7 @@ dynalm serve <model> [options]
 | `--kv f16\|f32` | KV cache precision |
 | `--int8-decode N` | int8 activations for matmuls of ≤ N rows (default 4; 0 = off) |
 | `--max-active N` | Concurrent requests before answering 503 (default 64) |
+| `--policy P` | `balanced` (default), `latency` (smooth streaming, slower first token under load) or `throughput` (fast first token, burstier streaming) |
 | `--http-threads N\|auto` | HTTP worker threads |
 | `--max-tokens N` | Default `max_tokens` per request (default 1024) |
 | `--temperature T` | Default temperature when a request omits it (default 1.0) |

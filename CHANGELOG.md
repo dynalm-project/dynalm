@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Performance program P12 (DD-061)
+- **`--policy balanced|latency|throughput`** (serve, benchmark). At c=64: throughput policy TTFT p50
+  21 s → 3.8 s at the same tok/s, with ITL 340 → 616 ms; latency policy ITL 186 ms, TTFT 35 s.
+- **`benchmark --prefill-budget/--decode-budget/--chunk/--batch`** for scheduler experiments.
+
 ### Performance program P11 (DD-060)
 - **Grouped MoE execution:** `matmul_many` runs every expert in one parallel region, each with its
   own path (int8 rows, fused, or GEMM panel), including strided rows. Granite-MoE: 1,857 → 313

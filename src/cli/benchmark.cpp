@@ -2,6 +2,7 @@
 // or any OpenAI-compatible server (--url), sweeping concurrency x prompt
 // length x output length, with P50/P90/P95/P99 latency.
 
+#include <algorithm>
 #include <charconv>
 #include <filesystem>
 #include <cstdio>
@@ -36,6 +37,11 @@ void usage() {
                "  -t, --threads N       compute threads (in-process)\n"
                "  -c, --ctx N           KV capacity in tokens (in-process, default 32768)\n"
                "  --int8-decode N       int8 activations for matmuls of <= N rows (in-process; 0 = off)\n"
+               "  --prefill-budget N    prompt tokens per scheduler step (in-process, default 64)\n"
+               "  --decode-budget N     decode rows per scheduler step (in-process, default 64)\n"
+               "  --chunk N             max prompt tokens per sequence per step (0 = budget; default 32)\n"
+               "  --batch N             max tokens per forward pass (default: budgets + 1, min 256)\n"
+               "  --policy P            balanced | latency | throughput (in-process, DD-061)\n"
                "  --out FILE            append JSON lines (one per point)\n"
                "  --no-diag             skip the bandwidth probe and per-point diagnostics\n");
 }
@@ -65,6 +71,8 @@ int cmd_benchmark(std::span<const std::string_view> args) {
   std::vector<int32_t> conc = {1, 4}, prompts = {128, 512}, outputs = {128}, prompt_mix;
   bool diag = true;
   int requests = 0, threads = 0, ctx = 32768, int8_rows = -1;
+  int prefill_budget = -1, decode_budget = -1, chunk = -1, batch = -1;
+  SchedulerPolicy policy = SchedulerPolicy::kBalanced;
   for (size_t i = 0; i < args.size(); ++i) {
     const std::string_view a = args[i];
     auto value = [&]() -> std::string_view { return i + 1 < args.size() ? args[++i] : std::string_view(); };
@@ -80,6 +88,11 @@ int cmd_benchmark(std::span<const std::string_view> args) {
     else if (a == "-t" || a == "--threads") ok = parse_int(value(), threads);
     else if (a == "-c" || a == "--ctx") ok = parse_int(value(), ctx);
     else if (a == "--int8-decode") ok = parse_int(value(), int8_rows) && int8_rows >= 0;
+    else if (a == "--prefill-budget") ok = parse_int(value(), prefill_budget) && prefill_budget > 0;
+    else if (a == "--decode-budget") ok = parse_int(value(), decode_budget) && decode_budget > 0;
+    else if (a == "--chunk") ok = parse_int(value(), chunk) && chunk >= 0;
+    else if (a == "--batch") ok = parse_int(value(), batch) && batch > 0;
+    else if (a == "--policy") ok = parse_scheduler_policy(value(), policy);
     else if (a == "--out") out_file = value();
     else if (path.empty() && !a.starts_with("-")) path = a;
     else ok = false;
@@ -108,6 +121,13 @@ int cmd_benchmark(std::span<const std::string_view> args) {
     o.threads = threads;
     o.kv_tokens = ctx;
     o.int8_decode_rows = int8_rows;
+    o.scheduler.policy = policy;
+    if (prefill_budget > 0) o.scheduler.prefill_token_budget = prefill_budget;
+    if (decode_budget > 0) o.scheduler.decode_token_budget = decode_budget;
+    if (chunk >= 0) o.scheduler.max_prefill_chunk = chunk;
+    o.max_batch_tokens = batch > 0 ? batch
+                                   : std::max(o.max_batch_tokens, o.scheduler.prefill_token_budget +
+                                                                      o.scheduler.decode_token_budget + 1);
     auto e = Engine::create(o);
     if (!e.ok()) {
       std::fprintf(stderr, "benchmark: %s\n", e.status().to_string().c_str());
