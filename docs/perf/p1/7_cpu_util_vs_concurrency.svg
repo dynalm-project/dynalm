@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="520" viewBox="0 0 900 520" font-family="sans-serif" font-size="12">
+<rect width="900" height="520" fill="white"/>
+<text x="450.0" y="24" text-anchor="middle" font-size="16" font-weight="bold">CPU utilization vs concurrency</text>
+<line x1="80" y1="350.0" x2="870" y2="350.0" stroke="#e5e5e5"/>
+<text x="72" y="354.0" text-anchor="end">0</text>
+<line x1="80" y1="290.0" x2="870" y2="290.0" stroke="#e5e5e5"/>
+<text x="72" y="294.0" text-anchor="end">20</text>
+<line x1="80" y1="230.0" x2="870" y2="230.0" stroke="#e5e5e5"/>
+<text x="72" y="234.0" text-anchor="end">40</text>
+<line x1="80" y1="170.0" x2="870" y2="170.0" stroke="#e5e5e5"/>
+<text x="72" y="174.0" text-anchor="end">60</text>
+<line x1="80" y1="110.0" x2="870" y2="110.0" stroke="#e5e5e5"/>
+<text x="72" y="114.0" text-anchor="end">80</text>
+<line x1="80" y1="50.0" x2="870" y2="50.0" stroke="#e5e5e5"/>
+<text x="72" y="54.0" text-anchor="end">100</text>
+<line x1="80.0" y1="350" x2="80.0" y2="355" stroke="#333"/>
+<text x="80.0" y="370" text-anchor="middle">1</text>
+<line x1="211.7" y1="350" x2="211.7" y2="355" stroke="#333"/>
+<text x="211.7" y="370" text-anchor="middle">2</text>
+<line x1="343.3" y1="350" x2="343.3" y2="355" stroke="#333"/>
+<text x="343.3" y="370" text-anchor="middle">4</text>
+<line x1="475.0" y1="350" x2="475.0" y2="355" stroke="#333"/>
+<text x="475.0" y="370" text-anchor="middle">8</text>
+<line x1="606.7" y1="350" x2="606.7" y2="355" stroke="#333"/>
+<text x="606.7" y="370" text-anchor="middle">16</text>
+<line x1="738.3" y1="350" x2="738.3" y2="355" stroke="#333"/>
+<text x="738.3" y="370" text-anchor="middle">32</text>
+<line x1="870.0" y1="350" x2="870.0" y2="355" stroke="#333"/>
+<text x="870.0" y="370" text-anchor="middle">64</text>
+<line x1="80" y1="350" x2="870" y2="350" stroke="#333"/>
+<line x1="80" y1="50" x2="80" y2="350" stroke="#333"/>
+<text x="475.0" y="392" text-anchor="middle">concurrent requests</text>
+<text transform="translate(18 200.0) rotate(-90)" text-anchor="middle">% of logical CPUs</text>
+<path d="M80.0,115.5 L343.3,115.5" fill="none" stroke="#1f77b4" stroke-width="2"/>
+<circle cx="80.0" cy="115.5" r="3.5" fill="#1f77b4"><title>Qwen3-4B-Q4_K_M.gguf · dynalm (in-process) · p128 · o32: 1 → 78.18</title></circle>
+<circle cx="343.3" cy="115.5" r="3.5" fill="#1f77b4"><title>Qwen3-4B-Q4_K_M.gguf · dynalm (in-process) · p128 · o32: 4 → 78.16</title></circle>
+<line x1="80" y1="408" x2="104" y2="408" stroke="#1f77b4" stroke-width="2"/>
+<text x="112" y="412">Qwen3-4B-Q4_K_M.gguf · dynalm (in-process) · p128 · o32</text>
+<path d="M80.0,118.9 L343.3,120.3 L606.7,120.9 L870.0,141.7" fill="none" stroke="#d62728" stroke-width="2"/>
+<circle cx="80.0" cy="118.9" r="3.5" fill="#d62728"><title>granite-3.1-1b-a400m-instruct-Q4_K_M.gguf · dynalm (in-process) · p128 · o64: 1 → 77.02</title></circle>
+<circle cx="343.3" cy="120.3" r="3.5" fill="#d62728"><title>granite-3.1-1b-a400m-instruct-Q4_K_M.gguf · dynalm (in-process) · p128 · o64: 4 → 76.57</title></circle>
+<circle cx="606.7" cy="120.9" r="3.5" fill="#d62728"><title>granite-3.1-1b-a400m-instruct-Q4_K_M.gguf · dynalm (in-process) · p128 · o64: 16 → 76.38</title></circle>
+<circle cx="870.0" cy="141.7" r="3.5" fill="#d62728"><title>granite-3.1-1b-a400m-instruct-Q4_K_M.gguf · dynalm (in-process) · p128 · o64: 64 → 69.44</title></circle>
+<line x1="80" y1="424" x2="104" y2="424" stroke="#d62728" stroke-width="2"/>
+<text x="112" y="428">granite-3.1-1b-a400m-instruct-Q4_K_M.gguf · dynalm (in-process) · p128 · o64</text>
+<path d="M80.0,116.1 L475.0,114.2" fill="none" stroke="#2ca02c" stroke-width="2"/>
+<circle cx="80.0" cy="116.1" r="3.5" fill="#2ca02c"><title>qwen2.5-0.5b-instruct-fp16.gguf · dynalm (in-process) · p128 · o64: 1 → 77.95</title></circle>
+<circle cx="475.0" cy="114.2" r="3.5" fill="#2ca02c"><title>qwen2.5-0.5b-instruct-fp16.gguf · dynalm (in-process) · p128 · o64: 8 → 78.59</title></circle>
+<line x1="80" y1="440" x2="104" y2="440" stroke="#2ca02c" stroke-width="2"/>
+<text x="112" y="444">qwen2.5-0.5b-instruct-fp16.gguf · dynalm (in-process) · p128 · o64</text>
+<path d="M475.0,167.2 L738.3,170.7" fill="none" stroke="#ff7f0e" stroke-width="2"/>
+<circle cx="475.0" cy="167.2" r="3.5" fill="#ff7f0e"><title>qwen2.5-0.5b-instruct-q4_k_m.gguf · dynalm (in-process) · mix 64/512/2048 · o64: 8 → 60.95</title></circle>
+<circle cx="738.3" cy="170.7" r="3.5" fill="#ff7f0e"><title>qwen2.5-0.5b-instruct-q4_k_m.gguf · dynalm (in-process) · mix 64/512/2048 · o64: 32 → 59.76</title></circle>
+<line x1="80" y1="456" x2="104" y2="456" stroke="#ff7f0e" stroke-width="2"/>
+<text x="112" y="460">qwen2.5-0.5b-instruct-q4_k_m.gguf · dynalm (in-process) · mix 64/512/2048 · o64</text>
+<path d="M80.0,178.5 L211.7,172.8 L343.3,175.1 L475.0,177.6 L606.7,176.2 L738.3,175.8 L870.0,174.7" fill="none" stroke="#9467bd" stroke-width="2"/>
+<circle cx="80.0" cy="178.5" r="3.5" fill="#9467bd"><title>qwen2.5-0.5b-instruct-q4_k_m.gguf · dynalm (in-process) · p128 · o64: 1 → 57.17</title></circle>
+<circle cx="211.7" cy="172.8" r="3.5" fill="#9467bd"><title>qwen2.5-0.5b-instruct-q4_k_m.gguf · dynalm (in-process) · p128 · o64: 2 → 59.06</title></circle>
+<circle cx="343.3" cy="175.1" r="3.5" fill="#9467bd"><title>qwen2.5-0.5b-instruct-q4_k_m.gguf · dynalm (in-process) · p128 · o64: 4 → 58.29</title></circle>
+<circle cx="475.0" cy="177.6" r="3.5" fill="#9467bd"><title>qwen2.5-0.5b-instruct-q4_k_m.gguf · dynalm (in-process) · p128 · o64: 8 → 57.48</title></circle>
+<circle cx="606.7" cy="176.2" r="3.5" fill="#9467bd"><title>qwen2.5-0.5b-instruct-q4_k_m.gguf · dynalm (in-process) · p128 · o64: 16 → 57.92</title></circle>
+<circle cx="738.3" cy="175.8" r="3.5" fill="#9467bd"><title>qwen2.5-0.5b-instruct-q4_k_m.gguf · dynalm (in-process) · p128 · o64: 32 → 58.07</title></circle>
+<circle cx="870.0" cy="174.7" r="3.5" fill="#9467bd"><title>qwen2.5-0.5b-instruct-q4_k_m.gguf · dynalm (in-process) · p128 · o64: 64 → 58.45</title></circle>
+<line x1="80" y1="472" x2="104" y2="472" stroke="#9467bd" stroke-width="2"/>
+<text x="112" y="476">qwen2.5-0.5b-instruct-q4_k_m.gguf · dynalm (in-process) · p128 · o64</text>
+<path d="M80.0,169.2 L475.0,168.6" fill="none" stroke="#8c564b" stroke-width="2"/>
+<circle cx="80.0" cy="169.2" r="3.5" fill="#8c564b"><title>qwen2.5-0.5b-instruct-q4_k_m.gguf · dynalm (in-process) · p2048 · o64: 1 → 60.27</title></circle>
+<circle cx="475.0" cy="168.6" r="3.5" fill="#8c564b"><title>qwen2.5-0.5b-instruct-q4_k_m.gguf · dynalm (in-process) · p2048 · o64: 8 → 60.47</title></circle>
+<line x1="80" y1="488" x2="104" y2="488" stroke="#8c564b" stroke-width="2"/>
+<text x="112" y="492">qwen2.5-0.5b-instruct-q4_k_m.gguf · dynalm (in-process) · p2048 · o64</text>
+<path d="M80.0,169.1" fill="none" stroke="#e377c2" stroke-width="2"/>
+<circle cx="80.0" cy="169.1" r="3.5" fill="#e377c2"><title>qwen2.5-0.5b-instruct-q4_k_m.gguf · dynalm (in-process) · p4096 · o64: 1 → 60.29</title></circle>
+<line x1="80" y1="504" x2="104" y2="504" stroke="#e377c2" stroke-width="2"/>
+<text x="112" y="508">qwen2.5-0.5b-instruct-q4_k_m.gguf · dynalm (in-process) · p4096 · o64</text>
+<path d="M80.0,159.2 L475.0,173.8" fill="none" stroke="#17becf" stroke-width="2"/>
+<circle cx="80.0" cy="159.2" r="3.5" fill="#17becf"><title>qwen2.5-0.5b-instruct-q4_k_m.gguf · dynalm (in-process) · p512 · o64: 1 → 63.59</title></circle>
+<circle cx="475.0" cy="173.8" r="3.5" fill="#17becf"><title>qwen2.5-0.5b-instruct-q4_k_m.gguf · dynalm (in-process) · p512 · o64: 8 → 58.72</title></circle>
+<line x1="80" y1="520" x2="104" y2="520" stroke="#17becf" stroke-width="2"/>
+<text x="112" y="524">qwen2.5-0.5b-instruct-q4_k_m.gguf · dynalm (in-process) · p512 · o64</text>
+<path d="M80.0,155.0 L475.0,117.9" fill="none" stroke="#7f7f7f" stroke-width="2"/>
+<circle cx="80.0" cy="155.0" r="3.5" fill="#7f7f7f"><title>qwen2.5-0.5b-instruct-q8_0.gguf · dynalm (in-process) · p128 · o64: 1 → 65.01</title></circle>
+<circle cx="475.0" cy="117.9" r="3.5" fill="#7f7f7f"><title>qwen2.5-0.5b-instruct-q8_0.gguf · dynalm (in-process) · p128 · o64: 8 → 77.37</title></circle>
+<line x1="80" y1="536" x2="104" y2="536" stroke="#7f7f7f" stroke-width="2"/>
+<text x="112" y="540">qwen2.5-0.5b-instruct-q8_0.gguf · dynalm (in-process) · p128 · o64</text>
+<path d="M80.0,116.6 L343.3,114.0 L606.7,121.9" fill="none" stroke="#1f77b4" stroke-width="2"/>
+<circle cx="80.0" cy="116.6" r="3.5" fill="#1f77b4"><title>qwen2.5-1.5b-instruct-q4_k_m.gguf · dynalm (in-process) · p128 · o64: 1 → 77.82</title></circle>
+<circle cx="343.3" cy="114.0" r="3.5" fill="#1f77b4"><title>qwen2.5-1.5b-instruct-q4_k_m.gguf · dynalm (in-process) · p128 · o64: 4 → 78.67</title></circle>
+<circle cx="606.7" cy="121.9" r="3.5" fill="#1f77b4"><title>qwen2.5-1.5b-instruct-q4_k_m.gguf · dynalm (in-process) · p128 · o64: 16 → 76.02</title></circle>
+<line x1="80" y1="552" x2="104" y2="552" stroke="#1f77b4" stroke-width="2"/>
+<text x="112" y="556">qwen2.5-1.5b-instruct-q4_k_m.gguf · dynalm (in-process) · p128 · o64</text>
+</svg>

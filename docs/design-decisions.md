@@ -1261,3 +1261,52 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   - The classifier is triage, not proof: thresholds are round numbers, and reports quote the
     underlying figures.
   - Windows `CallNtPowerInformation` often reports a nominal clock.
+- **Evidence:**
+  - 16 unit tests: classifier rules, traffic model, counters, pool stats, the bandwidth probe,
+    and an end-to-end diagnostics point.
+  - 372/372 tests pass under linux-release and TSAN.
+  - The baseline sweep (docs/benchmarks.md P1) produced its first actionable result: batched
+    Q4_K_M decode is compute-bound on K-quant unpacking. A 7-row step takes 109.5 ms vs 60.0 ms
+    for Q8_0, at 3.7 of 19 GB/s.
+
+## DD-051: An execution planner owns every per-step execution decision
+
+- **Decision:** A new layer, `src/execution/BatchPlanner`, sits between the scheduler and the model
+  runtime.
+  - For each step the scheduler calls `planner().plan(batch)`, which returns an `ExecutionPlan`:
+    - the phase (decode / prefill / mixed);
+    - rows, decode and prefill rows, logit rows;
+    - the longest attention span, and the attention work (Σ span);
+    - a backend-level `KernelPlan`.
+  - `Transformer::forward_batch` hands the `KernelPlan` to `Backend::set_kernel_plan` before running.
+  - `KernelPlan` lives in the backend layer, so backends never depend on the planner, the scheduler
+    or model families. It carries:
+    - the matmul expand threshold and GEMM K-block (which already existed);
+    - attention strategy, decided separately for full-causal and sliding-window layers
+      (`per_pair` / `split_k`);
+    - the split-K chunk.
+  - The planner gets the machine from a `HardwareProfile` (threads, physical/P/E cores, L2/LLC,
+    ISA).
+  - Direct callers (generator, speculative decoding, tests) pass no plan; the transformer then
+    plans with the same planner.
+  - A backend that never receives a plan uses `KernelPlan::defaults()`, where `kAuto` applies the
+    same rule per call.
+- **Reason:**
+  - Before P2, these decisions were scattered inside kernels. Examples: the split-K rule was
+    re-derived in every attention call; expand/GEMM thresholds came from backend members and
+    environment variables.
+  - The coming phases add phase- and shape-specific kernels (multi-row decode, GQA attention, a
+    dynamic split) whose choice needs batch-level facts the kernels don't have: phase, row mix,
+    per-step context distribution. One planner makes those choices testable and visible
+    (`steps_split_attention`). Later phases (adaptive scheduling, autotuning) can then change
+    them without touching kernels.
+- **Alternatives:**
+  - Keep heuristics in the backend: it cannot see the batch, only one op at a time.
+  - Put the planning in the scheduler: that would leak hardware and kernel knowledge into a
+    model-agnostic component.
+  - A plan per op instead of per step: more flexible, but no current decision needs it.
+- **Tradeoffs:**
+  - One more struct per step (planning is a single pass over the sequences, microseconds).
+  - The plan is computed for the whole step, so it cannot vary per layer except through the
+    full/window split.
+- **Evidence:** see P2 in docs/benchmarks.md (bit-identical outputs; neutral performance).

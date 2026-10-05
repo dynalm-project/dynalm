@@ -1,0 +1,14 @@
+date: 2026-10-05T10:37:29+05:30
+binary: build/msvc-release/src/dynalm.exe
+DynaLM 0.1.0
+build:    Release, MSVC 19.44.35229.0
+kernels:  generic avx2
+backends: cpu (built); cuda, hip, metal, vulkan: designed, not built (DD-045)
+CPU:            12th Gen Intel(R) Core(TM) i7-1255U (GenuineIntel)
+Cores:          10 physical, 12 logical (hybrid: 2 P-cores, 8 E-cores)
+Caches:         L1d 48 KiB/core, L2 1280 KiB, L3 12288 KiB
+Features:       sse4.2 avx avx2 fma f16c avx-vnni
+RAM:            15.7 GiB total, 1.7 GiB available
+Usable kernels: avx2, generic
+Backend:        CPU/avx2
+mode: full

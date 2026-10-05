@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="520" viewBox="0 0 900 520" font-family="sans-serif" font-size="12">
+<rect width="900" height="520" fill="white"/>
+<text x="450.0" y="24" text-anchor="middle" font-size="16" font-weight="bold">Single-stream output tok/s (concurrency 1) vs prompt length</text>
+<line x1="80" y1="350.0" x2="870" y2="350.0" stroke="#e5e5e5"/>
+<text x="72" y="354.0" text-anchor="end">0</text>
+<line x1="80" y1="290.0" x2="870" y2="290.0" stroke="#e5e5e5"/>
+<text x="72" y="294.0" text-anchor="end">10</text>
+<line x1="80" y1="230.0" x2="870" y2="230.0" stroke="#e5e5e5"/>
+<text x="72" y="234.0" text-anchor="end">20</text>
+<line x1="80" y1="170.0" x2="870" y2="170.0" stroke="#e5e5e5"/>
+<text x="72" y="174.0" text-anchor="end">30</text>
+<line x1="80" y1="110.0" x2="870" y2="110.0" stroke="#e5e5e5"/>
+<text x="72" y="114.0" text-anchor="end">40</text>
+<line x1="80" y1="50.0" x2="870" y2="50.0" stroke="#e5e5e5"/>
+<text x="72" y="54.0" text-anchor="end">50</text>
+<line x1="80.0" y1="350" x2="80.0" y2="355" stroke="#333"/>
+<text x="80.0" y="370" text-anchor="middle">128</text>
+<line x1="156.5" y1="350" x2="156.5" y2="355" stroke="#333"/>
+<text x="156.5" y="370" text-anchor="middle">512</text>
+<line x1="462.3" y1="350" x2="462.3" y2="355" stroke="#333"/>
+<text x="462.3" y="370" text-anchor="middle">2048</text>
+<line x1="870.0" y1="350" x2="870.0" y2="355" stroke="#333"/>
+<text x="870.0" y="370" text-anchor="middle">4096</text>
+<line x1="80" y1="350" x2="870" y2="350" stroke="#333"/>
+<line x1="80" y1="50" x2="80" y2="350" stroke="#333"/>
+<text x="475.0" y="392" text-anchor="middle">prompt tokens</text>
+<text transform="translate(18 200.0) rotate(-90)" text-anchor="middle">output tokens / s</text>
+<path d="M80.0,331.5" fill="none" stroke="#1f77b4" stroke-width="2"/>
+<circle cx="80.0" cy="331.5" r="3.5" fill="#1f77b4"><title>Qwen3-4B-Q4_K_M.gguf · dynalm (in-process) · o32: 128 → 3.08</title></circle>
+<line x1="80" y1="408" x2="104" y2="408" stroke="#1f77b4" stroke-width="2"/>
+<text x="112" y="412">Qwen3-4B-Q4_K_M.gguf · dynalm (in-process) · o32</text>
+<path d="M80.0,144.1" fill="none" stroke="#d62728" stroke-width="2"/>
+<circle cx="80.0" cy="144.1" r="3.5" fill="#d62728"><title>granite-3.1-1b-a400m-instruct-Q4_K_M.gguf · dynalm (in-process) · o64: 128 → 34.31</title></circle>
+<line x1="80" y1="424" x2="104" y2="424" stroke="#d62728" stroke-width="2"/>
+<text x="112" y="428">granite-3.1-1b-a400m-instruct-Q4_K_M.gguf · dynalm (in-process) · o64</text>
+<path d="M80.0,250.3" fill="none" stroke="#2ca02c" stroke-width="2"/>
+<circle cx="80.0" cy="250.3" r="3.5" fill="#2ca02c"><title>qwen2.5-0.5b-instruct-fp16.gguf · dynalm (in-process) · o64: 128 → 16.62</title></circle>
+<line x1="80" y1="440" x2="104" y2="440" stroke="#2ca02c" stroke-width="2"/>
+<text x="112" y="444">qwen2.5-0.5b-instruct-fp16.gguf · dynalm (in-process) · o64</text>
+<path d="M80.0,238.3 L156.5,282.8 L462.3,332.6 L870.0,343.0" fill="none" stroke="#ff7f0e" stroke-width="2"/>
+<circle cx="80.0" cy="238.3" r="3.5" fill="#ff7f0e"><title>qwen2.5-0.5b-instruct-q4_k_m.gguf · dynalm (in-process) · o64: 128 → 18.62</title></circle>
+<circle cx="156.5" cy="282.8" r="3.5" fill="#ff7f0e"><title>qwen2.5-0.5b-instruct-q4_k_m.gguf · dynalm (in-process) · o64: 512 → 11.19</title></circle>
+<circle cx="462.3" cy="332.6" r="3.5" fill="#ff7f0e"><title>qwen2.5-0.5b-instruct-q4_k_m.gguf · dynalm (in-process) · o64: 2048 → 2.91</title></circle>
+<circle cx="870.0" cy="343.0" r="3.5" fill="#ff7f0e"><title>qwen2.5-0.5b-instruct-q4_k_m.gguf · dynalm (in-process) · o64: 4096 → 1.17</title></circle>
+<line x1="80" y1="456" x2="104" y2="456" stroke="#ff7f0e" stroke-width="2"/>
+<text x="112" y="460">qwen2.5-0.5b-instruct-q4_k_m.gguf · dynalm (in-process) · o64</text>
+<path d="M80.0,217.8" fill="none" stroke="#9467bd" stroke-width="2"/>
+<circle cx="80.0" cy="217.8" r="3.5" fill="#9467bd"><title>qwen2.5-0.5b-instruct-q8_0.gguf · dynalm (in-process) · o64: 128 → 22.03</title></circle>
+<line x1="80" y1="472" x2="104" y2="472" stroke="#9467bd" stroke-width="2"/>
+<text x="112" y="476">qwen2.5-0.5b-instruct-q8_0.gguf · dynalm (in-process) · o64</text>
+<path d="M80.0,290.9" fill="none" stroke="#8c564b" stroke-width="2"/>
+<circle cx="80.0" cy="290.9" r="3.5" fill="#8c564b"><title>qwen2.5-1.5b-instruct-q4_k_m.gguf · dynalm (in-process) · o64: 128 → 9.85</title></circle>
+<line x1="80" y1="488" x2="104" y2="488" stroke="#8c564b" stroke-width="2"/>
+<text x="112" y="492">qwen2.5-1.5b-instruct-q4_k_m.gguf · dynalm (in-process) · o64</text>
+</svg>

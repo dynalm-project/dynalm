@@ -642,3 +642,63 @@ How to read this:
   verification pass that costs more than a 1-row decode (expand path, DD-036), eat the gain.
   Draft models pay off when the cost ratio is around 10× or more (for example 0.5B drafting
   for 7B), or once the multi-row fused decode kernel (see ROADMAP.md) makes verification nearly free.
+
+## P1 — measurement baseline (`tools/perf_sweep.sh full`, DD-050)
+
+- **Machine:** i7-1255U (2P + 8E, 12 threads), 16 GB, Windows 11, native `dynalm.exe` (MSVC 19.44),
+  10 compute threads, AC power, Balanced plan.
+- **Not an idle box:** Docker/WSL and a browser were running, and only 1.7 GB of RAM was free.
+- **Bandwidth ceiling:** measured DRAM read ceiling 18.5–20.9 GB/s. Hardware counters are
+  unavailable (Windows).
+- **Data:** raw points in `results/p1-baseline.jsonl`, graphs in [docs/perf/p1/](perf/p1/), and the
+  environment in `docs/perf/p1/environment.txt`.
+- **Workload:** prompt 128 / output 64 tokens unless stated.
+
+**Aggregate output tok/s vs concurrency** (the program's headline metric):
+
+| model | c=1 | c=2 | c=4 | c=8 | c=16 | c=32 | c=64 |
+|---|---|---|---|---|---|---|---|
+| Qwen2.5-0.5B Q4_K_M | 18.6 | 27.7 | 32.8 | 40.1 | 48.0 | 52.4 | 54.7 |
+| Qwen2.5-0.5B Q8_0 | 22.0 | | | 67.5 | | | |
+| Qwen2.5-0.5B F16 | 16.6 | | | 66.9 | | | |
+| Qwen2.5-1.5B Q4_K_M | 9.8 | | 16.6 | | 22.2 | | |
+| Qwen3-4B Q4_K_M | 3.1 | | 4.6 | | | | |
+| Granite-3.1-1B-A400M Q4_K_M (MoE) | 34.3 | | 40.6 | | 58.5 | | 60.6 |
+
+**Where the time goes, Qwen2.5-0.5B Q4_K_M:**
+
+| c | decode rows/step | decode step ms | est. GB/s (of ~19) | ITL p50 / p99 ms | class |
+|---|---|---|---|---|---|
+| 1 | 1.0 | 45.4 | 8.7 | 45.8 / 63.9 | MIXED |
+| 8 | 7.0 | 109.5 | 3.7 | 112.6 / 439.4 | COMPUTE_BOUND |
+| 16 | 12.6 | 149.9 | 2.8 | 168.2 / 574.3 | COMPUTE_BOUND |
+| 64 | 26.2 | 183.3 | 2.4 | 554.4 / 769.0 | COMPUTE_BOUND |
+
+Per-op share of forward time, roughly the same at every concurrency:
+
+| op | mlp_up | mlp_down | lm_head | qkv | attn_out | attention | everything else |
+|---|---|---|---|---|---|---|---|
+| share | 37–41% | 17–22% | 11–16% | 8–14% | 5–6% | 5–6% | < 10% |
+
+**Findings** (in priority order for the next phases):
+
+1. **Batched decode is compute-bound on K-quant unpacking, not on memory.**
+   - From 1 to 26 rows per step, modelled bandwidth falls from 8.7 to 2.4 GB/s.
+   - The same 7-row step costs 109.5 ms with Q4_K_M weights but 60.0 ms with Q8_0 and 65.1 ms
+     with F16.
+   - The difference is dequantizing Q4_K/Q6_K into fp32 panels for the multi-row (expand) path.
+   - Matmuls are about 84% of forward time. This is the P3 (multi-row decode) / P4 (weight
+     packing) target.
+2. **Aggregate throughput flattens early:** 40 tok/s at c=8, 55 at c=64. At c=64 decode steps carry
+   only 26 rows on average: prompt chunks (prefill budget 64/step, chunk cap 32) share the steps,
+   and TTFT p50 reaches 35 s. Scheduling policy (P12) decides how much of each step goes to
+   prefill.
+3. **CPU utilization stays at 57–60% for Q4_K at every concurrency** (77–79% for Q8_0/F16).
+   Thread-pool tail wait is 7–16% of forward time, plus serial scheduler work (0.2 → 2.5 ms per
+   step for sampling and stream delivery as rows grow): P6 and P10.
+4. **Context length costs single-stream decode:** 45 → 61 → 76 ms per step from 128 → 2048 → 4096
+   tokens of context (attention): P5, P7.
+5. **MoE is dispatch-heavy:** Granite runs 1,292–2,125 parallel regions per step against 313 for a
+   dense model of similar depth: P11, P6.
+6. **Single-stream Q4_K_M decode is near the bandwidth limit** (MEMORY_BOUND for 1.5B, 4B and
+   Granite at c=1). Gains there come from moving fewer bytes (packing, KV), not from compute.
