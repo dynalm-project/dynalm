@@ -176,13 +176,15 @@ Sampling (default for `run`: greedy, i.e. always the most likely token):
 | `--repeat-last-n N` | How many recent tokens the penalties look at |
 | `--seed S` | Reproducible output |
 
-Speculative decoding (faster answers that are identical to normal decoding):
+Speculative decoding (a small drafter proposes tokens and the model checks several at once;
+with greedy sampling every kept token is the model's own choice):
 
 | Option | Meaning |
 |---|---|
 | `--spec ngram` | Draft from text already in the prompt (good for summaries and code edits) |
 | `--spec models/small.gguf` | Use a small model with the same vocabulary as the draft model |
-| `--spec-k K` | Tokens drafted per step (default 4) |
+| `--spec-k K` | Most tokens drafted per step (default 4) |
+| `--spec-fixed` | Always draft K tokens. By default k is chosen from {0, 3, K} by measured speed, and speculation turns itself off when it is slower |
 
 ```sh
 dynalm run models/Qwen3-4B-Q4_K_M.gguf -p "Explain recursion /no_think"

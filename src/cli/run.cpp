@@ -17,6 +17,7 @@
 #include "platform/cpu_info.h"
 #include "backends/cpu/cpu_backend.h"
 #include "platform/isa.h"
+#include "platform/thread_qos.h"
 #include "runtime/engine.h"
 #include "runtime/speculative.h"
 #include "runtime/text_stream.h"
@@ -50,7 +51,9 @@ void usage() {
                "  --seed S              RNG seed (reproducible output)\n"
                "speculative decoding (single sequence, DD-044):\n"
                "  --spec ngram|DRAFT    prompt-lookup drafter, or a draft model sharing the vocabulary\n"
-               "  --spec-k K            tokens drafted per step (default 4)\n");
+               "  --spec-k K            most tokens drafted per step (default 4)\n"
+               "  --spec-fixed          always draft K; by default k is chosen from {0, 3, K} by measured\n"
+               "                        tokens/s, and speculation turns off when it is slower (DD-062)\n");
 }
 
 bool parse_int(std::string_view s, int& out) {
@@ -84,9 +87,12 @@ Status load_spec_model(const std::string& path, CpuBackend& be, DType kv_dtype, 
 
 // `dynalm run --spec ...`: the single-sequence speculative path (the Engine's
 // continuous-batching scheduler does not host drafters yet).
-int run_speculative(const std::string& path, const std::string& spec, int k, const std::string& prompt,
+int run_speculative(const std::string& path, const std::string& spec, int k, bool adaptive,
+                    const std::string& prompt,
                     const std::string& system, bool chat, bool stream, int threads, int ctx, int batch,
                     const EngineOptions& opts, const GenerateParams& params) {
+  request_full_speed_process();  // as the Engine does (DD-052): this thread runs kernel chunks too
+  request_full_speed_thread();
   ThreadPool pool(threads > 0 ? threads : cpu_info().physical_cores);
   CpuBackend be(pool, select_best_isa(cpu_info().features));
   SpecModel target, draft;
@@ -132,6 +138,7 @@ int run_speculative(const std::string& path, const std::string& spec, int k, con
   go.stop_at_eog = params.stop_at_eog;
   SpeculativeOptions so;
   so.draft_tokens = k;
+  so.adaptive = adaptive;
   so.sampling = params.sampling;
   TextStreamer streamer(tok, params.stop);
   std::string text;
@@ -160,11 +167,16 @@ int run_speculative(const std::string& path, const std::string& spec, int k, con
     return 1;
   }
   const double decode_s = (timer.elapsed_ms() - std::max(first_ms, 0.0)) / 1e3;
+  const std::string adaptive_note =
+      adaptive ? "adaptive: best k " + std::to_string(st.final_k) + ", " + std::to_string(st.plain_passes) + "/" +
+                     std::to_string(st.target_passes) + " passes without drafts"
+               : std::string("fixed k");
   std::fprintf(stderr,
                "\n[stats] prompt %zu tok | TTFT %.1f ms | generated %d tok, %.1f tok/s | drafter %s, k %d | "
-               "acceptance %.0f%% | %.2f tokens per target pass\n",
+               "acceptance %.0f%% | %.2f tokens per target pass | %s\n",
                ids.size(), first_ms, st.generated, decode_s > 0 ? (st.generated - 1) / decode_s : 0.0,
-               std::string(drafter->name()).c_str(), k, 100 * st.acceptance(), st.tokens_per_pass());
+               std::string(drafter->name()).c_str(), k, 100 * st.acceptance(), st.tokens_per_pass(),
+               adaptive_note.c_str());
   return 0;
 }
 
@@ -177,6 +189,7 @@ int cmd_run(std::span<const std::string_view> args) {
   bool chat = true, stream = true;
   std::string spec;
   int spec_k = 4;
+  bool spec_fixed = false;
   EngineOptions opts;
   GenerateParams params;
 
@@ -198,6 +211,7 @@ int cmd_run(std::span<const std::string_view> args) {
     else if (a == "--temp" || a == "--temperature") ok = parse_float(value(), params.sampling.temperature);
     else if (a == "--spec") spec = value();
     else if (a == "--spec-k") ok = parse_int(value(), spec_k) && spec_k >= 1;
+    else if (a == "--spec-fixed") spec_fixed = true;
     else if (a == "--top-k") ok = parse_int(value(), params.sampling.top_k);
     else if (a == "--top-p") ok = parse_float(value(), params.sampling.top_p);
     else if (a == "--min-p") ok = parse_float(value(), params.sampling.min_p);
@@ -256,7 +270,7 @@ int cmd_run(std::span<const std::string_view> args) {
 
   if (!spec.empty()) {
     params.max_tokens = max_tokens;
-    return run_speculative(path, spec, spec_k, prompt, system, chat, stream, threads, ctx, batch, opts, params);
+    return run_speculative(path, spec, spec_k, !spec_fixed, prompt, system, chat, stream, threads, ctx, batch, opts, params);
   }
 
   const Stopwatch load_timer;

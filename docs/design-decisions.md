@@ -1664,3 +1664,66 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   targets and a quieter benchmark machine to tune without overfitting noise.
 - **Tests:** `SchedulerPolicyTest.ParseAndSameOutputUnderEveryPolicy`. Policies change
   scheduling only: greedy output is identical. 395/395.
+
+## DD-062: Adaptive speculation: choose k (including off) from measured output tok/s
+
+- **Decision (P13):** `SpeculativeOptions::adaptive` (default on; `dynalm run --spec-fixed` turns
+  it off). A `SpecController` picks k for every verification round.
+  - **Arms:** k ∈ {0, min(3, K), K}, where K is `--spec-k`. k = 0 is plain decoding: the drafter
+    is not called. k = 3 keeps verification at 4 rows, the int8 decode path (DD-053).
+  - **Rate:** each arm keeps exponentially weighted tokens emitted and milliseconds per round,
+    with drafting included and α = 0.25. Its rate is their ratio.
+  - **Schedule:**
+    - three warm-up rounds per arm, then the best arm runs;
+    - the least recently measured other arm is re-probed for 3 rounds, first after 16 rounds;
+    - the gap doubles up to 128 while probes confirm the best arm, and resets to 16 when a probe
+      changes it.
+  - **Catch-up rounds:** the first drafting round after plain rounds is not measured. A model
+    drafter spends it prefilling the tokens it skipped, which is a switching cost, not the arm's
+    rate.
+- **Reason:**
+  - Measured before this change, speculation lost in most cases on this CPU, even with good
+    drafts. A verification of k + 1 = 5 rows leaves the int8 path, a draft model costs a forward
+    per drafted token, and the target's single-row decode is already fast.
+  - The spec says to judge speculation on final output tok/s and to disable it when it loses.
+    The best k depends on the text (acceptance), so it has to be chosen at run time.
+- **Evidence:**
+  - Setup: Qwen2.5-1.5B-Instruct Q4_K_M target, greedy, 128 new tokens, 10 threads.
+    "story" = "Write a long story about a river.", "list" = "List the numbers from 1 to 100
+    separated by commas."
+  - Two runs per cell, from two separate sweeps (`results/p13-speculation-run{1,2}.txt`).
+    Laptop noise is about ±5% at c = 1.
+
+  | output tok/s | plain | ngram fixed k=4 | ngram adaptive | 0.5B draft fixed k=4 | 0.5B draft adaptive |
+  |---|---|---|---|---|---|
+  | story | 16.6–17.5 | 14.5–15.2 | 16.2–17.1 | 12.1–12.7 | 13.9–15.0 |
+  | list | 15.7–16.4 | 11.5–11.9 | 15.3–15.8 | 19.2–20.2 | 19.0–19.9 |
+
+  - **Ngram:** adaptive recovers plain speed (fixed k loses 10–28%).
+  - **0.5B draft, list** (100% acceptance): adaptive keeps the speed-up, +18–24% over plain,
+    within 0–3% of fixed k.
+  - **0.5B draft, story** (~55% acceptance): adaptive turns speculation off for most rounds
+    (62–70 of 83–90 passes run plain). It still trails plain by 10–17% at 128 tokens and by
+    4–9% at 512 tokens (14.5–15.2 vs 15.8–16.0; fixed 12.8–13.0). What remains is warm-up,
+    probes and the draft's catch-up prefill at each probe.
+  - **Before tuning:** a first version without backoff and without excluding catch-up rounds
+    gave 13.8–14.4 on that cell.
+  - **QoS:** `run --spec` now applies the same full-speed QoS request as the Engine (DD-052). This
+    made no measurable difference here and is kept for consistency.
+- **Accuracy:** with greedy sampling every accepted token is the target's own argmax. Output
+  equals plain decoding up to batch invariance. The target sees 1-, 4- or 5-row verifications,
+  and int8 is used only up to 4 rows (DD-053). So on quantized models long greedy outputs can
+  diverge after a near-tie, as fixed k already could. `Speculative.AdaptiveGreedyIsExact` checks
+  token identity on the fp32 test models with both drafters and k ∈ {1, 4, 6}.
+  `SpecController.*` tests the controller's choices with synthetic timings, including switching
+  off and back on when acceptance changes.
+- **Alternatives:**
+  - choosing k from acceptance alone (a cost model): it needs per-machine costs for drafting
+    and verification, which the measured rate already includes;
+  - keeping a model drafter in step during plain rounds, so probes need no catch-up: this costs
+    a draft forward per token, on every token;
+  - a finer k grid: each arm costs warm-up and probe rounds.
+- **Tradeoffs:**
+  - Exploration has a floor cost: about 10 measured warm-up rounds plus 3-round probes.
+  - The rate is wall-clock, so other load on the machine shifts the choice. That is intended:
+    the goal is delivered tok/s.

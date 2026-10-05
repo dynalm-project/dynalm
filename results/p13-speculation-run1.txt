@@ -1,0 +1,40 @@
+story | none | r1 | 15:56:40.363 [INFO] Model: qwen2.5-1.5b-instruct (Qwen, Q4_K_M)
+15:56:40.364 [INFO] Backend: CPU/avx2, threads: 10
+15:56:40.364 [INFO] Weights: 1059.9 MiB mmapped, KV cache: 112.0 MiB (4096 tokens, f16)
+15:56:40.364 [INFO] Load time: 91.1 ms
+[stats] prompt 37 tok | TTFT 533.4 ms | generated 128 tok, 17.5 tok/s | finish length | inter-delta p50 56.7 p90 59.9 p99 64.6 ms
+[engine] decode step 57.1 ms (forward, 127 steps)
+story | none | r2 | 15:56:48.553 [INFO] Model: qwen2.5-1.5b-instruct (Qwen, Q4_K_M)
+15:56:48.554 [INFO] Backend: CPU/avx2, threads: 10
+15:56:48.554 [INFO] Weights: 1059.9 MiB mmapped, KV cache: 112.0 MiB (4096 tokens, f16)
+15:56:48.554 [INFO] Load time: 130.9 ms
+[stats] prompt 37 tok | TTFT 529.9 ms | generated 128 tok, 16.6 tok/s | finish length | inter-delta p50 60.1 p90 67.1 p99 72.0 ms
+[engine] decode step 60.1 ms (forward, 127 steps)
+story | ngram | r1 | [stats] prompt 37 tok | TTFT 485.6 ms | generated 128 tok, 16.6 tok/s | drafter ngram, k 4 | acceptance 0% | 1.00 tokens per target pass | adaptive: best k 0, 100/127 passes without drafts
+story | ngram | r2 | [stats] prompt 37 tok | TTFT 472.2 ms | generated 128 tok, 16.5 tok/s | drafter ngram, k 4 | acceptance 0% | 1.00 tokens per target pass | adaptive: best k 0, 98/127 passes without drafts
+story | ngram --spec-fixed | r1 | [stats] prompt 37 tok | TTFT 496.6 ms | generated 128 tok, 14.7 tok/s | drafter ngram, k 4 | acceptance 17% | 1.09 tokens per target pass | fixed k
+story | ngram --spec-fixed | r2 | [stats] prompt 37 tok | TTFT 501.1 ms | generated 128 tok, 15.2 tok/s | drafter ngram, k 4 | acceptance 17% | 1.09 tokens per target pass | fixed k
+story | draft0.5B | r1 | [stats] prompt 37 tok | TTFT 483.0 ms | generated 128 tok, 15.0 tok/s | drafter model, k 4 | acceptance 61% | 1.53 tokens per target pass | adaptive: best k 0, 63/83 passes without drafts
+story | draft0.5B | r2 | [stats] prompt 37 tok | TTFT 484.8 ms | generated 128 tok, 14.9 tok/s | drafter model, k 4 | acceptance 61% | 1.51 tokens per target pass | adaptive: best k 0, 64/84 passes without drafts
+story | draft0.5B --spec-fixed | r1 | [stats] prompt 37 tok | TTFT 479.8 ms | generated 128 tok, 12.1 tok/s | drafter model, k 4 | acceptance 52% | 3.02 tokens per target pass | fixed k
+story | draft0.5B --spec-fixed | r2 | [stats] prompt 37 tok | TTFT 499.2 ms | generated 128 tok, 12.7 tok/s | drafter model, k 4 | acceptance 52% | 3.02 tokens per target pass | fixed k
+list | none | r1 | 15:58:14.054 [INFO] Model: qwen2.5-1.5b-instruct (Qwen, Q4_K_M)
+15:58:14.055 [INFO] Backend: CPU/avx2, threads: 10
+15:58:14.055 [INFO] Weights: 1059.9 MiB mmapped, KV cache: 112.0 MiB (4096 tokens, f16)
+15:58:14.055 [INFO] Load time: 87.6 ms
+[stats] prompt 44 tok | TTFT 616.4 ms | generated 128 tok, 16.1 tok/s | finish length | inter-delta p50 60.6 p90 65.4 p99 82.9 ms
+[engine] decode step 61.8 ms (forward, 127 steps)
+list | none | r2 | 15:58:22.858 [INFO] Model: qwen2.5-1.5b-instruct (Qwen, Q4_K_M)
+15:58:22.859 [INFO] Backend: CPU/avx2, threads: 10
+15:58:22.859 [INFO] Weights: 1059.9 MiB mmapped, KV cache: 112.0 MiB (4096 tokens, f16)
+15:58:22.859 [INFO] Load time: 90.0 ms
+[stats] prompt 44 tok | TTFT 668.0 ms | generated 128 tok, 15.9 tok/s | finish length | inter-delta p50 61.0 p90 70.0 p99 79.9 ms
+[engine] decode step 62.6 ms (forward, 127 steps)
+list | ngram | r1 | [stats] prompt 44 tok | TTFT 556.7 ms | generated 128 tok, 15.8 tok/s | drafter ngram, k 4 | acceptance 12% | 1.02 tokens per target pass | adaptive: best k 0, 107/124 passes without drafts
+list | ngram | r2 | [stats] prompt 44 tok | TTFT 544.0 ms | generated 128 tok, 15.5 tok/s | drafter ngram, k 4 | acceptance 4% | 1.01 tokens per target pass | adaptive: best k 0, 109/126 passes without drafts
+list | ngram --spec-fixed | r1 | [stats] prompt 44 tok | TTFT 543.4 ms | generated 128 tok, 11.7 tok/s | drafter ngram, k 4 | acceptance 12% | 1.26 tokens per target pass | fixed k
+list | ngram --spec-fixed | r2 | [stats] prompt 44 tok | TTFT 547.9 ms | generated 128 tok, 11.5 tok/s | drafter ngram, k 4 | acceptance 12% | 1.26 tokens per target pass | fixed k
+list | draft0.5B | r1 | [stats] prompt 44 tok | TTFT 543.0 ms | generated 128 tok, 19.7 tok/s | drafter model, k 4 | acceptance 100% | 4.38 tokens per target pass | adaptive: best k 4, 3/29 passes without drafts
+list | draft0.5B | r2 | [stats] prompt 44 tok | TTFT 538.4 ms | generated 128 tok, 19.7 tok/s | drafter model, k 4 | acceptance 100% | 3.85 tokens per target pass | adaptive: best k 3, 3/33 passes without drafts
+list | draft0.5B --spec-fixed | r1 | [stats] prompt 44 tok | TTFT 535.4 ms | generated 128 tok, 20.2 tok/s | drafter model, k 4 | acceptance 100% | 4.88 tokens per target pass | fixed k
+list | draft0.5B --spec-fixed | r2 | [stats] prompt 44 tok | TTFT 530.5 ms | generated 128 tok, 20.2 tok/s | drafter model, k 4 | acceptance 100% | 4.88 tokens per target pass | fixed k

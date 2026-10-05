@@ -813,3 +813,13 @@ Attention ms per decode step (the other ops are flat at ~22 ms and at bandwidth)
 
 Whole decode step at 4K: 32.8 → ~29.5 ms. Block size 64 instead of 16: 4K step 33.9 → 32.0 ms (~5%),
 other contexts unchanged.
+
+## P13 — adaptive speculation (DD-062), Qwen2.5-1.5B Q4_K_M, greedy, 128 tokens, `dynalm run`
+
+| output tok/s | plain | ngram fixed | ngram adaptive | 0.5B draft fixed | 0.5B draft adaptive |
+|---|---|---|---|---|---|
+| story | 16.6–17.5 | 14.5–15.2 | 16.2–17.1 | 12.1–12.7 | 13.9–15.0 |
+| list | 15.7–16.4 | 11.5–11.9 | 15.3–15.8 | 19.2–20.2 | 19.0–19.9 |
+
+At 512 tokens, 0.5B draft on the story: plain 15.8–16.0, adaptive 14.5–15.2, fixed 12.8–13.0.
+Raw output: `results/p13-speculation-run{1,2}.txt`.

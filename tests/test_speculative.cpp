@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <numeric>
 #include <string>
@@ -56,7 +57,7 @@ std::vector<TokenId> plain_greedy(Loaded& l, const std::vector<TokenId>& prompt,
 }
 
 std::vector<TokenId> speculative(Loaded& l, Drafter& d, const std::vector<TokenId>& prompt, int32_t n, int32_t k,
-                                 SpeculativeStats* st, SamplingParams sp = {}) {
+                                 SpeculativeStats* st, SamplingParams sp = {}, bool adaptive = false) {
   SpeculativeGenerator g(*l.tf, *l.kv, *l.model->tokenizer, d);
   GenerateOptions o;
   o.max_new_tokens = n;
@@ -64,6 +65,7 @@ std::vector<TokenId> speculative(Loaded& l, Drafter& d, const std::vector<TokenI
   SpeculativeOptions so;
   so.draft_tokens = k;
   so.sampling = sp;
+  so.adaptive = adaptive;
   std::vector<TokenId> out;
   EXPECT_TRUE(g.generate(prompt, o, so, [&](TokenId t) { out.push_back(t); return true; }, st).ok());
   return out;
@@ -71,6 +73,63 @@ std::vector<TokenId> speculative(Loaded& l, Drafter& d, const std::vector<TokenI
 
 // A prompt with repetition, so prompt lookup finds continuations.
 const std::vector<TokenId> kPrompt = {5, 17, 99, 3, 200, 42, 7, 5, 17, 99, 3, 200, 42, 7, 5, 17, 99};
+
+TEST(SpecController, WarmsUpEveryArmThenPicksTheFastest) {
+  SpecController c(5);  // arms 5, 3, 0
+  std::vector<int32_t> seen;
+  // The very first drafting round is a catch-up round and is not measured.
+  for (int i = 0; i < 3 * SpecController::kWarmupRounds + 1; ++i) {
+    const int32_t k = c.next_k();
+    seen.push_back(k);
+    // Plain: 1 token in 10 ms. k=3: 2 tokens in 15 ms. k=5: 2 tokens in 20 ms.
+    c.record(k, k == 0 ? 1 : 2, k == 0 ? 10.0 : k == 3 ? 15.0 : 20.0);
+  }
+  EXPECT_EQ(std::count(seen.begin(), seen.end(), 5), SpecController::kWarmupRounds + 1);
+  for (int32_t k : {3, 0}) EXPECT_EQ(std::count(seen.begin(), seen.end(), k), SpecController::kWarmupRounds);
+  EXPECT_EQ(c.best_k(), 3);
+  EXPECT_NEAR(c.rate(3), 2.0 / 15.0, 1e-12);
+}
+
+TEST(SpecController, TurnsSpeculationOffWhenItLosesAndBackOnWhenItWins) {
+  SpecController c(4);  // arms 4, 3, 0
+  bool drafts_pay = false;
+  auto round = [&] {
+    const int32_t k = c.next_k();
+    // Plain decoding: 1 token / 10 ms. Speculation: 1.2 tokens / 14 ms while drafts
+    // are poor, 4 tokens / 16 ms once they are good (repetitive text).
+    if (k == 0) c.record(k, 1, 10.0);
+    else c.record(k, drafts_pay ? 4 : 1, drafts_pay ? 16.0 : 14.0);
+    return k;
+  };
+  int plain = 0;
+  for (int i = 0; i < 400; ++i) plain += round() == 0;
+  EXPECT_EQ(c.best_k(), 0);
+  EXPECT_GT(plain, 370);  // warm-up and backed-off probes cost a few rounds, the rest run plain
+
+  // The next probe (at most kReprobeMax rounds away) finds the change.
+  drafts_pay = true;
+  int spec = 0;
+  for (int i = 0; i < 400; ++i) spec += round() != 0;
+  EXPECT_NE(c.best_k(), 0);
+  EXPECT_GT(spec, 400 - SpecController::kReprobeMax - 20);
+}
+
+TEST(Speculative, AdaptiveGreedyIsExact) {
+  Loaded target = load(data("tiny_llama.gguf"));
+  const std::vector<TokenId> want = plain_greedy(target, kPrompt, 60);
+  Loaded other = load(data("tiny_qwen2.gguf"));
+  auto other_d = ModelDrafter::create(*other.tf, *other.kv, *other.model->tokenizer, *target.model->tokenizer);
+  ASSERT_TRUE(other_d.ok());
+  NgramDrafter ngram;
+  for (Drafter* d : {static_cast<Drafter*>(&ngram), static_cast<Drafter*>(other_d->get())}) {
+    for (int32_t k : {1, 4, 6}) {
+      SpeculativeStats st;
+      EXPECT_EQ(speculative(target, *d, kPrompt, 60, k, &st, {}, /*adaptive=*/true), want) << d->name() << k;
+      EXPECT_EQ(st.generated, 60);
+    }
+  }
+  EXPECT_EQ(target.kv->free_blocks(), target.kv->num_blocks());
+}
 
 TEST(Ngram, ProposesContinuationOfLatestMatch) {
   NgramDrafter d(3, 2);

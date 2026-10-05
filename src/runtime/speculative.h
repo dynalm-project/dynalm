@@ -81,8 +81,58 @@ class ModelDrafter final : public Drafter {
 };
 
 struct SpeculativeOptions {
-  int32_t draft_tokens = 4;  // k
+  int32_t draft_tokens = 4;  // k (the largest k when adaptive)
   SamplingParams sampling;   // greedy by default
+  // Choose k per round from measured output tokens/s, including k = 0 (plain
+  // decoding) when speculation does not pay off (P13, DD-062). Output is the
+  // same either way; only the speed changes.
+  bool adaptive = true;
+};
+
+// Picks k for each verification round from measured output rates. Arms are
+// {0, min(3, max_k), max_k}: plain decoding, a 4-row verification (the int8
+// decode path, DD-053) and the configured k. Each arm keeps exponentially
+// weighted tokens and milliseconds; their ratio is its output rate. After a
+// warm-up of every arm the best one runs. Then the least recently measured
+// other arm runs for kProbeRounds rounds, after kReprobeMin rounds at first.
+// The gap doubles (up to kReprobeMax) while probes keep confirming the best
+// arm and resets when one changes it, so the choice follows changing
+// acceptance (e.g. code vs prose) without paying for probes in steady state.
+// The first drafting round after plain rounds is not measured: a model
+// drafter spends it catching up on the tokens it skipped, a one-off cost of
+// switching rather than the arm's rate.
+class SpecController {
+ public:
+  static constexpr int32_t kWarmupRounds = 3;
+  static constexpr int32_t kReprobeMin = 16;
+  static constexpr int32_t kReprobeMax = 128;
+  static constexpr int32_t kProbeRounds = 3;
+  static constexpr double kAlpha = 0.25;
+
+  explicit SpecController(int32_t max_k);
+  int32_t next_k();
+  // One finished round: tokens emitted and wall time (drafting included).
+  void record(int32_t k, int32_t emitted, double ms);
+  int32_t best_k() const;
+  double rate(int32_t k) const;  // tokens per ms; 0 before any sample
+
+ private:
+  struct Arm {
+    int32_t k = 0;
+    double tok = 0, ms = 0;
+    int32_t samples = 0;
+    int64_t last_round = -1;
+  };
+  size_t best_index() const;
+  std::vector<Arm> arms_;
+  int64_t round_ = 0;
+  int32_t probe_left_ = 0;
+  size_t probe_arm_ = 0;
+  bool probing_ = false;     // a probe ran; judge it on the next choice
+  int32_t probe_best_k_ = 0;  // best arm when the probe started
+  int32_t interval_ = kReprobeMin;
+  int64_t next_probe_ = -1;  // round of the next probe; -1 until warm-up ends
+  int32_t last_k_ = 0;
 };
 
 struct SpeculativeStats {
@@ -90,6 +140,8 @@ struct SpeculativeStats {
   int64_t drafted = 0;
   int64_t accepted = 0;
   int32_t generated = 0;
+  int64_t plain_passes = 0;  // adaptive rounds that ran with k = 0
+  int32_t final_k = 0;       // the adaptive controller's choice at the end
   double acceptance() const { return drafted ? static_cast<double>(accepted) / static_cast<double>(drafted) : 0; }
   double tokens_per_pass() const {
     return target_passes ? static_cast<double>(generated - 1) / static_cast<double>(target_passes) : 0;

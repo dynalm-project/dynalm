@@ -1,6 +1,7 @@
 #include "runtime/speculative.h"
 
 #include <algorithm>
+#include <chrono>
 #include <numeric>
 #include <string>
 
@@ -91,6 +92,83 @@ void ModelDrafter::propose(std::span<const TokenId> ctx, int32_t k, std::vector<
   }
 }
 
+// --- SpecController ----------------------------------------------------------------
+
+SpecController::SpecController(int32_t max_k) {
+  for (int32_t k : {max_k, std::min(3, max_k), 0}) {
+    if (k < 0) continue;
+    if (std::none_of(arms_.begin(), arms_.end(), [&](const Arm& a) { return a.k == k; })) arms_.push_back({k});
+  }
+}
+
+double SpecController::rate(int32_t k) const {
+  for (const Arm& a : arms_) {
+    if (a.k == k) return a.ms > 0 ? a.tok / a.ms : 0;
+  }
+  return 0;
+}
+
+size_t SpecController::best_index() const {
+  size_t best = 0;
+  for (size_t i = 1; i < arms_.size(); ++i) {
+    if (rate(arms_[i].k) > rate(arms_[best].k)) best = i;
+  }
+  return best;
+}
+
+int32_t SpecController::best_k() const { return arms_[best_index()].k; }
+
+int32_t SpecController::next_k() {
+  for (const Arm& a : arms_) {
+    if (a.samples < kWarmupRounds) return a.k;
+  }
+  if (probe_left_ > 0) {
+    --probe_left_;
+    return arms_[probe_arm_].k;
+  }
+  const size_t best = best_index();
+  if (probing_) {  // a probe finished: back off while it confirms the best arm
+    probing_ = false;
+    interval_ = arms_[best].k == probe_best_k_ ? std::min(2 * interval_, kReprobeMax) : kReprobeMin;
+    next_probe_ = round_ + interval_;
+  }
+  if (next_probe_ < 0) next_probe_ = round_ + interval_;
+  if (arms_.size() > 1 && round_ >= next_probe_) {
+    size_t oldest = best == 0 ? 1 : 0;
+    for (size_t i = 0; i < arms_.size(); ++i) {
+      if (i != best && arms_[i].last_round < arms_[oldest].last_round) oldest = i;
+    }
+    probe_arm_ = oldest;
+    probe_left_ = kProbeRounds - 1;
+    probing_ = true;
+    probe_best_k_ = arms_[best].k;
+    return arms_[oldest].k;
+  }
+  return arms_[best].k;
+}
+
+void SpecController::record(int32_t k, int32_t emitted, double ms) {
+  const bool catch_up = k > 0 && last_k_ == 0;
+  last_k_ = k;
+  for (Arm& a : arms_) {
+    if (catch_up) {
+      if (a.k == k) a.last_round = round_;
+      continue;
+    }
+    if (a.k != k) continue;
+    if (a.samples == 0) {
+      a.tok = emitted;
+      a.ms = ms;
+    } else {
+      a.tok += kAlpha * (emitted - a.tok);
+      a.ms += kAlpha * (ms - a.ms);
+    }
+    ++a.samples;
+    a.last_round = round_;
+  }
+  ++round_;
+}
+
 // --- SpeculativeGenerator -------------------------------------------------------------
 
 Status SpeculativeGenerator::generate(std::span<const TokenId> prompt, const GenerateOptions& opts,
@@ -138,10 +216,17 @@ Status SpeculativeGenerator::generate(std::span<const TokenId> prompt, const Gen
   };
   emit(sampler.sample(std::span<float>(logits.data(), vocab), tokens));
 
+  SpecController ctrl(spec.draft_tokens);
+  using Clock = std::chrono::steady_clock;
   while (!stop) {
     // tokens[computed] is the last emitted token, not yet in the KV cache.
     const int32_t room = opts.max_new_tokens - st.generated;  // tokens we may still emit (>= 1)
-    drafter_.propose(tokens, std::min(spec.draft_tokens, room - 1), drafts);
+    const int32_t k = spec.adaptive ? ctrl.next_k() : spec.draft_tokens;
+    const Clock::time_point t0 = Clock::now();
+    const int32_t emitted_before = st.generated;
+    drafts.clear();
+    if (k > 0) drafter_.propose(tokens, std::min(k, room - 1), drafts);
+    if (k == 0) ++st.plain_passes;
     const auto nd = static_cast<int32_t>(drafts.size());
     std::vector<TokenId>& feed = drafts;  // reuse: [last token, drafts...]
     feed.insert(feed.begin(), tokens.back());
@@ -170,7 +255,12 @@ Status SpeculativeGenerator::generate(std::span<const TokenId> prompt, const Gen
     // Valid K/V: the fed last token and the accepted drafts. Roll back the rest.
     computed += accepted + 1;
     kv.truncate(computed);
+    if (spec.adaptive) {
+      ctrl.record(k, st.generated - emitted_before,
+                  std::chrono::duration<double, std::milli>(Clock::now() - t0).count());
+    }
   }
+  st.final_k = spec.adaptive ? ctrl.best_k() : spec.draft_tokens;
   if (stats_out) *stats_out = st;
   return Status::Ok();
 }

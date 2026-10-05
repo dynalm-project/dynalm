@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Performance program P13 (DD-062)
+- **Adaptive speculative decoding** (default for `dynalm run --spec`): k is chosen per round from
+  {0, 3, K} by measured output tok/s, so speculation switches off when it is slower and back on
+  when drafts start paying. Qwen2.5-1.5B: ngram drafting 11.5–15.2 → 15.3–17.1 tok/s (plain
+  15.7–17.5); a 0.5B draft keeps 19–20 tok/s on repetitive text. `--spec-fixed` keeps the old
+  behaviour. The stats line reports the chosen k and the number of passes without drafts.
+
 ### Performance program P12 (DD-061)
 - **`--policy balanced|latency|throughput`** (serve, benchmark). At c=64: throughput policy TTFT p50
   21 s → 3.8 s at the same tok/s, with ITL 340 → 616 ms; latency policy ITL 186 ms, TTFT 35 s.

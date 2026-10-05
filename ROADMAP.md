@@ -65,7 +65,8 @@ reports Before / After / Delta from measurement (method: [docs/performance.md](d
   Granite-MoE regions 1,857 → 313 per step, +5–7% tok/s at c=4/16 (DD-060)
 - [x] P12 — Scheduler policies `--policy latency|balanced|throughput`; aggregate tok/s is saturated at c ≥ 16, budgets
   trade TTFT vs ITL (c=64 TTFT 21 s → 3.8 s with throughput); adaptive boost measured and rejected (DD-061)
-- [ ] P13 — Adaptive speculation (judged on output tok/s)
+- [x] P13 — Adaptive speculation: k chosen from {0, 3, K} by measured tok/s with backed-off probes; ngram
+  recovers plain speed (fixed loses up to 28%), good drafts keep +18–24% (DD-062)
 - [ ] P14 — LTO / PGO / autotuning cache
 - [ ] P15 — AVX-512 / AMX (needs hardware or an emulator to verify)
 - [ ] P16 — CUDA (after the CPU planner is stable; needs an NVIDIA GPU to verify)
