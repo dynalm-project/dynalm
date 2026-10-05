@@ -141,6 +141,7 @@ Engine::~Engine() {
 
 void Engine::loop() {
   request_full_speed_thread();  // the scheduler thread also runs kernel chunks (DD-052)
+  pool_->pin_caller();
   // Throughput window: restarts whenever the engine wakes from idle.
   int64_t window_start = 0;
   uint64_t window_gen = 0, window_prefill = 0, prefill_total = 0;

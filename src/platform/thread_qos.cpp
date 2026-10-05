@@ -7,6 +7,9 @@
 #elif ENGINE_OS_MACOS
 #include <pthread.h>
 #include <pthread/qos.h>
+#elif ENGINE_OS_LINUX
+#include <pthread.h>
+#include <sched.h>
 #endif
 
 namespace engine {
@@ -31,6 +34,22 @@ void request_full_speed_thread() {
   SetThreadInformation(GetCurrentThread(), ThreadPowerThrottling, &s, sizeof(s));
 #elif ENGINE_OS_MACOS
   pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);
+#endif
+}
+
+bool pin_current_thread(int cpu) {
+  if (cpu < 0) return false;
+#if ENGINE_OS_WINDOWS
+  if (cpu >= 64) return false;
+  return SetThreadAffinityMask(GetCurrentThread(), DWORD_PTR{1} << cpu) != 0;
+#elif ENGINE_OS_LINUX
+  cpu_set_t set;
+  CPU_ZERO(&set);
+  CPU_SET(cpu, &set);
+  return pthread_setaffinity_np(pthread_self(), sizeof(set), &set) == 0;
+#else
+  (void)cpu;
+  return false;
 #endif
 }
 

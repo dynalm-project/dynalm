@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdlib>
 
 #include "common/timer.h"
+#include "platform/cpu_info.h"
 #include "platform/thread_qos.h"
 
 #if ENGINE_ARCH_X86_64
@@ -30,8 +32,12 @@ ThreadPool::ThreadPool(int num_threads) {
   const int workers = std::max(0, num_threads - 1);
   workers_.reserve(static_cast<size_t>(workers));
   for (int i = 0; i < workers; ++i) {
-    workers_.emplace_back([this] {
+    workers_.emplace_back([this, i] {
       request_full_speed_thread();  // compute threads must not be power-throttled (DD-052)
+      if (pinning_enabled()) {
+        const auto& cores = cpu_info().core_first_cpu;
+        if (static_cast<size_t>(i) + 1 < cores.size()) pin_current_thread(cores[static_cast<size_t>(i) + 1]);
+      }
       worker_loop();
     });
   }
@@ -86,6 +92,20 @@ void ThreadPool::worker_loop() {
     run_chunks();
     active_.fetch_sub(1, std::memory_order_acq_rel);
   }
+}
+
+bool ThreadPool::pinning_enabled() {
+  static const bool on = [] {
+    const char* v = std::getenv("DYNALM_PIN_THREADS");
+    return v && v[0] == '1';
+  }();
+  return on;
+}
+
+void ThreadPool::pin_caller() const {
+  if (!pinning_enabled()) return;
+  const auto& cores = cpu_info().core_first_cpu;
+  if (!cores.empty()) pin_current_thread(cores[0]);
 }
 
 void ThreadPool::parallel_for(size_t n, size_t grain, FunctionRef<void(size_t, size_t)> fn) {

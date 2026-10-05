@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Performance program P10 (DD-059)
+- **`CpuInfo::core_first_cpu`:** the first logical CPU of each physical core, P-cores first
+  (Windows, Linux).
+- **Opt-in pinning:** `DYNALM_PIN_THREADS=1` binds compute threads one per core. Off by default:
+  equal or slower on Windows in A/B runs.
+- **Thread-count sweep:** one thread per physical core is best (10 threads: 30.2 / 63.8 tok/s at
+  c=1 / c=8; adding SMT siblings is slower).
+
 ### Performance program P8 (DD-057)
 - **Prefill GEMM measured at 300–360 GFLOP/s** (~70–80% of this laptop's practical fp32 peak). The
   M-blocking hypothesis was refuted; no change. `bench_decode_matmul` now also covers M = 64–256.

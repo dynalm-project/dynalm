@@ -19,6 +19,7 @@
 #include <vector>
 #elif ENGINE_OS_LINUX
 #include <fstream>
+#include <map>
 #include <set>
 #include <sstream>
 #include <unistd.h>
@@ -141,6 +142,7 @@ void detect_topology_windows(CpuInfo& info) {
   int physical = 0, logical = 0;
   BYTE max_eff = 0, min_eff = 0xFF;
   std::vector<std::pair<BYTE, int>> cores;  // (efficiency class, logical count)
+  std::vector<std::pair<BYTE, int>> first;  // (efficiency class, first logical CPU in group 0)
   for (DWORD off = 0; off < len;) {
     auto* e = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buf.data() + off);
     if (e->Relationship == RelationProcessorCore) {
@@ -154,6 +156,11 @@ void detect_topology_windows(CpuInfo& info) {
       max_eff = std::max(max_eff, eff);
       min_eff = std::min(min_eff, eff);
       cores.emplace_back(eff, threads);
+      if (e->Processor.GroupCount >= 1 && e->Processor.GroupMask[0].Group == 0 && e->Processor.GroupMask[0].Mask) {
+        unsigned long bit = 0;
+        _BitScanForward64(&bit, e->Processor.GroupMask[0].Mask);
+        first.emplace_back(eff, static_cast<int>(bit));
+      }
     } else if (e->Relationship == RelationCache) {
       const CACHE_RELATIONSHIP& c = e->Cache;
       if (c.Level == 1 && c.Type == CacheData && info.l1d_bytes == 0) info.l1d_bytes = c.CacheSize;
@@ -164,6 +171,8 @@ void detect_topology_windows(CpuInfo& info) {
   }
   info.physical_cores = physical;
   info.logical_cores = logical;
+  std::stable_sort(first.begin(), first.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+  for (const auto& f : first) info.core_first_cpu.push_back(f.second);
   // EfficiencyClass: higher = more performant. Only meaningful when classes differ.
   if (max_eff != min_eff) {
     for (const auto& [eff, threads] : cores) {
@@ -209,12 +218,14 @@ int64_t parse_cache_size(const std::string& s) {
 void detect_topology_linux(CpuInfo& info) {
   info.logical_cores = static_cast<int>(sysconf(_SC_NPROCESSORS_ONLN));
   std::set<std::pair<int, int>> cores;  // (package, core)
+  std::map<std::pair<int, int>, int> first;  // core -> first logical CPU
   for (int cpu = 0; cpu < info.logical_cores; ++cpu) {
     const std::string base = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/topology/";
     const std::string pkg = read_first_line(base + "physical_package_id");
     const std::string core = read_first_line(base + "core_id");
     if (pkg.empty() || core.empty()) continue;
     cores.emplace(std::stoi(pkg), std::stoi(core));
+    first.emplace(std::make_pair(std::stoi(pkg), std::stoi(core)), cpu);
   }
   info.physical_cores = cores.empty() ? info.logical_cores : static_cast<int>(cores.size());
 
@@ -226,6 +237,15 @@ void detect_topology_linux(CpuInfo& info) {
     info.efficiency_cores = count_cpu_list(ecpus);
     info.performance_cores = info.physical_cores - info.efficiency_cores;
   }
+  // P-cores (hyper-threaded: a sibling list with two CPUs) first.
+  std::vector<std::pair<int, int>> order;  // (is_e_core, cpu)
+  for (const auto& [core, cpu] : first) {
+    const std::string sib =
+        read_first_line("/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/topology/thread_siblings_list");
+    order.emplace_back(info.performance_cores > 0 && count_cpu_list(sib) < 2 ? 1 : 0, cpu);
+  }
+  std::stable_sort(order.begin(), order.end());
+  for (const auto& o : order) info.core_first_cpu.push_back(o.second);
 
   for (int idx = 0; idx < 8; ++idx) {
     const std::string base = "/sys/devices/system/cpu/cpu0/cache/index" + std::to_string(idx) + "/";

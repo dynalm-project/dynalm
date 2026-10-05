@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace engine {
 
@@ -46,6 +47,10 @@ struct CpuInfo {
   int64_t l1d_bytes = 0;
   int64_t l2_bytes = 0;
   int64_t l3_bytes = 0;
+
+  // First logical CPU of each physical core, performance cores first (empty
+  // when unknown, e.g. macOS). Used to place one compute thread per core.
+  std::vector<int> core_first_cpu;
 };
 
 struct MemoryInfo {

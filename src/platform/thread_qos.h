@@ -18,5 +18,8 @@ namespace engine {
 void request_full_speed_process();
 // Hint for the calling thread; call at the start of every compute thread.
 void request_full_speed_thread();
+// Binds the calling thread to logical CPU `cpu` (Windows, Linux; no-op on
+// macOS, which has no hard affinity). False if the OS refused.
+bool pin_current_thread(int cpu);
 
 }  // namespace engine

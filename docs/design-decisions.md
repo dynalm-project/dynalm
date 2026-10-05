@@ -1566,3 +1566,28 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
 - **Alternatives:** formats with one scale per row (per-channel int8 weights, a per-token
   activation scale) would let int32 sums run across a whole row. That needs a requantized weight
   copy (memory) and new accuracy validation. Recorded for the future, not done.
+
+## DD-059: CPU topology: one thread per physical core (default kept); pinning is opt-in
+
+- **Decision (P10):**
+  - The default stays at one compute thread per physical core, letting the OS place them.
+  - Topology detection now records each physical core's first logical CPU, performance cores
+    first (`CpuInfo::core_first_cpu`; Windows `GetLogicalProcessorInformationEx`, Linux sysfs).
+  - `DYNALM_PIN_THREADS=1` binds the scheduler thread to core 0 and worker i to core i + 1
+    (`pin_current_thread`: Windows `SetThreadAffinityMask`, Linux `pthread_setaffinity_np`;
+    macOS has no hard affinity).
+  - Power-throttling opt-out (DD-052) stays the main placement lever on hybrid CPUs.
+- **Evidence:** Qwen2.5-0.5B Q4_K_M, prompt 128 / output 48, i7-1255U (2 P + 8 E cores,
+  12 threads).
+  - Thread count (output tok/s, c=1 / c=8): 2 → 21.6 / 42.3, 4 → 25.8 / 49.7,
+    6 → 27.5 / 54.2, 8 → 28.5 / 60.0, **10 → 30.2 / 63.8**, 12 (adds SMT siblings) → 28.6 / 61.3.
+  - Pinning, three back-to-back A/B pairs (c=1; c=8):
+    - off: 30.6, 30.3, 28.9; 78.3, 64.1, 63.9;
+    - on: 25.2, 30.2, 26.0; 56.3, 63.9, 60.0.
+
+    Never better: the dynamic chunk grabbing already balances P- and E-cores, and pinning stops
+    the OS from moving a worker off a core busy with interrupts or other processes.
+- **Reason for keeping the option:** on a dedicated bare-metal Linux server with isolated cores
+  the trade-off may differ. That could not be measured on this machine.
+- **NUMA:** not applicable to this single-socket machine. Per-node memory placement is left for
+  multi-socket hardware.
