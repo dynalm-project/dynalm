@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+### Performance program P1: measurement (DD-050)
+- **Scheduler step accounting** (always on): plan, prefix lookup, KV reservation, forward split by
+  decode-only / prefill-only / mixed steps, sampling, emit, prefix insert, and mean decode rows per step.
+  Prompt tokenization is timed in the engine.
+- **`Engine::set_profiling`:** per-op forward time plus thread-pool region count, region time, the
+  caller's tail wait and worker sleeps, all published in `EngineStats`.
+- **`platform/perf_counters`:**
+  - per-thread Linux hardware counters (cycles, instructions, LLC, L1D, branch misses, migrations);
+  - OS context switches and page faults;
+  - the CPU clock.
+  Unavailable counters read `null`, with the reason (Windows, macOS, VMs without a PMU).
+- **`bench/analysis`:** a measured DRAM read ceiling, a modelled decode-traffic estimate, and a
+  rule-based bottleneck classifier (COMPUTE / MEMORY / CACHE / SYNCHRONIZATION / DISPATCH /
+  LOAD_IMBALANCED / IO / MIXED).
+- **`dynalm benchmark`:**
+  - `--prompt-mix` for mixed prompt lengths;
+  - `--no-diag`;
+  - a per-point diagnostics line, and a `diag` object in the JSON lines.
+- **`tools/bench_report.py --svg DIR`:** the eight standard graphs (standard library only), plus a
+  diagnostics table.
+- **`tools/perf_sweep.sh quick|full`:** the measurement matrix (concurrency 1–64, context up to 4K,
+  mixed prompts, F16/Q8_0/Q4_K_M, 0.5B / 1.5B / 4B dense, MoE).
+- `ROADMAP.md` lists the performance program P1–P16.
+
 ### Interactive chat
 - `dynalm chat <model>` (and `dynalm run <model>` without `-p`): an Ollama-style multi-turn chat.
   - The model is loaded once. History is re-sent each turn and the prefix cache reuses it, so a follow-up

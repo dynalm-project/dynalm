@@ -36,6 +36,30 @@ welcome (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 - [x] Phase 27 — Speculative decoding preparation
 - [x] Phase 28 — GPU backend architecture
 
+## Performance program (P1–P16)
+
+Objective: maximize **aggregate output tokens/s under concurrency** on the same hardware and model,
+while keeping numerical correctness, p99 and memory under control. Phases run in order. Each phase
+reports Before / After / Delta from measurement (method: [docs/performance.md](docs/performance.md)).
+
+- [x] P1 — Measurement: engine/scheduler timing, thread-pool and OS/hardware counters, bandwidth
+  ceiling and traffic model, bottleneck classifier, sweep + 8 graphs (DD-050)
+- [ ] P2 — Execution planner: BatchPlanner, ExecutionPlan / PrefillPlan / DecodePlan / KernelPlan
+- [ ] P3 — Multi-row decode: specialized M = 1/2/4/8/16/32 decode matmuls (weights read once per tile)
+- [ ] P4 — Weight packing: persistent CPU execution layouts, built at load
+- [ ] P5 — GQA decode attention: each KV head read once per query group; dynamic split-K
+- [ ] P6 — Decode synchronization: fewer regions, barriers and hand-offs per step
+- [ ] P7 — KV: layout, traversal, block-size study, optional Q8 KV (with accuracy measurement)
+- [ ] P8 — Prefill GEMM: tiled, cache-blocked
+- [ ] P9 — INT8 activations / AVX-VNNI
+- [ ] P10 — CPU topology: affinity, P/E-core placement, NUMA
+- [ ] P11 — MoE: grouped expert execution
+- [ ] P12 — Adaptive scheduler: THROUGHPUT_FIRST / BALANCED / LATENCY_FIRST
+- [ ] P13 — Adaptive speculation (judged on output tok/s)
+- [ ] P14 — LTO / PGO / autotuning cache
+- [ ] P15 — AVX-512 / AMX (needs hardware or an emulator to verify)
+- [ ] P16 — CUDA (after the CPU planner is stable; needs an NVIDIA GPU to verify)
+
 ## Open items
 
 - In-flight prefix dedup: requests arriving in the same step as the first request with a new prefix recompute it (Phase 15/16 limitation).

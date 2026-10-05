@@ -15,7 +15,9 @@
 #include "loader/model_loader.h"
 #include "logging/log.h"
 #include "platform/cpu_info.h"
+#include "platform/perf_counters.h"
 #include "runtime/engine.h"
+#include "runtime/thread_pool.h"
 
 namespace engine::cli {
 namespace {
@@ -25,13 +27,16 @@ void usage() {
                "usage: dynalm benchmark <model> [options]\n"
                "  --concurrency LIST    e.g. 1,4,16 (default 1,4)\n"
                "  --prompt LIST         prompt lengths in tokens (default 128,512)\n"
+               "  --prompt-mix LIST     mixed lengths in one point: request i uses LIST[i %% n] tokens\n"
+               "                        (e.g. 64,512,2048; replaces --prompt)\n"
                "  --output LIST         output lengths in tokens (default 128)\n"
                "  --requests N          requests per point (default 2 x concurrency, min 4)\n"
                "  --url http://H:P      benchmark an OpenAI-compatible server instead of in-process\n"
                "  --model-name NAME     model field sent to --url (default: file stem)\n"
                "  -t, --threads N       compute threads (in-process)\n"
                "  -c, --ctx N           KV capacity in tokens (in-process, default 32768)\n"
-               "  --out FILE            append JSON lines (one per point)\n");
+               "  --out FILE            append JSON lines (one per point)\n"
+               "  --no-diag             skip the bandwidth probe and per-point diagnostics\n");
 }
 
 bool parse_list(std::string_view s, std::vector<int32_t>& out) {
@@ -56,7 +61,8 @@ bool parse_int(std::string_view s, int& out) {
 
 int cmd_benchmark(std::span<const std::string_view> args) {
   std::string path, url, model_name, out_file;
-  std::vector<int32_t> conc = {1, 4}, prompts = {128, 512}, outputs = {128};
+  std::vector<int32_t> conc = {1, 4}, prompts = {128, 512}, outputs = {128}, prompt_mix;
+  bool diag = true;
   int requests = 0, threads = 0, ctx = 32768;
   for (size_t i = 0; i < args.size(); ++i) {
     const std::string_view a = args[i];
@@ -64,6 +70,8 @@ int cmd_benchmark(std::span<const std::string_view> args) {
     bool ok = true;
     if (a == "--concurrency") ok = parse_list(value(), conc);
     else if (a == "--prompt") ok = parse_list(value(), prompts);
+    else if (a == "--prompt-mix") ok = parse_list(value(), prompt_mix);
+    else if (a == "--no-diag") diag = false;
     else if (a == "--output") ok = parse_list(value(), outputs);
     else if (a == "--requests") ok = parse_int(value(), requests);
     else if (a == "--url") url = value();
@@ -89,6 +97,8 @@ int cmd_benchmark(std::span<const std::string_view> args) {
   std::unique_ptr<Engine> eng;
   std::unique_ptr<LoadedModel> tok_model;
   std::unique_ptr<bench::Target> target;
+  bench::RunContext run_ctx;
+  std::unique_ptr<PerfCounters> perf;
   const Tokenizer* tokenizer = nullptr;
   if (url.empty()) {
     EngineOptions o;
@@ -103,6 +113,15 @@ int cmd_benchmark(std::span<const std::string_view> args) {
     eng = std::move(*e);
     tokenizer = eng->model().tokenizer.get();
     target = bench::make_engine_target(*eng);
+    if (diag) {
+      // A separate pool of the same size measures the DRAM read ceiling once.
+      {
+        ThreadPool probe(eng->threads());
+        run_ctx.peak_bw_gbs = bench::measure_read_bandwidth_gbs(probe);
+      }
+      perf = PerfCounters::open();  // after the engine has started its workers
+      run_ctx.perf = perf.get();
+    }
   } else {
 #if ENGINE_HAS_SERVER
     auto m = load_model(path);
@@ -129,22 +148,37 @@ int cmd_benchmark(std::span<const std::string_view> args) {
   const std::string hardware = cpu.brand + " (" + std::to_string(cpu.physical_cores) + "C/" +
                                std::to_string(cpu.logical_cores) + "T), " + "DynaLM " + ENGINE_VERSION_STRING;
   const std::string model = std::filesystem::path(path).filename().string();
-  std::printf("target: %s\nmodel: %s\nhardware: %s\n\n", target->name().c_str(), model.c_str(), hardware.c_str());
+  std::printf("target: %s\nmodel: %s\nhardware: %s\n", target->name().c_str(), model.c_str(), hardware.c_str());
+  if (run_ctx.peak_bw_gbs > 0) std::printf("measured DRAM read ceiling: %.1f GB/s\n", run_ctx.peak_bw_gbs);
+  if (perf && !perf->hardware_available()) {
+    std::printf("hardware counters: unavailable (%s)\n", perf->hardware_reason().c_str());
+  }
+  std::printf("\n");
   std::printf("%4s %6s %5s | %8s %8s | %8s %8s %8s | %7s %7s %7s | %7s %7s | %6s\n", "conc", "prompt", "out",
               "out t/s", "in t/s", "TTFT p50", "p90", "p99", "ITL p50", "p90", "p99", "TPOT50", "E2E p99", "err");
   std::ofstream jsonl;
   if (!out_file.empty()) jsonl.open(out_file, std::ios::app);
 
+  if (!prompt_mix.empty()) prompts = {0};  // one pass; the mix sets each request's length
   for (int32_t p : prompts) {
     for (int32_t o : outputs) {
       for (int32_t c : conc) {
-        bench::PointConfig cfg{c, p, o, requests};
-        bench::PointResult r = bench::run_point(*target, *tokenizer, cfg);
-        std::printf("%4d %6d %5d | %8.1f %8.1f | %8.0f %8.0f %8.0f | %7.1f %7.1f %7.1f | %7.1f %7.0f | %6d\n", c, p, o,
+        bench::PointConfig cfg{c, p, o, requests, prompt_mix};
+        bench::PointResult r = bench::run_point(*target, *tokenizer, cfg, run_ctx);
+        std::printf("%4d %6d %5d | %8.1f %8.1f | %8.0f %8.0f %8.0f | %7.1f %7.1f %7.1f | %7.1f %7.0f | %6d\n", c,
+                    r.cfg.prompt_tokens, o,
                     r.output_tok_s, r.input_tok_s, r.ttft_ms.p50, r.ttft_ms.p90, r.ttft_ms.p99, r.itl_ms.p50,
                     r.itl_ms.p90, r.itl_ms.p99, r.tpot_ms.p50, r.e2e_ms.p99, r.errors);
         std::fflush(stdout);
         if (!r.first_error.empty()) std::fprintf(stderr, "  first error: %s\n", r.first_error.c_str());
+        if (const bench::Diagnostics& d = r.diag; d.valid) {
+          const double tail = d.forward_ms > 0 && d.pool_tail_wait_ms >= 0 ? 100 * d.pool_tail_wait_ms / d.forward_ms : -1;
+          std::printf("     -> %s | decode step %.1f ms x %.1f rows | %.0f regions/step, tail wait %.0f%% | "
+                      "est. %.1f of %.1f GB/s | %.0f MHz\n",
+                      std::string(bench::bottleneck_name(d.bottleneck.primary)).c_str(), d.decode_step_ms,
+                      d.mean_decode_rows, d.steps ? d.pool_regions / static_cast<double>(d.steps) : 0.0, tail,
+                      d.est_decode_bw_gbs, d.peak_bw_gbs, d.cpu_mhz);
+        }
         if (jsonl) jsonl << bench::to_json(r, model, hardware) << "\n";
       }
     }

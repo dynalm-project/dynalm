@@ -7,6 +7,7 @@ add_library(engine_core STATIC
   api/openai.cpp
   backends/cpu/avx2/kernels_avx2.cpp
   backends/cpu/neon/kernels_neon.cpp
+  bench/analysis.cpp
   bench/loadgen.cpp
   backends/backend_registry.cpp
   backends/cpu/cpu_backend.cpp
@@ -41,6 +42,7 @@ add_library(engine_core STATIC
   prefix_cache/hash_prefix_cache.cpp
   prefix_cache/radix_prefix_cache.cpp
   platform/isa.cpp
+  platform/perf_counters.cpp
   platform/process_stats.cpp
   quant/dequant.cpp
   quant/gptq_awq.cpp
@@ -63,6 +65,9 @@ target_include_directories(engine_core PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_link_libraries(engine_core PUBLIC engine_options)
+if(WIN32)
+  target_link_libraries(engine_core PRIVATE powrprof)  # CallNtPowerInformation (CPU frequency)
+endif()
 target_compile_definitions(engine_core PUBLIC
   ENGINE_HAS_AVX2=$<BOOL:${ENABLE_AVX2}>
   ENGINE_HAS_AVX512=$<BOOL:${ENABLE_AVX512}>

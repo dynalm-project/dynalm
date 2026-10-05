@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cassert>
 
+#include "common/timer.h"
+
 #if ENGINE_ARCH_X86_64
 #include <immintrin.h>
 #endif
@@ -60,6 +62,7 @@ void ThreadPool::worker_loop() {
         cpu_relax();
         continue;
       }
+      sleeps_.fetch_add(1, std::memory_order_relaxed);
       std::unique_lock<std::mutex> lock(mu_);
       cv_.wait(lock, [&] {
         return epoch_.load(std::memory_order_acquire) != seen || stop_.load(std::memory_order_acquire);
@@ -76,10 +79,12 @@ void ThreadPool::parallel_for(size_t n, size_t grain, FunctionRef<void(size_t, s
   if (n == 0) return;
   grain = std::max<size_t>(grain, 1);
   if (workers_.empty() || n <= grain) {
+    if (stats_on_) ++stats_.inline_regions;
     fn(0, n);
     return;
   }
   assert(active_.load() == 0 && "parallel_for is not reentrant");
+  const int64_t t0 = stats_on_ ? now_ns() : 0;
   fn_ = &fn;
   n_ = n;
   grain_ = grain;
@@ -94,9 +99,16 @@ void ThreadPool::parallel_for(size_t n, size_t grain, FunctionRef<void(size_t, s
   cv_.notify_all();
 
   run_chunks();
+  const int64_t t_own = stats_on_ ? now_ns() : 0;
   // Wait for workers to finish their last chunk (they never block mid-job).
   while (active_.load(std::memory_order_acquire) != 0) cpu_relax();
   fn_ = nullptr;
+  if (stats_on_) {
+    const int64_t t1 = now_ns();
+    ++stats_.regions;
+    stats_.region_ns += t1 - t0;
+    stats_.tail_wait_ns += t1 - t_own;
+  }
 }
 
 }  // namespace engine

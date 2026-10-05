@@ -143,6 +143,11 @@ void Engine::loop() {
       wake_cv_.wait(lock, [&] { return stop_ || !scheduler_->idle(); });
       if (stop_) return;
     }
+    if (const bool want = want_profiling_.load(std::memory_order_relaxed); want != profiling_) {
+      profiling_ = want;
+      transformer_->set_profiling(want);
+      pool_->set_stats_enabled(want);
+    }
     const uint64_t gen_before = scheduler_->stats().tokens_generated;
     const int64_t t0 = now_ns();
     if (window_start == 0) window_start = t0;
@@ -172,6 +177,13 @@ void Engine::loop() {
     if (const PrefixCache* pc = scheduler_->prefix_cache()) st.prefix = pc->stats();
     st.kv_blocks_total = kv_->num_blocks();
     st.kv_blocks_used = kv_->used_blocks();
+    st.tokenize_ms = static_cast<double>(tokenize_ns_.load(std::memory_order_relaxed)) * 1e-6;
+    st.tokenized_requests = tokenized_.load(std::memory_order_relaxed);
+    st.profiling = profiling_;
+    if (profiling_) {
+      st.forward = transformer_->profile();
+      st.pool = pool_->stats();
+    }
     std::lock_guard<std::mutex> lock(stats_mu_);
     stats_ = st;
   }
@@ -255,7 +267,10 @@ Result<std::shared_ptr<RequestStream>> Engine::submit(std::vector<TokenId> token
 Result<std::shared_ptr<RequestStream>> Engine::generate_text(std::string_view prompt, bool parse_special,
                                                              const GenerateParams& params) {
   std::vector<TokenId> tokens;
+  const int64_t t0 = now_ns();
   ENGINE_RETURN_IF_ERROR(model_->tokenizer->encode(prompt, /*add_special=*/true, parse_special, tokens));
+  tokenize_ns_.fetch_add(now_ns() - t0, std::memory_order_relaxed);
+  tokenized_.fetch_add(1, std::memory_order_relaxed);
   return submit(std::move(tokens), params);
 }
 

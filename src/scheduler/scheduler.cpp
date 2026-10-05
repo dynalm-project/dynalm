@@ -164,7 +164,9 @@ void Scheduler::admit(int64_t now) {
     // prompt token's logits are needed).
     PrefixCache::Match match;
     if (prefix_cache_ && e.seq->num_computed() == 0) {
+      const int64_t t0 = now_ns();
       match = prefix_cache_->lookup(e.seq->tokens(), static_cast<int32_t>(e.seq->tokens().size()) - 1);
+      stats_.prefix_lookup_ms += static_cast<double>(now_ns() - t0) * 1e-6;
     }
     // Admission control: the remaining pending tokens plus one block of
     // headroom must fit now, so admitted sequences rarely need preemption.
@@ -215,6 +217,7 @@ bool Scheduler::preempt_one(const Entry* keep) {
 }
 
 bool Scheduler::step() {
+  const int64_t t_plan = now_ns();
   drain_incoming();
   const int64_t now = now_ns();
   expire_deadlines(now);
@@ -277,7 +280,9 @@ bool Scheduler::step() {
       int32_t n = std::min(e->seq->pending(), budget - used);
       if (!decode && config_.max_prefill_chunk > 0) n = std::min(n, config_.max_prefill_chunk);
       if (n <= 0) continue;
+      const int64_t t_kv = now_ns();
       const Status st = e->seq->reserve_kv(n);
+      stats_.kv_reserve_ms += static_cast<double>(now_ns() - t_kv) * 1e-6;
       if (st.code() == StatusCode::kResourceExhausted) {
         // Prefer dropping cached (unused) prefix blocks over preempting work.
         if (attempt < 64 && prefix_cache_ && prefix_cache_->evict(4) > 0) {
@@ -308,17 +313,38 @@ bool Scheduler::step() {
     break;
   }
 
-  if (batch_.empty()) return true;
+  if (batch_.empty()) {
+    stats_.plan_ms += static_cast<double>(now_ns() - t_plan) * 1e-6;
+    return true;
+  }
   size_t n_logits = 0;
   for (const SeqBatch& b : batch_) n_logits += b.want_logits ? 1 : 0;
   const auto vocab = static_cast<size_t>(model_.config().vocab_size);
   logits_.resize(n_logits * vocab);
+  const int64_t t_fwd = now_ns();
+  stats_.plan_ms += static_cast<double>(t_fwd - t_plan) * 1e-6;
   const Status st = model_.forward_batch(batch_, kv_, logits_);
+  const int64_t t_post = now_ns();
+  const double fwd_ms = static_cast<double>(t_post - t_fwd) * 1e-6;
+  stats_.forward_ms += fwd_ms;
+  if (stats_.last_prefill_rows == 0) {
+    ++stats_.steps_decode_only;
+    stats_.forward_decode_only_ms += fwd_ms;
+  } else if (stats_.last_decode_rows == 0) {
+    ++stats_.steps_prefill_only;
+    stats_.forward_prefill_only_ms += fwd_ms;
+  } else {
+    ++stats_.steps_mixed;
+    stats_.forward_mixed_ms += fwd_ms;
+  }
+  stats_.decode_rows_total += static_cast<uint64_t>(stats_.last_decode_rows);
+  stats_.prefill_rows_total += static_cast<uint64_t>(stats_.last_prefill_rows);
   ++stats_.steps;
   stats_.last_batch_seqs = static_cast<int32_t>(batch_.size());
   stats_.last_batch_rows = stats_.last_decode_rows + stats_.last_prefill_rows;
   stats_.tokens_computed += static_cast<uint64_t>(stats_.last_batch_rows);
 
+  int64_t insert_ns = 0, emit_ns = 0;
   size_t li = 0;
   for (size_t b = 0; b < batch_.size(); ++b) {
     Entry& e = *batch_owner_[b];
@@ -333,7 +359,9 @@ bool Scheduler::step() {
       // Offer newly completed (hence immutable) blocks for reuse.
       const int32_t full = e.seq->num_computed() / kv_.geometry().block_size;
       if (full > e.cached_blocks) {
+        const int64_t t0 = now_ns();
         prefix_cache_->insert(e.seq->tokens(), e.seq->block_table(), e.cached_blocks, full);
+        insert_ns += now_ns() - t0;
         e.cached_blocks = full;
       }
     }
@@ -345,13 +373,20 @@ bool Scheduler::step() {
     e.seq->append_token(next, tokenizer_);
     ++stats_.tokens_generated;
     if (e.on_event) {
+      const int64_t t0 = now_ns();
       RequestEvent ev;
       ev.request_id = e.id;
       ev.token = next;
       ev.status = e.seq->status();
       e.on_event(ev);
+      emit_ns += now_ns() - t0;
     }
   }
+  // Post-forward time = sampling + stop checks + cache inserts + callbacks.
+  const int64_t post_ns = now_ns() - t_post;
+  stats_.prefix_insert_ms += static_cast<double>(insert_ns) * 1e-6;
+  stats_.emit_ms += static_cast<double>(emit_ns) * 1e-6;
+  stats_.sample_ms += static_cast<double>(post_ns - insert_ns - emit_ns) * 1e-6;
   return true;
 }
 

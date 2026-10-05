@@ -111,7 +111,7 @@ if(ENABLE_SERVER)
 endif()
 
 engine_add_test(test_bench
-  test_bench.cpp)
+  test_bench.cpp test_bench_analysis.cpp)
 
 engine_add_test(test_config
   test_config.cpp)

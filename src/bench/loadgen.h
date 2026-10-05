@@ -13,7 +13,9 @@
 #include <string>
 #include <vector>
 
+#include "bench/analysis.h"
 #include "common/status.h"
+#include "platform/perf_counters.h"
 #include "runtime/engine.h"
 
 namespace engine::bench {
@@ -36,6 +38,8 @@ class Target {
   virtual RequestResult run(const std::string& prompt, int32_t max_tokens) = 0;
   // Process resource usage if the target runs in this process.
   virtual bool in_process() const { return false; }
+  // The engine behind an in-process target (internal stats), else null.
+  virtual Engine* engine() { return nullptr; }
 };
 
 std::unique_ptr<Target> make_engine_target(Engine& engine);
@@ -53,6 +57,34 @@ struct PointConfig {
   int32_t prompt_tokens = 128;
   int32_t output_tokens = 128;
   int32_t requests = 0;  // 0 = 2 * concurrency (min 4)
+  // Mixed workload: request i uses prompt_mix[i % size] tokens (overrides
+  // prompt_tokens, which then reports the mean).
+  std::vector<int32_t> prompt_mix;
+};
+
+// Measurement context shared by all points of a run.
+struct RunContext {
+  const PerfCounters* perf = nullptr;  // opened after the engine started its threads
+  double peak_bw_gbs = -1;             // measure_read_bandwidth_gbs()
+};
+
+// In-process diagnostics for one point: where the time went, counters, and
+// the bottleneck classification (DD-050). Durations are totals over the point.
+struct Diagnostics {
+  bool valid = false;
+  uint64_t steps = 0, steps_decode_only = 0, steps_prefill_only = 0, steps_mixed = 0;
+  double mean_decode_rows = 0;      // decode rows per step that had any
+  double decode_step_ms = 0;        // mean forward time of a decode-only step
+  double plan_ms = 0, prefix_lookup_ms = 0, kv_reserve_ms = 0, forward_ms = 0;
+  double forward_decode_only_ms = 0, forward_prefill_only_ms = 0, forward_mixed_ms = 0;
+  double sample_ms = 0, emit_ms = 0, prefix_insert_ms = 0, tokenize_ms = 0;
+  double queue_wait_mean_ms = 0;
+  std::vector<std::pair<std::string, double>> op_ms;  // per forward op (profiling)
+  double pool_regions = -1, pool_region_ms = -1, pool_tail_wait_ms = -1, pool_sleeps = -1;
+  PerfSample perf;
+  double cpu_mhz = -1;
+  double est_decode_bw_gbs = -1, peak_bw_gbs = -1;
+  Classification bottleneck;
 };
 
 struct PointResult {
@@ -67,6 +99,7 @@ struct PointResult {
   double rss_mb = 0;     // in-process only
   double cpu_util = 0;   // in-process: CPU seconds / wall / cores
   std::string first_error;
+  Diagnostics diag;
 };
 
 // Prompt text whose tokenization (by `tokenizer`) is exactly `tokens` long,
@@ -74,7 +107,8 @@ struct PointResult {
 // prefix cache).
 std::string make_prompt(const Tokenizer& tokenizer, int32_t tokens, int32_t request_index);
 
-PointResult run_point(Target& target, const Tokenizer& tokenizer, const PointConfig& cfg);
+PointResult run_point(Target& target, const Tokenizer& tokenizer, const PointConfig& cfg,
+                      const RunContext& ctx = {});
 
 // One JSON object (single line) per point, for tools/bench_report.py.
 std::string to_json(const PointResult& r, const std::string& model, const std::string& hardware);

@@ -23,6 +23,17 @@
 
 namespace engine {
 
+// Parallel-region accounting (DD-050), collected only while enabled: tells
+// dispatch-bound (many tiny regions) from imbalance/synchronization-bound
+// (the caller waiting at the end of a region for slower workers).
+struct ThreadPoolStats {
+  uint64_t regions = 0;         // parallel_for calls that used the workers
+  uint64_t inline_regions = 0;  // calls small enough to run on the caller alone
+  int64_t region_ns = 0;        // wall time of the parallel regions
+  int64_t tail_wait_ns = 0;     // caller idle after its own chunks, waiting for workers
+  uint64_t sleeps = 0;          // times a worker gave up spinning and slept (always counted)
+};
+
 class ThreadPool {
  public:
   // `num_threads` includes the calling thread; 1 = run inline.
@@ -37,6 +48,15 @@ class ThreadPool {
   // using every thread including the caller. Blocks until all chunks finish.
   // Not reentrant: fn must not call parallel_for on the same pool.
   void parallel_for(size_t n, size_t grain, FunctionRef<void(size_t, size_t)> fn);
+
+  // Statistics are owned by the thread that calls parallel_for (one scheduler
+  // thread); toggle and read them from that thread or while it is quiescent.
+  void set_stats_enabled(bool on) { stats_on_ = on; }
+  ThreadPoolStats stats() const {
+    ThreadPoolStats s = stats_;
+    s.sleeps = sleeps_.load(std::memory_order_relaxed);
+    return s;
+  }
 
  private:
   void worker_loop();
@@ -55,6 +75,10 @@ class ThreadPool {
   std::mutex mu_;
   std::condition_variable cv_;
   std::atomic<bool> stop_{false};
+
+  bool stats_on_ = false;
+  ThreadPoolStats stats_;
+  alignas(kCacheLineSize) std::atomic<uint64_t> sleeps_{0};
 };
 
 }  // namespace engine

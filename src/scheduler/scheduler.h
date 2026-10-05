@@ -100,6 +100,27 @@ struct SchedulerStats {
   double queue_ms_total = 0;
   double queue_ms_max = 0;
   uint64_t admitted = 0;
+
+  // Where step time goes, accumulated in ms (always on: a few clock reads per
+  // step). plan_ms covers cancellation, admission and batch building, and
+  // includes prefix_lookup_ms and kv_reserve_ms.
+  double plan_ms = 0;
+  double prefix_lookup_ms = 0;
+  double kv_reserve_ms = 0;
+  double forward_ms = 0;
+  double sample_ms = 0;         // sampling + stop/EOS checks
+  double emit_ms = 0;           // per-token callbacks (stream delivery)
+  double prefix_insert_ms = 0;  // offering completed blocks to the prefix cache
+  // Steps by composition, with their forward time, so steady-state decode can
+  // be read without prefill mixed in.
+  uint64_t steps_decode_only = 0;
+  uint64_t steps_prefill_only = 0;
+  uint64_t steps_mixed = 0;
+  double forward_decode_only_ms = 0;
+  double forward_prefill_only_ms = 0;
+  double forward_mixed_ms = 0;
+  uint64_t decode_rows_total = 0;
+  uint64_t prefill_rows_total = 0;
 };
 
 class Scheduler {

@@ -112,6 +112,13 @@ struct EngineStats {
   double generation_tok_s = 0;
   double prefill_tok_s = 0;
   uint64_t prefill_tokens = 0;  // prompt rows computed (excludes prefix-cache hits)
+  // Prompt tokenization on the submitting threads (DD-050).
+  double tokenize_ms = 0;
+  uint64_t tokenized_requests = 0;
+  // Filled only while profiling is on (Engine::set_profiling).
+  bool profiling = false;
+  ForwardProfile forward;
+  ThreadPoolStats pool;
 };
 
 class Engine {
@@ -141,6 +148,9 @@ class Engine {
   int64_t kv_bytes() const { return kv_->geometry().total_bytes(); }
   int64_t weight_bytes() const { return model_->weight_bytes; }
   int64_t kv_capacity_tokens() const;
+  // Per-op forward timing and thread-pool accounting (benchmarks). Takes
+  // effect at the next scheduler step; the counters keep accumulating.
+  void set_profiling(bool on) { want_profiling_.store(on, std::memory_order_relaxed); }
 
  private:
   Engine() = default;
@@ -168,6 +178,10 @@ class Engine {
   std::vector<std::weak_ptr<RequestStream>> live_;  // open streams (guarded by wake_mu_), ended at shutdown
   mutable std::mutex stats_mu_;
   EngineStats stats_;
+  std::atomic<bool> want_profiling_{false};
+  bool profiling_ = false;  // scheduler thread only
+  std::atomic<int64_t> tokenize_ns_{0};
+  std::atomic<uint64_t> tokenized_{0};
   metrics::Histogram step_ms_{metrics::latency_buckets_ms()};
 };
 

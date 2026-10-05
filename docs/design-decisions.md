@@ -1222,3 +1222,42 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   - `ThinkFilterTest` (3 tests) covers chunk splits, including a `</think>` split across deltas. That
     case was a bug the test found.
   - 360/360 Linux tests pass.
+
+## DD-050: Measure before optimizing: in-engine accounting, counters and a bottleneck classifier
+
+- **Decision:** Performance-program phase P1 adds measurement only. There are no optimizations.
+  - **Always-on scheduler accounting:** a few clock reads per step cover plan, prefix lookup, KV
+    reservation, forward (split by decode-only / prefill-only / mixed steps), sampling, emit and
+    prefix insert. Tokenization is timed in the engine.
+  - **Opt-in profiling** (`Engine::set_profiling`, applied on the scheduler thread): per-op
+    forward time, plus thread-pool region count, region time, the caller's **tail wait** at
+    region ends, and worker sleeps.
+  - **`platform/perf_counters`:**
+    - hardware counters opened **per thread** with `perf_event_open`, because inherited counters
+      only fold into the parent when a thread exits, and the worker pool never exits;
+    - OS accounting for context switches and faults;
+    - the CPU clock.
+  - **`bench/analysis`:**
+    - a measured DRAM read ceiling;
+    - a modelled bytes-per-decode-step (weights, MoE touched experts, KV);
+    - a rule-based classifier with fixed thresholds and priority (docs/performance.md).
+  - **Tooling:** `dynalm benchmark --prompt-mix`, per-point diagnostics in the JSON lines,
+    `tools/bench_report.py --svg` (eight graphs, standard library only) and `tools/perf_sweep.sh`.
+- **Reason:**
+  - The program's objective is aggregate output tok/s, and the existing benchmark measured only
+    the client side.
+  - Without per-stage time, thread-pool behavior and a bandwidth reference, any optimization
+    would be a guess. Example: the first probe showed 8-row decode steps costing 2.5× a 1-row
+    step while using about 20% of memory bandwidth. That points at the expand path, not at DRAM.
+- **Alternatives:**
+  - External profilers only (perf, VTune, WPA): necessary for deep dives, but they don't attach
+    to every benchmark point and aren't available everywhere.
+  - Always-on per-op profiling: costs ~1 µs per op per step, so it is kept opt-in.
+  - Real DRAM counters (uncore IMC): need root and bare metal. The model plus a measured ceiling
+    works everywhere and is labelled as an estimate.
+- **Tradeoffs:**
+  - Hardware counters are unavailable on this development machine (Windows; WSL2 exposes no
+    PMU), so CACHE_BOUND and IPC-based rules cannot fire here. They work on bare-metal Linux.
+  - The classifier is triage, not proof: thresholds are round numbers, and reports quote the
+    underlying figures.
+  - Windows `CallNtPowerInformation` often reports a nominal clock.
