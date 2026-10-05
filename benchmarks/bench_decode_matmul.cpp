@@ -78,7 +78,7 @@ int main(int argc, char** argv) {
     const Tensor& w0 = *c.layers.front();
     const int64_t n = w0.shape()[0], k = w0.shape()[1];
     const double wbytes = static_cast<double>(w0.view().span_bytes());
-    for (int64_t rows : {1, 2, 3, 4, 6, 8, 12, 16, 24, 32}) {
+    for (int64_t rows : {1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 64, 128, 256}) {
       auto x = Tensor::empty(DType::kF32, {rows, k});
       auto y = Tensor::empty(DType::kF32, {rows, n});
       for (int64_t i = 0; i < rows * k; ++i) x->data_as<float>()[i] = static_cast<float>(rng() % 2000) / 1000.0f - 1.0f;

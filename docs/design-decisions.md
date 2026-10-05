@@ -1520,3 +1520,32 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
     the per-head fp16 path. Results still depend only on a row's own data, so batch invariance
     (DD-031) holds.
   - fp32 conversion scratch is 16 × head_dim floats per thread.
+
+## DD-057: Prefill fp32 GEMM is near practical peak; no P8 change; the lever is int8 (P9)
+
+- **Decision (P8):** no change to the prefill GEMM. The hypothesis that it lacked M-blocking was
+  tested and refuted.
+- **Evidence:**
+  - `bench_profile` (Qwen2.5-0.5B Q4_K_M, 256-token prefill, 10 threads): 639 ms; FFN matmuls are
+    76% of it. Per op, over all 24 layers:
+
+    | op | time | GFLOP | GFLOP/s |
+    |---|---|---|---|
+    | gate+up | 304 ms | 107 | ~350 |
+    | down | 180 ms | 53.5 | ~300 |
+    | qkv | 39 ms | 12.7 | ~320 |
+    | attn_out | 32 ms | 9.9 | ~310 |
+
+  - `bench_decode_matmul` with DRAM-resident weights: the expand GEMM scales from ~290 GFLOP/s at
+    32 rows to ~330 at 64 and ~360 at 256 rows (`ffn_gate` 0.99 / 1.71 / 6.22 ms). Activations
+    are not re-streamed from L3 in a way that hurts at large M.
+  - A first reading of ~15 GFLOP/s was an arithmetic slip (×24 layers omitted). It is recorded
+    here because it nearly motivated the wrong optimization.
+- **Reason:**
+  - On this 15 W i7-1255U, practical all-core fp32 FMA throughput under sustained load is roughly
+    450 GFLOP/s: 2 P-cores at 32 FLOP/cycle and 8 E-cores at 16 FLOP/cycle, at ~3 GHz sustained.
+    The 4×3 tile reaches ~70–80% of that.
+  - Remaining fp32 headroom (tile shape, packing) is ~10–20%, while AVX-VNNI (`vpdpbusd`, 32 int8
+    multiply-adds per instruction) can roughly double matmul throughput. That is P9.
+- **Alternatives:** larger register tiles, or packed fp32 weight panels kept at load. Both are
+  bounded by the same FMA ceiling.

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Performance program P8 (DD-057)
+- **Prefill GEMM measured at 300–360 GFLOP/s** (~70–80% of this laptop's practical fp32 peak). The
+  M-blocking hypothesis was refuted; no change. `bench_decode_matmul` now also covers M = 64–256.
+
 ### Performance program P7 (DD-056)
 - **Block-run attention kernels** (`attn_scores_*`, `attn_accum_*` for generic, AVX2 and NEON). Each
   fp16 run is converted once per query group, and softmax uses the vectorized `exp_nonpos` (now

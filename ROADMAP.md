@@ -55,7 +55,8 @@ reports Before / After / Delta from measurement (method: [docs/performance.md](d
   only when workers sleep (−16% region cost); region fusion not justified (DD-055)
 - [x] P7 — KV: block-run attention kernels, per-group fp16 conversion, vector exp, dynamic split-K;
   4K-context attention 9.7 → 6.6 ms; block-size study (keep 16); Q8 KV deferred, not bandwidth-bound (DD-056)
-- [ ] P8 — Prefill GEMM: tiled, cache-blocked
+- [x] P8 — Prefill GEMM: measured at 300–360 GFLOP/s, ~70–80% of practical fp32 peak; M-blocking hypothesis
+  refuted; no change. The lever is int8/VNNI (DD-057)
 - [ ] P9 — INT8 activations / AVX-VNNI
 - [ ] P10 — CPU topology: affinity, P/E-core placement, NUMA (power-throttling opt-out already done: DD-052)
 - [ ] P11 — MoE: grouped expert execution
