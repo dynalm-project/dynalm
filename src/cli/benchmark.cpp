@@ -35,6 +35,7 @@ void usage() {
                "  --model-name NAME     model field sent to --url (default: file stem)\n"
                "  -t, --threads N       compute threads (in-process)\n"
                "  -c, --ctx N           KV capacity in tokens (in-process, default 32768)\n"
+               "  --int8-decode N       int8 activations for matmuls of <= N rows (in-process; 0 = off)\n"
                "  --out FILE            append JSON lines (one per point)\n"
                "  --no-diag             skip the bandwidth probe and per-point diagnostics\n");
 }
@@ -63,7 +64,7 @@ int cmd_benchmark(std::span<const std::string_view> args) {
   std::string path, url, model_name, out_file;
   std::vector<int32_t> conc = {1, 4}, prompts = {128, 512}, outputs = {128}, prompt_mix;
   bool diag = true;
-  int requests = 0, threads = 0, ctx = 32768;
+  int requests = 0, threads = 0, ctx = 32768, int8_rows = -1;
   for (size_t i = 0; i < args.size(); ++i) {
     const std::string_view a = args[i];
     auto value = [&]() -> std::string_view { return i + 1 < args.size() ? args[++i] : std::string_view(); };
@@ -78,6 +79,7 @@ int cmd_benchmark(std::span<const std::string_view> args) {
     else if (a == "--model-name") model_name = value();
     else if (a == "-t" || a == "--threads") ok = parse_int(value(), threads);
     else if (a == "-c" || a == "--ctx") ok = parse_int(value(), ctx);
+    else if (a == "--int8-decode") ok = parse_int(value(), int8_rows) && int8_rows >= 0;
     else if (a == "--out") out_file = value();
     else if (path.empty() && !a.starts_with("-")) path = a;
     else ok = false;
@@ -105,6 +107,7 @@ int cmd_benchmark(std::span<const std::string_view> args) {
     o.model_path = path;
     o.threads = threads;
     o.kv_tokens = ctx;
+    o.int8_decode_rows = int8_rows;
     auto e = Engine::create(o);
     if (!e.ok()) {
       std::fprintf(stderr, "benchmark: %s\n", e.status().to_string().c_str());

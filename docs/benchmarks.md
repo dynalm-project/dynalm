@@ -743,3 +743,36 @@ each phase runs.
 | ffn_gate [4864, 896] | q5_0 | −11.9% | −11.0% | −6.4% | −9.2% |
 | ffn_down [896, 4864] | q6_K | −26.4% | 0.0% | −2.8% | −23.7% |
 | lm_head [151936, 896] | q8_0 | −17.1% | −21.5% | −27.2% | −24.4% |
+
+## P3 (part 2) — int8-activation decode (DD-053)
+
+**Matmul level** (`bench_decode_matmul`, Qwen2.5-1.5B Q4_K_M weights from DRAM, 10 threads). Each
+cell is ms, with GB/s of weight bandwidth in brackets:
+
+| tensor | M | fused fp32 | expand fp32 | int8 |
+|---|---|---|---|---|
+| attn_q q4_K [1536, 1536] | 1 | 0.110 (12.0) | 0.125 (10.6) | **0.078 (17.0)** |
+| ffn_gate q4_K [8960, 1536] | 1 | 0.560 (13.8) | 0.697 (11.1) | **0.433 (17.9)** |
+| ffn_gate q4_K | 2 | 0.981 | 0.707 | **0.468** |
+| ffn_gate q4_K | 4 | 1.790 | 0.908 | **0.740** |
+| ffn_gate q4_K | 8 | 3.843 | **1.167** | 1.427 |
+| lm_head q6_K [151936, 1536] | 1 | 11.716 (16.3) | 17.520 | **9.981 (19.2)** |
+| lm_head q6_K | 4 | 38.668 | 22.869 | **14.481** |
+
+int8 is fastest up to M=4. From M=6 the fp32 GEMM wins, so the default threshold is 4.
+
+**End to end** (serving benchmark, prompt 128 / output 64, `results/p3-int8-{0,4}.jsonl`), output tok/s:
+
+| model | int8 | c=1 | c=2 | c=4 | c=8 | c=16 |
+|---|---|---|---|---|---|---|
+| Qwen2.5-0.5B Q4_K_M | off | 32.4 | 39.9 | 54.3 | 71.1 | 80.4 |
+| | on | 32.2 | **46.9 (+18%)** | **61.6 (+13%)** | 66.5* | 80.5 |
+| Qwen2.5-1.5B Q4_K_M | off | 10.0 | 12.8 | 17.1 | 21.9 | 25.3 |
+| | on | **11.4 (+14%)** | **15.9 (+24%)** | **19.5 (+14%)** | 22.5 | 25.3 |
+
+- **The c=8 cell (\*):** at 7 rows per step the int8 path isn't used, so it should be unaffected.
+  Repeated back to back, int8 off gave 87.2 / 72.4 tok/s and on gave 74.0 / 72.2: run-to-run noise
+  on this laptop (±15%) exceeds any effect.
+- **The 0.5B model at c=1:** most of its weights are Q5_0 and its LM head is Q8_0, whose fused M=1
+  kernels were already near bandwidth (decode step 25.3 → 24.4 ms).
+- **The 1.5B model (Q4_K):** the single-stream step drops from 76.9 to 62.8 ms (12.8 → 15.7 GB/s).

@@ -60,7 +60,12 @@ class CpuBackend final : public Backend {
   // Matmul path thresholds, GEMM K-blocking and attention strategy for the
   // current forward pass (DD-051). Defaults reproduce the pre-planner rules.
   KernelPlan plan_ = KernelPlan::defaults();
-  std::vector<float> split_scratch_;  // split-K attention partials (scheduler thread only)
+  std::vector<float> split_scratch_;
+  // int8 activations of the current decode matmul (scheduler thread only).
+  std::vector<ActBlockQ8> act_q8_;
+  // True when this tier has SIMD integer-dot kernels; the generic tier's are
+  // reference implementations, slower than its fused fp32 path.
+  bool int8_accelerated_ = false;  // split-K attention partials (scheduler thread only)
 
   void attend_range(const AttentionParams& p, size_t r, int32_t h, int64_t t0, int64_t t1, float* acc, float& mx_out,
                     double& sum_out);

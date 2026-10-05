@@ -45,6 +45,10 @@ struct EngineOptions {
   BackendKind backend = BackendKind::kCpu;  // DD-045: only CPU is built
   DType kv_dtype = DType::kF16;
   int32_t max_batch_tokens = 256;
+  // Max rows of a matmul that uses int8 activations (DD-053); -1 = default
+  // (KernelPlan, 4), 0 = never. 0 makes outputs independent of how requests
+  // are batched (DD-031); the int8 path is faster for 1-4 concurrent rows.
+  int32_t int8_decode_rows = -1;
   SchedulerConfig scheduler;
 };
 

@@ -162,6 +162,7 @@ dynalm run <model> -p <prompt> [options]
 | `-c, --ctx N` | Context / KV cache size in tokens (default 4096) |
 | `--batch N` | Max tokens per forward pass (default 256) |
 | `--kv f16\|f32` | KV cache precision (default f16) |
+| `--int8-decode N` | int8 activations for matmuls of ≤ N rows (default 4; 0 = off, making output independent of batching) |
 | `--backend cpu` | Compute backend (only `cpu` is built today) |
 | `--no-stream` | Print the answer at the end instead of word by word |
 
@@ -209,6 +210,7 @@ dynalm serve <model> [options]
 | `-c, --ctx N\|auto` | KV cache capacity in tokens (auto: sized from free RAM) |
 | `--batch N\|auto` | Max tokens per forward pass |
 | `--kv f16\|f32` | KV cache precision |
+| `--int8-decode N` | int8 activations for matmuls of ≤ N rows (default 4; 0 = off) |
 | `--max-active N` | Concurrent requests before answering 503 (default 64) |
 | `--http-threads N\|auto` | HTTP worker threads |
 | `--max-tokens N` | Default `max_tokens` per request (default 1024) |

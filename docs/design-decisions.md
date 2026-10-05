@@ -1347,3 +1347,60 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
     | tok/s before | 18.6 | 40.1 | 48.0 | 54.7 |
     | tok/s after | 31.5 | 71.1 | 78.9 | 88.5 |
     | change | +69% | +77% | +64% | +62% |
+
+## DD-053: int8 activations for decode-shaped matmuls (≤ 4 rows), except the FFN down projection
+
+- **Decision:**
+  - **Activation format:** for a matmul with at most `int8_decode_max_rows` rows (default 4), the
+    CPU backend quantizes each activation row into 32-value blocks: int8 codes, an fp32 scale, and
+    the code sum.
+  - **Kernels:** each weight row is computed with integer dot products against the packed weights
+    (`maddubs`/`madd`, 32 multiply-adds per instruction). Each weight block is unpacked once and
+    reused for up to 4 activation rows.
+  - **Formats:** Q8_0, Q4_0, Q5_0, Q4_K and Q6_K have kernels.
+    - The AVX2 tier accelerates them. The generic tier has scalar reference versions with the
+      identical integer arithmetic.
+    - Activation quantization is bit-identical across tiers (round-to-nearest-even).
+    - Other formats keep the fp32 paths.
+  - **Gating:** the path is used only on tiers with SIMD kernels (AVX2; NEON kernels are not written
+    yet). The FFN down projection always keeps fp32 activations (`int8_ffn_down = false`).
+  - **Control:** `--int8-decode N` (run/serve/benchmark), `EngineOptions::int8_decode_rows`, or
+    `DYNALM_INT8_DECODE_ROWS`. 0 turns it off.
+- **Reason:**
+  - **P1/P3 measurements:** single-row fused fp32 kernels converted every weight to fp32 and
+    reached only 7–14 GB/s on Q4_K layer weights, against a ~19 GB/s DRAM ceiling. Matmuls are
+    ~84% of decode time.
+  - **Integer dot speed:** 17–19 GB/s at M=1–2. It is the fastest path for every tensor up to M=4.
+    From M=6 the fp32 expand/GEMM path is faster, which sets the default threshold.
+  - **The `ffn_down` exclusion:** the gated activation feeding `ffn_down` carries outlier
+    channels. With it quantized, Qwen3-4B perplexity rose 5.4%; without it, 0.9%.
+- **Alternatives:**
+  - Per-256 activation blocks (as llama.cpp's Q8_K): coarser, so less accurate with outliers.
+  - Keep fp32 everywhere: leaves single-stream K-quant decode compute-bound.
+  - Per-model calibration at load: costs seconds of startup.
+  - VNNI (`dpbusd`): the P9 follow-up.
+- **Tradeoffs:**
+  - **Quantization error:** activations carry ~0.4% relative error per element, about 1000× the
+    summation-order noise.
+  - **Batch invariance:** a request decoded alone (1 row, int8) and inside a 6-row batch (fp32)
+    can now produce different greedy text. Bit-for-bit batch invariance (DD-031) holds only with
+    `--int8-decode 0`; the compatibility test runs that way. The default favours throughput, the
+    program's objective.
+  - **Large batches:** above 4 rows the int8 kernel loses to fp32 GEMM. A weight-row-tiled int8
+    kernel and VNNI could extend it (P9).
+- **Accuracy contract:**
+  - Default only if, on every measured model, perplexity changes by at most +1% and mean
+    KL(fp32 || int8) is at most 0.0025 nats.
+  - Measured with `bench_int8_accuracy`: 189–213 positions of fixed English text, teacher-forced,
+    plus a 65-token greedy run. "Noise floor" is the fp32 path with a different summation order.
+
+    | model (Q4_K_M) | noise floor PPL | int8 (no exclusion) PPL | int8 except ffn_down: PPL / mean KL / top-1 / greedy identical |
+    |---|---|---|---|
+    | Qwen2.5-0.5B | −0.01% | −0.07% | −0.01% / 0.0021 / 98.4% / 65 of 65 |
+    | Qwen2.5-1.5B | −0.01% | +0.72% | +0.54% / 0.0011 / 98.4% / 29 of 65 |
+    | Granite-3.1-1B-A400M | −0.01% | +0.76% | +0.76% / 0.0019 / 99.1% / 65 of 65 |
+    | Qwen3-4B | +0.06% | **+5.37%** | +0.90% / 0.0011 / 98.4% / 65 of 65 |
+- **Evidence:** see P3 in docs/benchmarks.md.
+  - Tests: 7 new (quantization bounds and tier identity; every format × M=1–4 against a
+    dequantized reference; the backend path against fp32).
+  - 392/392 pass under linux-release and ASAN/UBSAN.

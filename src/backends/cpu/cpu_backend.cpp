@@ -46,7 +46,9 @@ inline float apply_act(Activation a, float x) {
 }  // namespace
 
 CpuBackend::CpuBackend(ThreadPool& pool, CpuIsa isa)
-    : pool_(pool), k_(make_cpu_kernels(isa)), name_("CPU/" + std::string(isa_name(k_.isa))) {}
+    : pool_(pool), k_(make_cpu_kernels(isa)), name_("CPU/" + std::string(isa_name(k_.isa))) {
+  int8_accelerated_ = k_.isa == CpuIsa::kAvx2;  // NEON integer kernels: not written yet
+}
 
 Result<std::shared_ptr<Storage>> CpuBackend::allocate(size_t bytes) { return Storage::allocate_host(bytes); }
 
@@ -137,6 +139,36 @@ void CpuBackend::matmul(const TensorView& x, const TensorView& w, const TensorVi
   const VecDotFn vec_dot = k_.vec_dot_for(wt);
   const DequantFn dequant = k_.dequant_for(wt);
   const auto dot = k_.dot_f32;
+
+  // Decode-shaped batches: int8 activations + integer dot against the packed
+  // weights, each weight block unpacked once for up to 4 rows (DD-053). Only
+  // where this tier accelerates it, and only as the planner allows.
+  if (m <= plan_.int8_decode_max_rows && int8_accelerated_ && k % kActQ8Block == 0 &&
+      x.stride(0) == k * static_cast<int64_t>(sizeof(float))) {
+    if (const DotQ8RowsFn dot_rows = k_.dot_q8_rows_for(wt)) {
+      const int64_t nb = k / kActQ8Block;
+      act_q8_.resize(static_cast<size_t>(m * nb));
+      for (int64_t r = 0; r < m; ++r) k_.quantize_act(row_ptr<const float>(x, r), act_q8_.data() + r * nb, k);
+      const ActBlockQ8* act = act_q8_.data();
+      pool_.parallel_for(static_cast<size_t>(n), grain_for(static_cast<size_t>(n), pool_.size(), 4),
+                         [&](size_t begin, size_t end) {
+        float out[kDotRowsMax];
+        const ActBlockQ8* xr[kDotRowsMax];
+        for (size_t j = begin; j < end; ++j) {
+          const std::byte* src = wbase + static_cast<int64_t>(j) * w_row_bytes;
+          const float bj = b ? b[j] : 0.0f;
+          for (int64_t r0 = 0; r0 < m; r0 += kDotRowsMax) {
+            const int mm = static_cast<int>(std::min<int64_t>(kDotRowsMax, m - r0));
+            for (int t = 0; t < mm; ++t) xr[t] = act + (r0 + t) * nb;
+            dot_rows(src, xr, mm, k, out);
+            for (int t = 0; t < mm; ++t) row_ptr<float>(y, r0 + t)[j] = out[t] + bj;
+          }
+        }
+      });
+      return;
+    }
+  }
+
   // Few activation rows (decode): fused dequantize-dot straight from the
   // packed weights. Many rows (prefill): expand each weight row once and
   // reuse it for every activation row.

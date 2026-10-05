@@ -40,6 +40,7 @@ void usage() {
                "  -c, --ctx N           KV cache capacity in tokens (default 4096)\n"
                "  --batch N             max tokens per forward pass (default 256)\n"
                "  --kv f16|f32          KV cache dtype (default f16)\n"
+               "  --int8-decode N       int8 activations for matmuls of <= N rows (default 4, 0 = off)\n"
                "  --backend cpu         compute backend (GPU backends are not built yet)\n"
                "  --no-stream           print only the final text\n"
                "sampling (default: greedy; chat: temp 0.8, top-k 40, top-p 0.9, repeat-penalty 1.1):\n"
@@ -190,6 +191,7 @@ int cmd_run(std::span<const std::string_view> args) {
     else if (a == "-t" || a == "--threads") ok = parse_int(value(), threads);
     else if (a == "-c" || a == "--ctx") ok = parse_int(value(), ctx);
     else if (a == "--batch") ok = parse_int(value(), batch);
+    else if (a == "--int8-decode") ok = parse_int(value(), opts.int8_decode_rows) && opts.int8_decode_rows >= 0;
     else if (a == "--chat") chat = true;
     else if (a == "--raw") chat = false;
     else if (a == "--no-stream") stream = false;

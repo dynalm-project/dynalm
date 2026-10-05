@@ -464,6 +464,192 @@ void dequant_q6_K(const void* w, float* out, int64_t n) {
   }
 }
 
+// --- int8 activation path (DD-053) ----------------------------------------------
+// Weights stay packed; each block is unpacked once to int8 codes and multiplied
+// against up to four int8 activation rows held in registers. maddubs does 32
+// multiply-adds per instruction (vs 8 for an fp32 FMA), so the single-row case
+// stops being compute-bound and the multi-row case reuses every unpacked block.
+
+void quantize_act(const float* x, ActBlockQ8* out, int64_t n) {
+  const __m256 sign = _mm256_set1_ps(-0.0f);
+  const __m256i order = _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7);
+  for (int64_t b = 0; b < n / kActQ8Block; ++b, x += kActQ8Block) {
+    __m256 v0 = _mm256_loadu_ps(x), v1 = _mm256_loadu_ps(x + 8), v2 = _mm256_loadu_ps(x + 16),
+           v3 = _mm256_loadu_ps(x + 24);
+    __m256 mx = _mm256_max_ps(_mm256_max_ps(_mm256_andnot_ps(sign, v0), _mm256_andnot_ps(sign, v1)),
+                              _mm256_max_ps(_mm256_andnot_ps(sign, v2), _mm256_andnot_ps(sign, v3)));
+    __m128 m4 = _mm_max_ps(_mm256_castps256_ps128(mx), _mm256_extractf128_ps(mx, 1));
+    m4 = _mm_max_ps(m4, _mm_movehl_ps(m4, m4));
+    m4 = _mm_max_ss(m4, _mm_movehdup_ps(m4));
+    const float d = _mm_cvtss_f32(m4) / 127.0f;
+    const float id = d > 0 ? 1.0f / d : 0.0f;
+    const __m256 vid = _mm256_set1_ps(id);
+    constexpr int kRound = _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC;
+    const __m256i i0 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(v0, vid), kRound));
+    const __m256i i1 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(v1, vid), kRound));
+    const __m256i i2 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(v2, vid), kRound));
+    const __m256i i3 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(v3, vid), kRound));
+    // Sum of the codes, before packing.
+    const __m256i s = _mm256_add_epi32(_mm256_add_epi32(i0, i1), _mm256_add_epi32(i2, i3));
+    __m128i s4 = _mm_add_epi32(_mm256_castsi256_si128(s), _mm256_extracti128_si256(s, 1));
+    s4 = _mm_add_epi32(s4, _mm_shuffle_epi32(s4, 0x4E));
+    s4 = _mm_add_epi32(s4, _mm_shuffle_epi32(s4, 0xB1));
+    // 32 x int32 -> 32 x int8 in element order (packs interleave 128-bit lanes).
+    const __m256i p = _mm256_packs_epi16(_mm256_packs_epi32(i0, i1), _mm256_packs_epi32(i2, i3));
+    _mm256_storeu_si256(reinterpret_cast<__m256i*>(out[b].q), _mm256_permutevar8x32_epi32(p, order));
+    out[b].d = d;
+    out[b].sum = _mm_cvtsi128_si32(s4);
+  }
+}
+
+// 8 int32 partial sums of 32 products: unsigned 8-bit codes x signed int8.
+inline __m256i mul_sum_u8_s8(__m256i u, __m256i s) {
+  return _mm256_madd_epi16(_mm256_maddubs_epi16(u, s), _mm256_set1_epi16(1));
+}
+
+// Signed weight codes against M rows: |w| x (x with w's sign).
+template <int M>
+inline void accumulate_signed(__m256i wq, const ActBlockQ8* const* x, int64_t blk, __m256 scale_w, __m256* acc) {
+  const __m256i aw = _mm256_sign_epi8(wq, wq);
+  for (int r = 0; r < M; ++r) {
+    const ActBlockQ8& a = x[r][blk];
+    const __m256i xq = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(a.q));
+    const __m256i p = mul_sum_u8_s8(aw, _mm256_sign_epi8(xq, wq));
+    acc[r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(p), _mm256_mul_ps(scale_w, _mm256_set1_ps(a.d)), acc[r]);
+  }
+}
+
+template <int M>
+void dot_rows_q8_0_m(const void* w, const ActBlockQ8* const* x, int64_t n, float* out) {
+  const auto* b = static_cast<const BlockQ8_0*>(w);
+  __m256 acc[M];
+  for (int r = 0; r < M; ++r) acc[r] = _mm256_setzero_ps();
+  for (int64_t i = 0; i < n / kQK; ++i) {
+    const __m256i wq = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(b[i].qs));
+    accumulate_signed<M>(wq, x, i, _mm256_set1_ps(fp16_to_fp32(b[i].d)), acc);
+  }
+  for (int r = 0; r < M; ++r) out[r] = hsum(acc[r]);
+}
+
+template <int M>
+void dot_rows_q4_0_m(const void* w, const ActBlockQ8* const* x, int64_t n, float* out) {
+  const auto* b = static_cast<const BlockQ4_0*>(w);
+  const __m128i low4 = _mm_set1_epi8(0x0F);
+  const __m256i eight = _mm256_set1_epi8(8);
+  __m256 acc[M];
+  for (int r = 0; r < M; ++r) acc[r] = _mm256_setzero_ps();
+  for (int64_t i = 0; i < n / kQK; ++i) {
+    const __m128i bytes = _mm_loadu_si128(reinterpret_cast<const __m128i*>(b[i].qs));
+    const __m256i wq = _mm256_sub_epi8(
+        _mm256_set_m128i(_mm_and_si128(_mm_srli_epi16(bytes, 4), low4), _mm_and_si128(bytes, low4)), eight);
+    accumulate_signed<M>(wq, x, i, _mm256_set1_ps(fp16_to_fp32(b[i].d)), acc);
+  }
+  for (int r = 0; r < M; ++r) out[r] = hsum(acc[r]);
+}
+
+template <int M>
+void dot_rows_q5_0_m(const void* w, const ActBlockQ8* const* x, int64_t n, float* out) {
+  const auto* b = static_cast<const BlockQ5_0*>(w);
+  const __m128i low4 = _mm_set1_epi8(0x0F);
+  __m256 acc[M];
+  for (int r = 0; r < M; ++r) acc[r] = _mm256_setzero_ps();
+  for (int64_t i = 0; i < n / kQK; ++i) {
+    uint32_t qh;
+    std::memcpy(&qh, b[i].qh, 4);
+    const __m128i bytes = _mm_loadu_si128(reinterpret_cast<const __m128i*>(b[i].qs));
+    __m256i v = _mm256_set_m128i(_mm_and_si128(_mm_srli_epi16(bytes, 4), low4), _mm_and_si128(bytes, low4));
+    v = _mm256_or_si256(v, _mm256_and_si256(bytes_from_bits_32(qh), _mm256_set1_epi8(0x10)));
+    accumulate_signed<M>(_mm256_sub_epi8(v, _mm256_set1_epi8(16)), x, i, _mm256_set1_ps(fp16_to_fp32(b[i].d)), acc);
+  }
+  for (int r = 0; r < M; ++r) out[r] = hsum(acc[r]);
+}
+
+// Q4_K: unsigned codes 0..15 per 32-value sub-block, value = d*sc*q - dmin*m.
+template <int M>
+void dot_rows_q4_K_m(const void* w, const ActBlockQ8* const* x, int64_t n, float* out) {
+  const auto* b = static_cast<const BlockQ4_K*>(w);
+  const __m256i low4 = _mm256_set1_epi8(0x0F);
+  __m256 acc[M];
+  float corr[M];
+  for (int r = 0; r < M; ++r) {
+    acc[r] = _mm256_setzero_ps();
+    corr[r] = 0;
+  }
+  for (int64_t i = 0; i < n / kQK_K; ++i) {
+    const float d = fp16_to_fp32(b[i].d), dmin = fp16_to_fp32(b[i].dmin);
+    float sc[8], mn[8];
+    for (int j = 0; j < 8; ++j) {
+      uint8_t s, m;
+      get_scale_min_k4(j, b[i].scales, s, m);
+      sc[j] = d * s;
+      mn[j] = dmin * m;
+    }
+    for (int jp = 0; jp < 4; ++jp) {
+      const __m256i bytes = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(b[i].qs + 32 * jp));
+      const __m256i lo = _mm256_and_si256(bytes, low4);
+      const __m256i hi = _mm256_and_si256(_mm256_srli_epi16(bytes, 4), low4);
+      const int64_t blk = i * 8 + 2 * jp;
+      for (int r = 0; r < M; ++r) {
+        const ActBlockQ8& a0 = x[r][blk];
+        const ActBlockQ8& a1 = x[r][blk + 1];
+        const __m256i p0 = mul_sum_u8_s8(lo, _mm256_loadu_si256(reinterpret_cast<const __m256i*>(a0.q)));
+        const __m256i p1 = mul_sum_u8_s8(hi, _mm256_loadu_si256(reinterpret_cast<const __m256i*>(a1.q)));
+        acc[r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(p0), _mm256_set1_ps(sc[2 * jp] * a0.d), acc[r]);
+        acc[r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(p1), _mm256_set1_ps(sc[2 * jp + 1] * a1.d), acc[r]);
+        corr[r] += mn[2 * jp] * a0.d * static_cast<float>(a0.sum) + mn[2 * jp + 1] * a1.d * static_cast<float>(a1.sum);
+      }
+    }
+  }
+  for (int r = 0; r < M; ++r) out[r] = hsum(acc[r]) - corr[r];
+}
+
+// Q6_K: signed codes -32..31; each 32-value activation block spans two
+// 16-value weight scales (lanes 0-3 and 4-7 of the int32 partials).
+template <int M>
+void dot_rows_q6_K_m(const void* w, const ActBlockQ8* const* x, int64_t n, float* out) {
+  const auto* b = static_cast<const BlockQ6_K*>(w);
+  const __m256i low4 = _mm256_set1_epi8(0x0F), low2 = _mm256_set1_epi8(0x03), k32 = _mm256_set1_epi8(32);
+  __m256 acc[M];
+  for (int r = 0; r < M; ++r) acc[r] = _mm256_setzero_ps();
+  for (int64_t i = 0; i < n / kQK_K; ++i) {
+    const float d = fp16_to_fp32(b[i].d);
+    for (int part = 0; part < 2; ++part) {
+      const uint8_t* ql = b[i].ql + 64 * part;
+      const __m256i l0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ql));
+      const __m256i l1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ql + 32));
+      const __m256i h = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(b[i].qh + 32 * part));
+      auto hbits = [&](int shift) { return _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(h, shift), low2), 4); };
+      const __m256i q[4] = {
+          _mm256_sub_epi8(_mm256_or_si256(_mm256_and_si256(l0, low4), hbits(0)), k32),
+          _mm256_sub_epi8(_mm256_or_si256(_mm256_and_si256(l1, low4), hbits(2)), k32),
+          _mm256_sub_epi8(_mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(l0, 4), low4), hbits(4)), k32),
+          _mm256_sub_epi8(_mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(l1, 4), low4), hbits(6)), k32)};
+      const int8_t* sc = b[i].scales + 8 * part;
+      for (int g = 0; g < 4; ++g) {
+        const __m256 scale_w = _mm256_set_m128(_mm_set1_ps(d * sc[2 * g + 1]), _mm_set1_ps(d * sc[2 * g]));
+        accumulate_signed<M>(q[g], x, i * 8 + 4 * part + g, scale_w, acc);
+      }
+    }
+  }
+  for (int r = 0; r < M; ++r) out[r] = hsum(acc[r]);
+}
+
+#define DYNALM_DOT_ROWS(name)                                                                       \
+  void name(const void* w, const ActBlockQ8* const* x, int m, int64_t n, float* out) {             \
+    switch (m) {                                                                                    \
+      case 1: name##_m<1>(w, x, n, out); break;                                                     \
+      case 2: name##_m<2>(w, x, n, out); break;                                                     \
+      case 3: name##_m<3>(w, x, n, out); break;                                                     \
+      default: name##_m<4>(w, x, n, out); break;                                                    \
+    }                                                                                               \
+  }
+DYNALM_DOT_ROWS(dot_rows_q8_0)
+DYNALM_DOT_ROWS(dot_rows_q4_0)
+DYNALM_DOT_ROWS(dot_rows_q5_0)
+DYNALM_DOT_ROWS(dot_rows_q4_K)
+DYNALM_DOT_ROWS(dot_rows_q6_K)
+#undef DYNALM_DOT_ROWS
+
 }  // namespace
 
 bool register_avx2_kernels(CpuKernels& k) {
@@ -490,6 +676,12 @@ bool register_avx2_kernels(CpuKernels& k) {
   k.dequant[static_cast<size_t>(DType::kQ5_0)] = dequant_q5_0;
   k.dequant[static_cast<size_t>(DType::kQ4_K)] = dequant_q4_K;
   k.dequant[static_cast<size_t>(DType::kQ6_K)] = dequant_q6_K;
+  k.quantize_act = quantize_act;
+  k.dot_q8_rows[static_cast<size_t>(DType::kQ8_0)] = dot_rows_q8_0;
+  k.dot_q8_rows[static_cast<size_t>(DType::kQ4_0)] = dot_rows_q4_0;
+  k.dot_q8_rows[static_cast<size_t>(DType::kQ5_0)] = dot_rows_q5_0;
+  k.dot_q8_rows[static_cast<size_t>(DType::kQ4_K)] = dot_rows_q4_K;
+  k.dot_q8_rows[static_cast<size_t>(DType::kQ6_K)] = dot_rows_q6_K;
   return true;
 }
 

@@ -27,7 +27,7 @@ extern "C" void on_signal(int) { g_signals.fetch_add(1); }
 constexpr OptionSpec kServeOptions[] = {
     {"model"},        {"host"},        {"port"},           {"model-id"},         {"threads"},
     {"ctx"},          {"batch"},       {"kv"},             {"http-threads"},     {"max-tokens"},
-    {"max-active"},   {"request-timeout"}, {"temperature"}, {"backend"}, {"shutdown-timeout"}, {"disable-admin", false},
+    {"max-active"},   {"request-timeout"}, {"temperature"}, {"backend"}, {"shutdown-timeout"}, {"disable-admin", false}, {"int8-decode"},
 };
 
 void usage() {
@@ -41,6 +41,8 @@ void usage() {
                "  -c, --ctx N|auto        KV cache capacity in tokens (auto: from free RAM)\n"
                "  --batch N|auto          max tokens per forward pass (auto: 256)\n"
                "  --kv f16|f32            KV cache dtype (default f16)\n"
+               "  --int8-decode N         int8 activations for matmuls of <= N rows (default 4, 0 = off;\n"
+               "                          off makes outputs independent of batching, DD-053)\n"
                "  --backend cpu           compute backend (GPU backends are not built yet)\n"
                "  --max-active N          concurrent requests before 503 (default 64)\n"
                "  --http-threads N|auto   HTTP workers (auto: max-active + 8)\n"
@@ -89,6 +91,7 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
     else if (a == "-t" || a == "--threads") ok = parse_int_or_auto(value(), threads);
     else if (a == "-c" || a == "--ctx") ok = parse_int_or_auto(value(), ctx);
     else if (a == "--batch") ok = parse_int_or_auto(value(), batch);
+    else if (a == "--int8-decode") ok = parse_int(value(), eo.int8_decode_rows) && eo.int8_decode_rows >= 0;
     else if (a == "--http-threads") ok = parse_int_or_auto(value(), http_threads);
     else if (a == "--max-tokens") ok = parse_int(value(), max_tokens);
     else if (a == "--max-active") ok = parse_int(value(), max_active);

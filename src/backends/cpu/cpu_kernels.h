@@ -24,6 +24,24 @@ using VecDotFn = float (*)(const void* w, const float* x, int64_t n);
 // Row conversion of `n` elements of the slot's dtype to fp32.
 using DequantFn = void (*)(const void* w, float* out, int64_t n);
 
+// --- int8 activation path for decode (P3, DD-053) ---
+// An activation row quantized in blocks of 32: x[i] ~= d * q[i], with q in
+// [-127, 127] and `sum` = sum(q) (folds the weight formats' offsets and minima
+// into one integer term).
+struct ActBlockQ8 {
+  float d;
+  int32_t sum;
+  int8_t q[32];
+};
+static_assert(sizeof(ActBlockQ8) == 40);
+inline constexpr int kActQ8Block = 32;
+// Quantizes n (multiple of 32) fp32 values into n / 32 blocks.
+using QuantizeActFn = void (*)(const float* x, ActBlockQ8* out, int64_t n);
+// out[r] = dot(weight row w, activation row x[r]) for r < m (1 <= m <= 4):
+// each weight block is unpacked once and reused for the m rows.
+inline constexpr int kDotRowsMax = 4;
+using DotQ8RowsFn = void (*)(const void* w, const ActBlockQ8* const* x, int m, int64_t n, float* out);
+
 struct CpuKernels {
   CpuIsa isa = CpuIsa::kGeneric;
   float (*dot_f32)(const float* a, const float* b, int64_t n) = nullptr;
@@ -45,8 +63,14 @@ struct CpuKernels {
   std::array<VecDotFn, static_cast<size_t>(DType::kCount)> vec_dot{};
   std::array<DequantFn, static_cast<size_t>(DType::kCount)> dequant{};
 
+  // int8 activation path: entries are null for types without an integer kernel
+  // (the backend then uses vec_dot / dequant).
+  QuantizeActFn quantize_act = nullptr;
+  std::array<DotQ8RowsFn, static_cast<size_t>(DType::kCount)> dot_q8_rows{};
+
   VecDotFn vec_dot_for(DType t) const { return vec_dot[static_cast<size_t>(t)]; }
   DequantFn dequant_for(DType t) const { return dequant[static_cast<size_t>(t)]; }
+  DotQ8RowsFn dot_q8_rows_for(DType t) const { return dot_q8_rows[static_cast<size_t>(t)]; }
 };
 
 // Fills every entry with the portable implementation.

@@ -5,6 +5,7 @@
 // a stack buffer (no full-row fp32 materialization).
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 #include "backends/cpu/cpu_kernels.h"
@@ -154,6 +155,132 @@ float vec_dot_q6_K(const void* w, const float* x, int64_t n) {
   return sum;
 }
 
+// --- int8 activation path (DD-053) -------------------------------------------
+// Reference integer arithmetic: weight codes times int8 activation codes,
+// summed exactly in int32 per sub-block, then scaled once. The AVX2 tier runs
+// the same integer sums with SIMD; only the fp32 accumulation order differs.
+
+void quantize_act(const float* x, ActBlockQ8* out, int64_t n) {
+  for (int64_t b = 0; b < n / kActQ8Block; ++b, x += kActQ8Block) {
+    float amax = 0;
+    for (int i = 0; i < kActQ8Block; ++i) amax = std::max(amax, std::fabs(x[i]));
+    const float d = amax / 127.0f;
+    const float id = d > 0 ? 1.0f / d : 0.0f;
+    int32_t sum = 0;
+    for (int i = 0; i < kActQ8Block; ++i) {
+      // Round to nearest, ties to even: what _mm256_round_ps(..., NEAREST) does.
+      const auto q = static_cast<int32_t>(std::nearbyint(x[i] * id));
+      out[b].q[i] = static_cast<int8_t>(std::clamp(q, -127, 127));
+      sum += out[b].q[i];
+    }
+    out[b].d = d;
+    out[b].sum = sum;
+  }
+}
+
+// Integer dot of 32 weight codes (already offset-free, signed) with a block.
+inline int32_t idot32(const int8_t* wq, const ActBlockQ8& a) {
+  int32_t s = 0;
+  for (int i = 0; i < 32; ++i) s += static_cast<int32_t>(wq[i]) * a.q[i];
+  return s;
+}
+
+void dot_rows_q8_0(const void* w, const ActBlockQ8* const* x, int m, int64_t n, float* out) {
+  const auto* b = static_cast<const BlockQ8_0*>(w);
+  for (int r = 0; r < m; ++r) {
+    float acc = 0;
+    for (int64_t i = 0; i < n / kQK; ++i) acc += fp16_to_fp32(b[i].d) * x[r][i].d * static_cast<float>(idot32(b[i].qs, x[r][i]));
+    out[r] = acc;
+  }
+}
+
+void dot_rows_q4_0(const void* w, const ActBlockQ8* const* x, int m, int64_t n, float* out) {
+  const auto* b = static_cast<const BlockQ4_0*>(w);
+  for (int r = 0; r < m; ++r) {
+    float acc = 0;
+    for (int64_t i = 0; i < n / kQK; ++i) {
+      int8_t q[32];
+      for (int j = 0; j < 16; ++j) {
+        q[j] = static_cast<int8_t>((b[i].qs[j] & 0x0F) - 8);
+        q[j + 16] = static_cast<int8_t>((b[i].qs[j] >> 4) - 8);
+      }
+      acc += fp16_to_fp32(b[i].d) * x[r][i].d * static_cast<float>(idot32(q, x[r][i]));
+    }
+    out[r] = acc;
+  }
+}
+
+void dot_rows_q5_0(const void* w, const ActBlockQ8* const* x, int m, int64_t n, float* out) {
+  const auto* b = static_cast<const BlockQ5_0*>(w);
+  for (int r = 0; r < m; ++r) {
+    float acc = 0;
+    for (int64_t i = 0; i < n / kQK; ++i) {
+      uint32_t qh;
+      std::memcpy(&qh, b[i].qh, 4);
+      int8_t q[32];
+      for (int j = 0; j < 16; ++j) {
+        q[j] = static_cast<int8_t>(((b[i].qs[j] & 0x0F) | (((qh >> j) & 1) << 4)) - 16);
+        q[j + 16] = static_cast<int8_t>(((b[i].qs[j] >> 4) | (((qh >> (j + 16)) & 1) << 4)) - 16);
+      }
+      acc += fp16_to_fp32(b[i].d) * x[r][i].d * static_cast<float>(idot32(q, x[r][i]));
+    }
+    out[r] = acc;
+  }
+}
+
+// Q4_K: sub-block j (32 values) of a super-block = d*sc_j*q - dmin*m_j, q in
+// 0..15; low nibbles of qs[32*(j/2) ..] hold even j, high nibbles odd j.
+void dot_rows_q4_K(const void* w, const ActBlockQ8* const* x, int m, int64_t n, float* out) {
+  const auto* b = static_cast<const BlockQ4_K*>(w);
+  for (int r = 0; r < m; ++r) {
+    float acc = 0;
+    for (int64_t i = 0; i < n / kQK_K; ++i) {
+      const float d = fp16_to_fp32(b[i].d), dmin = fp16_to_fp32(b[i].dmin);
+      for (int j = 0; j < 8; ++j) {
+        uint8_t sc, mn;
+        get_scale_min_k4(j, b[i].scales, sc, mn);
+        const uint8_t* qs = b[i].qs + 32 * (j / 2);
+        const ActBlockQ8& a = x[r][i * 8 + j];
+        int32_t s = 0;
+        for (int t = 0; t < 32; ++t) s += ((j & 1) ? (qs[t] >> 4) : (qs[t] & 0x0F)) * a.q[t];
+        acc += a.d * (d * sc * static_cast<float>(s) - dmin * mn * static_cast<float>(a.sum));
+      }
+    }
+    out[r] = acc;
+  }
+}
+
+// Q6_K: value e of a super-block = d * scales[e / 16] * (q - 32), q in 0..63.
+void dot_rows_q6_K(const void* w, const ActBlockQ8* const* x, int m, int64_t n, float* out) {
+  const auto* b = static_cast<const BlockQ6_K*>(w);
+  for (int r = 0; r < m; ++r) {
+    float acc = 0;
+    for (int64_t i = 0; i < n / kQK_K; ++i) {
+      int8_t q[256];
+      for (int p = 0; p < 2; ++p) {
+        const uint8_t* ql = b[i].ql + 64 * p;
+        const uint8_t* qh = b[i].qh + 32 * p;
+        for (int l = 0; l < 32; ++l) {
+          q[128 * p + l] = static_cast<int8_t>(((ql[l] & 0xF) | (((qh[l] >> 0) & 3) << 4)) - 32);
+          q[128 * p + 32 + l] = static_cast<int8_t>(((ql[l + 32] & 0xF) | (((qh[l] >> 2) & 3) << 4)) - 32);
+          q[128 * p + 64 + l] = static_cast<int8_t>(((ql[l] >> 4) | (((qh[l] >> 4) & 3) << 4)) - 32);
+          q[128 * p + 96 + l] = static_cast<int8_t>(((ql[l + 32] >> 4) | (((qh[l] >> 6) & 3) << 4)) - 32);
+        }
+      }
+      const float d = fp16_to_fp32(b[i].d);
+      for (int g = 0; g < 8; ++g) {
+        const ActBlockQ8& a = x[r][i * 8 + g];
+        for (int h = 0; h < 2; ++h) {
+          int32_t s = 0;
+          for (int t = 0; t < 16; ++t) s += q[32 * g + 16 * h + t] * a.q[16 * h + t];
+          acc += a.d * d * b[i].scales[2 * g + h] * static_cast<float>(s);
+        }
+      }
+    }
+    out[r] = acc;
+  }
+}
+
 // Universal fallback: expand 256 elements at a time on the stack.
 template <DType T>
 float vec_dot_chunked(const void* w, const float* x, int64_t n) {
@@ -198,6 +325,12 @@ void register_generic_kernels(CpuKernels& k) {
   set(DType::kQ5_0, vec_dot_q5_0, dequant_ref<DType::kQ5_0>);
   set(DType::kQ4_K, vec_dot_q4_K, dequant_ref<DType::kQ4_K>);
   set(DType::kQ6_K, vec_dot_q6_K, dequant_ref<DType::kQ6_K>);
+  k.quantize_act = quantize_act;
+  k.dot_q8_rows[static_cast<size_t>(DType::kQ8_0)] = dot_rows_q8_0;
+  k.dot_q8_rows[static_cast<size_t>(DType::kQ4_0)] = dot_rows_q4_0;
+  k.dot_q8_rows[static_cast<size_t>(DType::kQ5_0)] = dot_rows_q5_0;
+  k.dot_q8_rows[static_cast<size_t>(DType::kQ4_K)] = dot_rows_q4_K;
+  k.dot_q8_rows[static_cast<size_t>(DType::kQ6_K)] = dot_rows_q6_K;
   set(DType::kQ4_1, vec_dot_chunked<DType::kQ4_1>, dequant_ref<DType::kQ4_1>);
   set(DType::kQ5_1, vec_dot_chunked<DType::kQ5_1>, dequant_ref<DType::kQ5_1>);
   set(DType::kQ8_1, vec_dot_chunked<DType::kQ8_1>, dequant_ref<DType::kQ8_1>);

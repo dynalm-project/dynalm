@@ -87,6 +87,10 @@ class Compat : public ::testing::TestWithParam<CompatCase> {
     o.threads = 2;
     o.kv_tokens = 2048;
     o.max_batch_tokens = 64;
+    // Batch invariance (DD-031) is a property of the fp32 decode path; the
+    // int8 path (DD-053) trades it for speed and is checked for accuracy
+    // separately (test_int8_decode, bench_int8_accuracy).
+    o.int8_decode_rows = 0;
     auto e = Engine::create(o);  // 1. loading
     ASSERT_TRUE(e.ok()) << e.status().to_string();
     eng = std::move(*e);

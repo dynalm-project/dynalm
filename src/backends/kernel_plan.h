@@ -34,6 +34,15 @@ struct KernelPlan {
   int32_t expand_min_rows = 2;
   // GEMM K-slice width (multiple of 256; 0 = no K-blocking).
   int32_t gemm_k_block = 1024;
+  // Matmuls with at most this many rows use int8 activations and integer
+  // dot products where the backend accelerates them (DD-053); 0 = never.
+  // Default 4: the measured crossover with the fp32 expand path, and within
+  // the accuracy contract (perplexity <= +1%, mean KL <= 0.0025 nats).
+  int32_t int8_decode_max_rows = 4;
+  // Whether the FFN down projection may use int8 activations. Its input (the
+  // gated activation) carries the largest outlier channels: with it, Qwen3-4B
+  // perplexity rose 5.4%; without it, 0.9% (DD-053).
+  bool int8_ffn_down = false;
 
   // --- attention ---
   // Separate decisions for full-causal and sliding-window layers: a window
@@ -43,8 +52,8 @@ struct KernelPlan {
   AttentionStrategy attention_window = AttentionStrategy::kAuto;
   int32_t attention_chunk = 256;  // split-K chunk length in tokens
 
-  // Defaults, with the tuning overrides DYNALM_MATMUL_EXPAND_MIN and
-  // DYNALM_GEMM_KC applied (read once per process).
+  // Defaults, with the tuning overrides DYNALM_MATMUL_EXPAND_MIN,
+  // DYNALM_GEMM_KC and DYNALM_INT8_DECODE_ROWS applied (read once per process).
   static const KernelPlan& defaults();
 };
 

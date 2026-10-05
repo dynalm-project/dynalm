@@ -45,7 +45,8 @@ reports Before / After / Delta from measurement (method: [docs/performance.md](d
 - [x] P1 — Measurement: engine/scheduler timing, thread-pool and OS/hardware counters, bandwidth
   ceiling and traffic model, bottleneck classifier, sweep + 8 graphs (DD-050)
 - [x] P2 — Execution planner: BatchPlanner → ExecutionPlan / KernelPlan, per-step decisions in one place (DD-051)
-- [ ] P3 — Multi-row decode: specialized M = 1/2/4/8/16/32 decode matmuls (weights read once per tile)
+- [x] P3 — Multi-row decode: 4×3 fp32 GEMM tile; int8-activation integer-dot kernels for M ≤ 4 that
+  unpack each weight block once per 4 rows (DD-053). Open: weight-row-tiled int8 for M > 4, NEON integer kernels
 - [ ] P4 — Weight packing: persistent CPU execution layouts, built at load
 - [ ] P5 — GQA decode attention: each KV head read once per query group; dynamic split-K
 - [ ] P6 — Decode synchronization: fewer regions, barriers and hand-offs per step

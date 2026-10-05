@@ -6,7 +6,8 @@
 // y[M, n] = x[M, k] . w^T for M = 1..32 on each matmul path the planner can
 // choose (KernelPlan): `fused` = per-row dequantize-dot from the packed
 // weights; `expand` = dequantize weight panels to fp32 once, then the GEMM
-// micro-kernel over all M rows. Reports p50 time, GFLOP/s and the effective
+// micro-kernel over all M rows; `int8` = int8 activations + integer dot
+// against the packed weights (DD-053). Reports p50 time, GFLOP/s and the effective
 // weight bandwidth, so the M at which each path wins is measured, not assumed.
 // Each iteration uses the next layer's copy of the tensor, so the working set
 // is the whole model's weights for that role (far larger than the LLC), as in
@@ -70,8 +71,8 @@ int main(int argc, char** argv) {
   CpuBackend be(pool, select_best_isa(cpu_info().features));
   std::printf("cpu: %s, %d threads, %s\nmodel: %s\n\n", cpu_info().brand.c_str(), threads,
               std::string(be.name()).c_str(), argv[1]);
-  std::printf("%-9s %-6s %-12s %3s | %9s %8s %7s | %9s %8s %7s | %s\n", "tensor", "type", "shape", "M", "fused ms",
-              "GFLOP/s", "GB/s", "expand ms", "GFLOP/s", "GB/s", "best");
+  std::printf("%-9s %-6s %-14s %3s | %9s %7s | %9s %7s | %9s %7s | %s\n", "tensor", "type", "shape", "M", "fused ms",
+              "GB/s", "expand ms", "GB/s", "int8 ms", "GB/s", "best");
   std::mt19937 rng(3);
   for (const Case& c : cases) {
     const Tensor& w0 = *c.layers.front();
@@ -81,10 +82,11 @@ int main(int argc, char** argv) {
       auto x = Tensor::empty(DType::kF32, {rows, k});
       auto y = Tensor::empty(DType::kF32, {rows, n});
       for (int64_t i = 0; i < rows * k; ++i) x->data_as<float>()[i] = static_cast<float>(rng() % 2000) / 1000.0f - 1.0f;
-      double ms[2];
-      for (int path = 0; path < 2; ++path) {
+      double ms[3];
+      for (int path = 0; path < 3; ++path) {
         KernelPlan kp = KernelPlan::defaults();
-        kp.expand_min_rows = path == 0 ? 1 << 30 : 1;  // 0: always fused, 1: always expand
+        kp.expand_min_rows = path == 1 ? 1 : 1 << 30;  // 0: fused, 1: expand, 2: int8
+        kp.int8_decode_max_rows = path == 2 ? 64 : 0;
         be.set_kernel_plan(kp);
         size_t next = 0;
         const auto s = bench::run([&] { be.matmul(*x, *c.layers[next++ % c.layers.size()], nullptr, *y); },
@@ -92,10 +94,13 @@ int main(int argc, char** argv) {
         ms[path] = s.p50 * 1e-6;
       }
       const double flop = 2.0 * static_cast<double>(rows) * n * k;
-      std::printf("%-9s %-6s %-12s %3lld | %9.3f %8.1f %7.1f | %9.3f %8.1f %7.1f | %s\n", c.name.c_str(),
+      (void)flop;
+      const int best = ms[0] <= ms[1] ? (ms[0] <= ms[2] ? 0 : 2) : (ms[1] <= ms[2] ? 1 : 2);
+      static constexpr const char* kNames[] = {"fused", "expand", "int8"};
+      std::printf("%-9s %-6s %-14s %3lld | %9.3f %7.1f | %9.3f %7.1f | %9.3f %7.1f | %s\n", c.name.c_str(),
                   std::string(dtype_name(w0.dtype())).c_str(), w0.shape().to_string().c_str(),
-                  static_cast<long long>(rows), ms[0], flop / ms[0] * 1e-6, wbytes / ms[0] * 1e-6, ms[1],
-                  flop / ms[1] * 1e-6, wbytes / ms[1] * 1e-6, ms[0] <= ms[1] ? "fused" : "expand");
+                  static_cast<long long>(rows), ms[0], wbytes / ms[0] * 1e-6, ms[1], wbytes / ms[1] * 1e-6, ms[2],
+                  wbytes / ms[2] * 1e-6, kNames[best]);
     }
   }
   return 0;

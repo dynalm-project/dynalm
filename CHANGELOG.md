@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Performance program P3: multi-row decode (DD-053)
+- **int8-activation decode kernels** (AVX2; scalar references) for Q8_0, Q4_0, Q5_0, Q4_K and Q6_K:
+  integer dot products against packed weights, each block unpacked once for up to 4 rows.
+  - Default for matmuls of ≤ 4 rows, except the FFN down projection.
+  - Speed: 17–19 GB/s at M=1–2. Qwen2.5-1.5B Q4_K_M serving +14% (c=1), +24% (c=2), +14% (c=4).
+  - Accuracy contract: perplexity within +1% and mean KL ≤ 0.0025 on 4 models.
+  - `--int8-decode N` / `EngineOptions::int8_decode_rows` / `DYNALM_INT8_DECODE_ROWS`; 0 restores
+    bit-exact batch invariance.
+- **New tools:** `bench_int8_accuracy` (perplexity, KL, top-1 and greedy agreement against fp32,
+  with a summation-order noise floor) and an `int8` column in `bench_decode_matmul`.
+- `Transformer::set_kernel_base`, and a per-site int8 switch for the down projection.
+
 ### Performance program P2 + throttling fix
 - **Execution planner (DD-051):** `src/execution/BatchPlanner` decides per step the phase, shape and
   `KernelPlan`. The `KernelPlan` holds the matmul expand threshold, GEMM K-block, and the attention

@@ -104,6 +104,11 @@ Result<std::unique_ptr<Engine>> Engine::create(EngineOptions opts) {
   ENGINE_ASSIGN_OR_RETURN(e->kv_, KvBlockPool::create(kv_geometry_for(c, opts.kv_dtype, 16, kv_tokens), *e->backend_));
   ENGINE_ASSIGN_OR_RETURN(e->transformer_,
                           Transformer::create(c, e->model_->weights, *e->backend_, opts.max_batch_tokens));
+  if (opts.int8_decode_rows >= 0) {
+    KernelPlan base = KernelPlan::defaults();
+    base.int8_decode_max_rows = opts.int8_decode_rows;
+    e->transformer_->set_kernel_base(base);
+  }
   e->scheduler_ = std::make_unique<Scheduler>(*e->transformer_, *e->kv_, *e->model_->tokenizer, opts.scheduler);
   e->core_ = std::make_shared<Core>();
   e->core_->sched = e->scheduler_.get();

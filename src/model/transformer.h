@@ -71,6 +71,8 @@ class Transformer {
 
   // Plans batches for this model on this backend (DD-051).
   const BatchPlanner& planner() const { return *planner_; }
+  // Replaces the planner's base kernel settings (before serving starts).
+  void set_kernel_base(const KernelPlan& base);
 
   void set_profiling(bool on) { profiling_ = on; }
   const ForwardProfile& profile() const { return profile_; }
@@ -109,6 +111,7 @@ class Transformer {
   Backend& backend_;
   int32_t max_batch_ = 0;
   std::unique_ptr<BatchPlanner> planner_;
+  KernelPlan kernels_;  // applied for the current forward pass
 
   TensorView tok_embd_, output_norm_, output_norm_b_, lm_head_;
   std::vector<float> rope_freq_factors_;

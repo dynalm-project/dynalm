@@ -45,6 +45,10 @@ Result<std::unique_ptr<Transformer>> Transformer::create(const ModelConfig& conf
   return t;
 }
 
+void Transformer::set_kernel_base(const KernelPlan& base) {
+  planner_ = std::make_unique<BatchPlanner>(config_, planner_->hardware(), base);
+}
+
 Result<TensorView> Transformer::f32_vector(const Tensor& t) {
   Tensor f = t;
   if (t.dtype() != DType::kF32) {
@@ -395,11 +399,12 @@ Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& c
   }
   const auto m = static_cast<int64_t>(batch_tokens_.size());
   // How this exact batch runs on this hardware (DD-051).
-  if (plan) {
-    backend_.set_kernel_plan(plan->kernels);
-  } else {
-    backend_.set_kernel_plan(planner_->plan(seqs).kernels);
-  }
+  kernels_ = plan ? plan->kernels : planner_->plan(seqs).kernels;
+  backend_.set_kernel_plan(kernels_);
+  // The down projection may run without int8 activations (outlier channels).
+  KernelPlan down_kernels = kernels_;
+  if (!kernels_.int8_ffn_down) down_kernels.int8_decode_max_rows = 0;
+  const bool switch_for_down = down_kernels.int8_decode_max_rows != kernels_.int8_decode_max_rows;
   const std::span<const TokenId> tokens = batch_tokens_;
   const std::span<const int32_t> positions = batch_pos_;
   const std::span<const int32_t> row_seq = batch_seq_;
@@ -511,7 +516,9 @@ Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& c
       backend_.activation(c.activation, ff_b, ff_b);
       mark(ForwardOp::kAct);
     }
+    if (switch_for_down) backend_.set_kernel_plan(down_kernels);
     backend_.matmul(ff_b, L.w_down, present(L.b_down) ? &L.b_down : nullptr, o);
+    if (switch_for_down) backend_.set_kernel_plan(kernels_);
     if (present(L.post_ffn_norm)) backend_.rms_norm(o, L.post_ffn_norm, c.norm_eps, o);
     if (c.residual_scale != 1.0f) backend_.scale(o, c.residual_scale);
     backend_.add(x, o, x);
