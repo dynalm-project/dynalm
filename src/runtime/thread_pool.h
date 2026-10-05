@@ -79,6 +79,7 @@ class ThreadPool {
   bool stats_on_ = false;
   ThreadPoolStats stats_;
   alignas(kCacheLineSize) std::atomic<uint64_t> sleeps_{0};
+  alignas(kCacheLineSize) std::atomic<int> sleepers_{0};  // workers blocked on cv_
 };
 
 }  // namespace engine

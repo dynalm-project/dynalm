@@ -69,10 +69,17 @@ void ThreadPool::worker_loop() {
         continue;
       }
       sleeps_.fetch_add(1, std::memory_order_relaxed);
-      std::unique_lock<std::mutex> lock(mu_);
-      cv_.wait(lock, [&] {
-        return epoch_.load(std::memory_order_acquire) != seen || stop_.load(std::memory_order_acquire);
-      });
+      // Announce before re-checking under the lock: with the publisher's
+      // seq_cst epoch increment and sleeper check, either the publisher sees
+      // this sleeper and notifies, or this thread sees the new epoch (DD-055).
+      sleepers_.fetch_add(1, std::memory_order_seq_cst);
+      {
+        std::unique_lock<std::mutex> lock(mu_);
+        cv_.wait(lock, [&] {
+          return epoch_.load(std::memory_order_seq_cst) != seen || stop_.load(std::memory_order_acquire);
+        });
+      }
+      sleepers_.fetch_sub(1, std::memory_order_seq_cst);
       spins = 0;
     }
     seen = e;
@@ -96,13 +103,15 @@ void ThreadPool::parallel_for(size_t n, size_t grain, FunctionRef<void(size_t, s
   grain_ = grain;
   next_.store(0, std::memory_order_relaxed);
   active_.store(static_cast<int>(workers_.size()), std::memory_order_relaxed);
-  {
-    // Publishing under the mutex means a worker that just checked the
-    // predicate cannot miss this wake-up.
-    std::lock_guard<std::mutex> lock(mu_);
-    epoch_.fetch_add(1, std::memory_order_release);
+  // Spinning workers see the epoch directly. Only when some worker sleeps
+  // (between steps, or after a long op) is the mutex + notify needed; taking
+  // the lock before notifying means a worker between its predicate check and
+  // its wait cannot miss the wake-up (DD-055).
+  epoch_.fetch_add(1, std::memory_order_seq_cst);
+  if (sleepers_.load(std::memory_order_seq_cst) > 0) {
+    { std::lock_guard<std::mutex> lock(mu_); }
+    cv_.notify_all();
   }
-  cv_.notify_all();
 
   run_chunks();
   const int64_t t_own = stats_on_ ? now_ns() : 0;

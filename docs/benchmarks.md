@@ -788,3 +788,14 @@ int8 is fastest up to M=4. From M=6 the fp32 GEMM wins, so the default threshold
 
 The first version (grouping without sub-groups) measured 26.4 ms at 128 tokens, a +16% regression.
 One decode row left 2 tasks for 10 threads. The sub-group split removed it.
+
+## P6 — fork/join cost (`bench_thread_pool`, 10 threads)
+
+| case | before p50 / p99 µs | after p50 / p99 µs |
+|---|---|---|
+| empty region, back to back | 2.5 / 66 | 2.1 / 109 |
+| tiny body | 3.0 / 7.8 | 2.4 / 12 |
+
+The p99 values are OS preemption and vary run to run. A Qwen2.5-0.5B decode step runs ~207
+regions, so dispatch is ~0.5 ms of ~23 ms. The measured `sleep_for(2 ms)` took ~15.5 ms: Windows'
+default 15.6 ms timer resolution, which matters for any code that sleeps.

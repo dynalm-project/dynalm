@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Performance program P6 (DD-055)
+- **`bench_thread_pool`** measures fork/join: 2.5 µs p50 at 10 threads, ~2% of a 0.5B decode step.
+- **The thread pool locks and notifies only when a worker sleeps:** a seq_cst handshake; region
+  cost −16%, TSAN-clean.
+
 ### Performance program P4–P5 (DD-054)
 - **GQA-grouped attention:** each (row, KV head) task serves its whole query-head group, so K/V
   is fetched once per group; heads split into sub-groups when tasks are fewer than threads.

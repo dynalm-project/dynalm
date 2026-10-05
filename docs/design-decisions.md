@@ -1456,3 +1456,27 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   K-quant unpacking. The P1 gap was mostly the power-throttling artifact. A packed layout would
   not address a measured bottleneck now, so it is deferred and re-evaluated with P9 (int8/VNNI for
   larger batches), where a packed int8 layout may pay off.
+
+## DD-055: Decode synchronization: measured small; wake-ups only for sleeping workers
+
+- **Decision (P6):** `ThreadPool::parallel_for` publishes a job with a sequentially consistent
+  epoch increment. It takes the mutex and notifies only when the new `sleepers_` count says a
+  worker is blocked.
+  - Workers announce themselves before re-checking the epoch under the lock (a two-flag
+    handshake), so no wake-up is lost.
+  - Fusing the q/k/v and gate/up matmuls into shared regions was evaluated and not done.
+- **Reason:** `bench_thread_pool` (10 threads, i7-1255U) measured the actual fork/join cost.
+  - Back-to-back regions, the case inside a forward pass: 2.5 µs p50 (p99 66 µs, OS preemption).
+  - With 207 regions per Qwen2.5-0.5B decode step, that is ~0.5 ms of a 23 ms step (~2%).
+  - The thread-pool tail wait reported by P1 (5–10% of forward time) comes mostly from uneven
+    P-core/E-core progress and preemption (P10 territory), not from dispatch.
+- **Evidence:**
+  - Region cost 2.5 → 2.1 µs p50 (−16%); small body 3.0 → 2.4 µs. End to end that is ≤ 0.1 ms
+    per step, below this laptop's run-to-run noise.
+  - TSAN: 393/393.
+- **Alternatives:**
+  - Region fusion (q/k/v, gate/up): it would save ~48 regions × ~2 µs ≈ 0.1 ms per step, and
+    needs the int8 path wired into `matmul_many`. Not justified by the measurement.
+  - Lock-free work stealing: no measured contention to remove.
+- **Tradeoffs:** none measurable. The handshake relies on seq_cst ordering, which is documented
+  next to the code.

@@ -51,7 +51,8 @@ reports Before / After / Delta from measurement (method: [docs/performance.md](d
   and every format costs the same per step, so unpacking is not the bottleneck (DD-054). Revisit with P9
 - [x] P5 — GQA decode attention: one K/V fetch per query group, head sub-groups for small batches;
   4K-context decode −21% (DD-054). Dynamic split-K chunking moves to P7
-- [ ] P6 — Decode synchronization: fewer regions, barriers and hand-offs per step
+- [x] P6 — Decode synchronization: measured fork/join at 2.5 µs (~2% of a step); wake-up lock and notify
+  only when workers sleep (−16% region cost); region fusion not justified (DD-055)
 - [ ] P7 — KV: layout, traversal, block-size study, optional Q8 KV (with accuracy measurement)
 - [ ] P8 — Prefill GEMM: tiled, cache-blocked
 - [ ] P9 — INT8 activations / AVX-VNNI
