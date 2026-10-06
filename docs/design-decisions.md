@@ -2065,3 +2065,111 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
     - `/v1/models` reports `id: smollm2:135m`;
     - SSE streaming works;
     - `stop` drains the server.
+
+## DD-071: DynaCore IR: inference-typed SSA graph, captured by a recording Device
+
+- **Decision:**
+  - DynaCore has an IR (`dynacore/ir/`, [dynacore-ir.md](dynacore-ir.md)). It is an
+    execution-ordered list of ops over SSA values.
+    - **Types:** kind (tensor, weight, kv, index), any DType including block-quantized
+      formats, a static or symbolic shape, a layout (row-major, strided, blocked, packed,
+      paged) and a device.
+    - **Ops:** first-class inference ops: `qmatmul`, `gqa` (head grouping checked), `kv_write`
+      on paged caches, `rope`, norms, `act_mul`.
+    - **Typing:** one rule per op (`infer_type`), shared by the builder, the parser, the
+      verifier and the recorder.
+    - **Text form:** round-trips.
+    - **Verifier:** checks SSA order, types, in-place aliasing and an optional memory budget.
+  - The IR enters through a `RecordingDevice` that implements `Device`, as platform-design.md
+    §15 planned. DynaLM's model code is unchanged.
+    - **Trace mode** builds the graph and times every op. The op-level profile comes from it.
+    - **Deferred mode** is compiled execution (DD-072).
+- **Reason:** the compiler needs a representation that knows inference, not a general tensor
+  graph. "This weight is q4_K in 256-element blocks", "these 12 query heads share 2 KV heads"
+  and "this cache is paged in 16-token blocks" are exactly the facts kernel selection and
+  fusion use.
+  - Recording keeps one source of truth for the forward pass. A second, hand-written model
+    graph would drift from the Transformer.
+- **Alternatives:**
+  - MLIR/LLVM: rejected for now. It is a large dependency, and nothing here needs it yet
+    (DD-073 explains why no code generation).
+  - Building IR inside DynaLM: rejected. DynaLM would depend on compiler internals.
+- **Evidence:**
+  - All 11 tiny architectures (dense, MoE, Gemma softcap and window, Phi) produce IR that
+    verifies, and whose text form round-trips (`test_compiled`).
+  - IR unit tests and parser fuzzing: `dynacore_test_ir`.
+
+## DD-072: Compiled execution: cached plans, decode-shaped fusion, C++ kernels as backend
+
+- **Decision:**
+  - `ExecutionMode::kCompiled` (`--execution compiled`, `runtime.execution: compiled`) wraps
+    the device in a deferred `RecordingDevice`. At each sync point the segment is planned and
+    executed on the CPU device.
+    - **Plan cache:** keyed by the segment's structural signature, which leaves out
+      positions, token ids and block tables. Decode steps after the first cost one hash and no
+      planning.
+    - **Pipeline:** canonicalize → select_kernels (per-op int8 limit recorded from the
+      kernel plan) → plan_execution.
+  - **Two fusions,** only for matmuls on the int8 decode path:
+    1. Shared-input groups (Q/K/V) run as one `matmul_many`. `MatmulJob` gained an optional
+       bias, and jobs reading the same input share the int8-quantized activations.
+    2. Gated MLP (gate, up, act_mul) runs as one `matmul_gated`. This is a new Device op: the
+       default is the unfused sequence; the CPU version fuses on the int8 path.
+  - **Kernel plans:** `set_kernel_plan` is no longer a sync point under recording. Each call
+    carries its plan, and execution re-applies it.
+  - **Fallback:** an invalid plan or a planner error runs the calls in recorded order.
+  - **Default:** reference mode stays the default until the end-to-end measurements below
+    make the case.
+  - **Elementwise kernels:** `act_mul` and `activation` now split columns across the pool
+    when rows are few (1×8960: 33 → 14 µs).
+- **Reason:** the op profile located the waste outside the big GEMVs, which run at 85–96% of
+  DRAM bandwidth.
+  - Latency-bound K/V projections: 4 GB/s.
+  - `act_mul` reading freshly written lines from other cores: 84 µs in the model against
+    23 µs isolated.
+  - One fork/join per op.
+  - Grouping and gated fusion remove regions and the cross-core traffic. They compute the
+    same values with the same kernels, so the results are bit-identical.
+- **Evidence:** step-interleaved decode A/B (`bench_compiled`, 4 rounds) on Qwen2.5-1.5B
+  Q4_K_M, 10 threads.
+
+  | Variant | 1 sequence | 4 sequences |
+  |---|---|---|
+  | IR only | ±2% | ±2% |
+  | all fusions | −4 to −9% step time | −2 to −6% step time |
+
+  - Logits differ by 0. All architectures are bit-exact (`test_compiled`).
+  - The first end-to-end run also fused prefill-shaped matmuls and lost 4–7% at concurrency
+    4/8. Hence the int8-path-only rule.
+  - End-to-end results: [compiler-benchmarks.md](compiler-benchmarks.md).
+- **Alternatives:**
+  - Fusing at prefill shapes: measured slower. `matmul_many`'s 16-row panels lack the
+    K-blocked GEMM.
+  - A polynomial-exp SiLU: slower than vectorized `std::exp`, reverted.
+  - Rebuilding IR every step: 1.25 ms/step overhead, replaced by the plan cache.
+
+## DD-073: DynaCore language and dynacorec; no code generation yet
+
+- **Decision:** a small dataflow language for inference graphs (`dynacore/lang/`,
+  [dynacore-language.md](dynacore-language.md)).
+  - It has typed declarations (quantized weights, paged KV, symbolic rows), expressions
+    (`@` matmul with bias folding, `+`, `*`), inference builtins (rmsnorm, rope, kv_write,
+    attention→gqa, swiglu, ...) and a `schedule` block of optimizer permissions
+    (`fuse gated`, `group shared_input`).
+  - It compiles to IR, so it shares the typing rules, verifier and optimizer.
+  - `dynacorec` dumps IR, the optimized IR, the kernel plan and the memory analysis. It also
+    benchmarks unplanned against compiled execution with a bit-exactness check.
+    `GraphExecutor` lowers standalone IR to Device calls.
+- **Not built, on evidence:**
+  - Kernel-body syntax (tiles, vectors, loads), generated intrinsics and native code. The
+    hand-written decode GEMVs reach 88–96% of the measured DRAM ceiling, and VNNI int8 GEMM
+    measured slower (DD-058).
+  - Prefetch and tile directives are rejected rather than accepted and ignored.
+  - A CUDA backend: no NVIDIA GPU on this machine (`dynalm doctor`). The IR and plans are
+    device-neutral; see compiler-backends.md.
+- **Evidence:**
+  - `dynacorec examples/dynacore/decoder_layer.dyna --benchmark`: 32 ops become 12 device
+    calls. At M=1 the compiled plan is 12.6% faster than one call per op, and outputs are
+    bit-identical. At M=64 nothing fuses and timing is unchanged.
+  - `dynacore_test_lang` covers compilation, every error class with its location, fuzzing,
+    and exact execution.

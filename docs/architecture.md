@@ -33,6 +33,11 @@ dynacore/ (namespace dynacore, library dynacore)
   Hardware                hardware/ ✅ cpu_info, isa selection, perf counters, process stats
 ```
 
+Compiled execution (`--execution compiled`, DD-072) inserts `dynacore/ir/RecordingDevice` between
+the Transformer and the CPU device: ops are recorded as DynaCore IR, planned once per step shape
+(cached), fused where measured to pay (Q/K/V groups, gated MLP on the decode path) and executed
+on the same kernels. See [dynacore-compiler.md](dynacore-compiler.md).
+
 DynaLM includes DynaCore headers as `"dynacore/<module>/<file>.h"` and sees the DynaCore names
 unqualified through `dynalm/src/common/core.h`. DynaCore has only `dynacore/include` on its
 include path, builds and tests alone (`cmake --preset core-only`), and is scanned by
