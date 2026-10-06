@@ -2202,3 +2202,46 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
     bit-identical. At M=64 nothing fuses and timing is unchanged.
   - `dynacore_test_lang` covers compilation, every error class with its location, fuzzing,
     and exact execution.
+
+## DD-074: q8_0 KV cache: available as `--kv q8_0`, not the default (speed neutral)
+
+- **Decision:** the KV cache accepts `q8_0` besides f16 and f32 (`--kv q8_0`,
+  `kv_cache.dtype: q8_0`).
+  - **Format:** 32-value blocks with one fp16 scale, quantized in `kv_store`. Attention
+    dequantizes each block run to fp32 through the existing convert path.
+  - **Constraint:** head dimensions must be multiples of 32.
+  - **Sizing:** `KvGeometry` byte math now counts whole blocks (`bytes_of`,
+    `k_block_bytes`).
+  - f16 stays the default.
+- **Evidence:** Qwen2.5-1.5B Q4_K_M, 10 threads.
+  - **Accuracy** (`bench_kv_accuracy`): text prefilled into both caches, then the last 256
+    positions decoded token by token.
+
+    | Context | Perplexity change | Mean KL | Max KL | Top-1 agreement | Greedy, 64 tokens |
+    |---|---|---|---|---|---|
+    | 512 | +0.12% | 1.6e-4 nats | 0.012 | 99.6% | identical |
+    | 2048 | +0.07% | 1.5e-4 | 0.011 | 100% | identical |
+
+    Both are within the DD-053 contract (≤ +1% perplexity, ≤ 0.0025 mean KL).
+  - **Memory:** 1.06 bytes per value against 2, so 7.4 vs 14.0 MiB for 512 tokens (−47%).
+  - **Speed** (`bench_batch_decode`, process-level ABBA, aggregate tok/s, f16 → q8_0):
+
+    | Context, sequences | f16 | q8_0 |
+    |---|---|---|
+    | 1K, 1 | 12.45 | 12.2 |
+    | 1K, 4 | 24.0 | 24.85 |
+    | 4K, 1 | 11.2 | 10.95 |
+    | 4K, 4 | 20.5 | 21.45 |
+
+    **Classification: NEUTRAL.** Attention is ≤ 23% of a step even at 4K × 4, and
+    dequantizing costs about what the halved KV reads save. Data:
+    `results/dd074-kv-q8-decode-ab.csv`.
+- **Why not the default:** throughput is the primary metric, and q8 KV does not raise it per
+  step.
+  - It does raise capacity. `auto` context sizing gives about 1.9× the tokens per GiB, which
+    matters on RAM-limited machines and for many concurrent sequences.
+  - It is offered for those cases, and documented in configuration.md.
+- **Alternatives:**
+  - A q8 attention kernel (integer q·k dot): not built. The attention share is too small for
+    it to pay at the measured contexts.
+  - Revisit at 16K+ contexts, or when KV memory limits concurrency.

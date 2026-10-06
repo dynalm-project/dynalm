@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### DynaCore compiler and compiled execution (DD-071..073)
+- DynaCore IR (inference-typed SSA: quantized weights, paged KV, gqa), verifier, text form,
+  recording device, passes (kernel selection, Q/K/V grouping, gated-MLP fusion), plan cache.
+- `--execution compiled` / `runtime.execution: compiled`. On Qwen2.5-1.5B Q4_K_M at c=1:
+  +7.9% output tok/s and -10.6% ITL p50. Neutral at c>=4 and on Qwen3-4B (about 1-2%).
+  Bit-identical outputs. Opt-in.
+- DynaCore language (`.dyna`) and `dynacorec`: dump IR, the optimized IR and kernels, run
+  memory analysis and benchmarks.
+- New Device op `matmul_gated`. `MatmulJob` takes an optional bias. `act_mul` uses the whole
+  pool for single rows. `/metrics` reports compiled-execution counters.
+
+### q8_0 KV cache (DD-074)
+- `--kv q8_0` halves KV memory, within the accuracy contract. Decode speed is unchanged, so
+  f16 stays the default.
+
+### DD-067 validated
+- 32 matmul chunks per thread (was 8): neutral to slightly positive on decode and prefill;
+  kept.
+
 ### Product surface: names, doctor, models, config (R1, DD-070)
 - Model names: `dynalm run qwen3:4b`, `dynalm serve llama:3b`, `dynalm pull gemma:270m`. A
   built-in registry maps 12 names to tested GGUF downloads. `run`, `serve` and `benchmark`

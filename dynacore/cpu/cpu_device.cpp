@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "dynacore/base/fast_exp.h"
+#include "dynacore/quantization/quant_formats.h"
 #include "dynacore/tensor/fp16.h"
 
 namespace dynacore {
@@ -413,6 +414,9 @@ void CpuDevice::kv_store(const TensorView& k, const TensorView& v, std::span<con
         auto* vd = static_cast<uint16_t*>(kv.v) + vo;
         for (int32_t i = 0; i < g.head_dim; ++i) kd[i] = fp32_to_fp16(ks[i]);
         for (int32_t i = 0; i < g.head_dim_v; ++i) vd[i] = fp32_to_fp16(vs[i]);
+      } else if (g.dtype == DType::kQ8_0) {  // DD-074
+        quant::quantize_q8_0(ks, static_cast<quant::BlockQ8_0*>(kv.k_at(ko)), g.head_dim / quant::kQK);
+        quant::quantize_q8_0(vs, static_cast<quant::BlockQ8_0*>(kv.v_at(vo)), g.head_dim_v / quant::kQK);
       } else {
         std::memcpy(static_cast<float*>(kv.k) + ko, ks, sizeof(float) * static_cast<size_t>(g.head_dim));
         std::memcpy(static_cast<float*>(kv.v) + vo, vs, sizeof(float) * static_cast<size_t>(g.head_dim_v));
@@ -452,14 +456,16 @@ void CpuDevice::attend_group(const AttentionParams& p, size_t r, int32_t kvh, in
   // With several heads sharing the KV head, an fp16 run is converted to fp32
   // once and every head reads the fp32 copy (one conversion per group, not
   // one per head).
-  const bool convert = !f32 && group > 1;
-  const DequantFn to_f32 = k_.dequant_for(DType::kF16);
+  // q8_0 KV (DD-074) is always converted: there are no q8 attention kernels.
+  const bool q8 = g.dtype == DType::kQ8_0;
+  const bool convert = !f32 && (group > 1 || q8);
+  const DequantFn to_f32 = k_.dequant_for(q8 ? DType::kQ8_0 : DType::kF16);
   thread_local std::vector<float> kv_f32;
   if (convert) kv_f32.resize(static_cast<size_t>(bs) * std::max(hd, hdv));
   for (int64_t t = t0; t < t1;) {
     const int64_t n = std::min<int64_t>(t1 - t, bs - t % bs);
     const int64_t off = kv.k_offset(t, kvh);
-    if (convert) to_f32(static_cast<const uint16_t*>(kv.k) + off, kv_f32.data(), n * hd);
+    if (convert) to_f32(kv.k_at(off), kv_f32.data(), n * hd);
     if ((f32 || convert) && group > 1 && plan_.grouped_attention) {  // all heads per k load (DD-066)
       k_.attn_scores_heads_f32(convert ? kv_f32.data() : static_cast<const float*>(kv.k) + off, n, hd, q0, group,
                                p.scale, scores.data() + static_cast<size_t>(t - t0), static_cast<int64_t>(len));
@@ -493,7 +499,7 @@ void CpuDevice::attend_group(const AttentionParams& p, size_t r, int32_t kvh, in
   for (int64_t t = t0; t < t1;) {
     const int64_t n = std::min<int64_t>(t1 - t, bs - t % bs);
     const int64_t off = kv.v_offset(t, kvh);
-    if (convert) to_f32(static_cast<const uint16_t*>(kv.v) + off, kv_f32.data(), n * hdv);
+    if (convert) to_f32(kv.v_at(off), kv_f32.data(), n * hdv);
     if ((f32 || convert) && group > 1 && plan_.grouped_attention) {  // all heads per v load (DD-066)
       for (int32_t gi = 0; gi < group; ++gi) {
         const float* s = scores.data() + static_cast<size_t>(gi) * len + static_cast<size_t>(t - t0);

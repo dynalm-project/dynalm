@@ -77,6 +77,8 @@ int main(int argc, char** argv) {
   DType kv_dtype = DType::kF16;
   if (kv_name == "f32") {
     kv_dtype = DType::kF32;
+  } else if (kv_name == "q8_0") {
+    kv_dtype = DType::kQ8_0;
   } else if (kv_name != "f16") {
     std::fprintf(stderr, "unknown kv dtype %s\n", kv_name.c_str());
     return 1;

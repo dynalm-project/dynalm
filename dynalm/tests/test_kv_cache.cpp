@@ -2,11 +2,17 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cmath>
 #include <numeric>
 #include <random>
 #include <thread>
 
 #include "dynacore/cpu/cpu_device.h"
+#include "dynacore/hardware/cpu_info.h"
+#include "dynacore/hardware/isa.h"
+#include "loader/model_loader.h"
+#include "model/transformer.h"
 #include "common/core.h"
 
 namespace dynalm {
@@ -155,6 +161,55 @@ TEST_F(KvPaged, ConcurrentStress) {
   for (auto& th : threads) th.join();
   EXPECT_EQ(pool->free_blocks(), 16);
   for (int32_t b = 0; b < 16; ++b) EXPECT_EQ(pool->ref_count(b), 0) << b;
+}
+
+// q8_0 KV (DD-074): sizing, validation, and logits close to f16 KV.
+TEST(KvQ8, GeometryBytesAndValidation) {
+  ThreadPool pool(1);
+  CpuDevice cpu(pool, CpuIsa::kGeneric);
+  KvGeometry g{2, 2, 64, 64, 16, 8, DType::kQ8_0};
+  EXPECT_EQ(g.k_block_bytes(), 2 * 16 * 64 / 32 * 34);  // 34-byte blocks of 32 values
+  EXPECT_EQ(g.bytes_per_layer(), 2 * g.k_block_bytes() * 8);
+  auto ok = KvBlockPool::create(g, cpu);
+  EXPECT_TRUE(ok.ok()) << ok.status().to_string();
+  KvGeometry bad{2, 2, 48, 48, 16, 8, DType::kQ8_0};
+  auto rejected = KvBlockPool::create(bad, cpu);
+  ASSERT_FALSE(rejected.ok());
+  EXPECT_EQ(rejected.status().code(), StatusCode::kUnsupported);
+}
+
+TEST(KvQ8, LogitsTrackF16Cache) {
+  for (const char* arch : {"qwen3", "gemma3"}) {  // head_dim 32: q8_0-compatible tiny models
+    auto m = load_model(std::string(ENGINE_TEST_DATA_DIR) + "/tiny_" + arch + ".gguf");
+    ASSERT_TRUE(m.ok());
+    const ModelConfig& c = (*m)->config;
+    ThreadPool pool(2);
+    CpuDevice cpu(pool, select_best_isa(cpu_info().features));
+    auto tf = Transformer::create(c, (*m)->weights, cpu, 64);
+    ASSERT_TRUE(tf.ok());
+    auto run = [&](DType dt) {
+      auto kv = KvBlockPool::create(KvGeometry{c.num_layers, c.num_kv_heads, c.head_dim, c.head_dim_v, 16, 8, dt}, cpu);
+      EXPECT_TRUE(kv.ok());
+      KvBlockTable t(**kv);
+      EXPECT_TRUE(t.reserve(40).ok());
+      std::vector<TokenId> toks(40);
+      for (size_t i = 0; i < toks.size(); ++i) toks[i] = static_cast<TokenId>(3 + (i * 7) % 200);
+      std::vector<int32_t> pos(toks.size());
+      std::iota(pos.begin(), pos.end(), 0);
+      std::vector<float> logits(static_cast<size_t>(c.vocab_size));
+      EXPECT_TRUE((*tf)->forward(toks, pos, **kv, t.block_table(), logits).ok());
+      return logits;
+    };
+    const std::vector<float> a = run(DType::kF16), b = run(DType::kQ8_0);
+    float amax = 0, dmax = 0;
+    for (size_t i = 0; i < a.size(); ++i) {
+      amax = std::max(amax, std::fabs(a[i]));
+      dmax = std::max(dmax, std::fabs(a[i] - b[i]));
+    }
+    EXPECT_LT(dmax, 0.02f * amax + 1e-3f) << arch;  // ~2^-8 relative KV error, not a different model
+    EXPECT_EQ(std::max_element(a.begin(), a.end()) - a.begin(), std::max_element(b.begin(), b.end()) - b.begin())
+        << arch;
+  }
 }
 
 }  // namespace

@@ -1,5 +1,8 @@
 #include "dynacore/quantization/quant_formats.h"
 
+#include <algorithm>
+#include <cmath>
+
 #include <cstring>
 
 #include "dynacore/tensor/fp16.h"
@@ -51,6 +54,18 @@ void dequantize_q5_1(const BlockQ5_1* x, float* y, int64_t nb) {
       y[j] = static_cast<float>((x[i].qs[j] & 0x0F) | h0) * d + m;
       y[j + kQK / 2] = static_cast<float>((x[i].qs[j] >> 4) | h1) * d + m;
     }
+  }
+}
+
+void quantize_q8_0(const float* x, BlockQ8_0* y, int64_t nb) {
+  for (int64_t b = 0; b < nb; ++b) {
+    const float* xb = x + b * kQK;
+    float amax = 0;
+    for (int i = 0; i < kQK; ++i) amax = std::max(amax, std::fabs(xb[i]));
+    const float d = amax / 127.0f;
+    const float id = d != 0.0f ? 1.0f / d : 0.0f;
+    y[b].d = fp32_to_fp16(d);
+    for (int i = 0; i < kQK; ++i) y[b].qs[i] = static_cast<int8_t>(std::lround(xb[i] * id));
   }
 }
 

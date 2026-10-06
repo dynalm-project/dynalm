@@ -42,7 +42,7 @@ void usage() {
                "  -t, --threads N       worker threads (default: physical cores)\n"
                "  -c, --ctx N           KV cache capacity in tokens (default 4096)\n"
                "  --batch N             max tokens per forward pass (default 256)\n"
-               "  --kv f16|f32          KV cache dtype (default f16)\n"
+               "  --kv f16|f32|q8_0         KV cache dtype (default f16)\n"
                "  --int8-decode N       int8 activations for matmuls of <= N rows (default 4, 0 = off)\n"
                "  --backend cpu         compute backend (GPU backends are not built yet)\n"
                "  --execution MODE      reference (default) | compiled: DynaCore IR + fusion (DD-072)\n"
@@ -252,8 +252,8 @@ int cmd_run(std::span<const std::string_view> raw_args) {
       if (ok) opts.execution = *x;
     } else if (a == "--kv") {
       const std::string_view v = value();
-      ok = v == "f16" || v == "f32";
-      opts.kv_dtype = v == "f32" ? DType::kF32 : DType::kF16;
+      ok = v == "f16" || v == "f32" || v == "q8_0";
+      opts.kv_dtype = v == "f32" ? DType::kF32 : v == "q8_0" ? DType::kQ8_0 : DType::kF16;
     } else if (path.empty() && !a.starts_with("-")) path = a;
     else ok = false;
     if (a.starts_with("--temp") || a.starts_with("--top-") || a == "--min-p" || a.ends_with("-penalty") ||

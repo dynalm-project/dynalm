@@ -41,6 +41,8 @@ void dequantize_q4_1(const BlockQ4_1* x, float* y, int64_t nb);
 void dequantize_q5_0(const BlockQ5_0* x, float* y, int64_t nb);
 void dequantize_q5_1(const BlockQ5_1* x, float* y, int64_t nb);
 void dequantize_q8_0(const BlockQ8_0* x, float* y, int64_t nb);
+// x[nb * 32] -> nb Q8_0 blocks: d = max|x| / 127, q = round(x / d) (GGML's rule).
+void quantize_q8_0(const float* x, BlockQ8_0* y, int64_t nb);
 void dequantize_q8_1(const BlockQ8_1* x, float* y, int64_t nb);
 void dequantize_q2_K(const BlockQ2_K* x, float* y, int64_t nb);
 void dequantize_q3_K(const BlockQ3_K* x, float* y, int64_t nb);

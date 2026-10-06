@@ -23,7 +23,7 @@ constexpr YamlKey kYamlKeys[] = {
     {"runtime.int8_decode", "int8-decode", "4", "int8 activations for matmuls of <= N rows; 0 = off"},
     {"scheduler.max_concurrent_requests", "max-active", "64", "concurrent requests before 503"},
     {"scheduler.policy", "policy", "balanced", "balanced | latency | throughput"},
-    {"kv_cache.dtype", "kv", "f16", "f16 | f32"},
+    {"kv_cache.dtype", "kv", "f16", "f16 | f32 | q8_0 (half the memory, DD-074)"},
     {"sampling.temperature", "temperature", "1.0 (serve), 0.8 (chat)", "default when a request omits it"},
     {"sampling.max_tokens", "max-tokens", "1024 (serve), 2048 (chat)", "default max_tokens per request"},
     {"server.host", "host", "127.0.0.1", "bind address (0.0.0.0 to expose)"},

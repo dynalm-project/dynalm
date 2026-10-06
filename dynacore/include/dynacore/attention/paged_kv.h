@@ -12,7 +12,12 @@
 //
 // V uses the same formula with head_dim_v. The contiguous single-sequence
 // case is simply a block table [0, 1, 2, ...].
+//
+// Element types: f32, f16, or q8_0 (DD-074). Offsets are in elements; for a
+// block format they are always multiples of its 32-element block (head_dim
+// must be a multiple of 32), and byte_offset() converts.
 
+#include <cstddef>
 #include <cstdint>
 #include <span>
 
@@ -31,9 +36,11 @@ struct KvGeometry {
 
   int64_t k_block_elems() const { return static_cast<int64_t>(num_kv_heads) * block_size * head_dim; }
   int64_t v_block_elems() const { return static_cast<int64_t>(num_kv_heads) * block_size * head_dim_v; }
-  int64_t bytes_per_layer() const {
-    return (k_block_elems() + v_block_elems()) * num_blocks * dtype_block_bytes(dtype);
-  }
+  // Bytes of `elems` consecutive elements (block formats: whole blocks).
+  int64_t bytes_of(int64_t elems) const { return elems / dtype_block_elems(dtype) * dtype_block_bytes(dtype); }
+  int64_t k_block_bytes() const { return bytes_of(k_block_elems()); }
+  int64_t v_block_bytes() const { return bytes_of(v_block_elems()); }
+  int64_t bytes_per_layer() const { return (k_block_bytes() + v_block_bytes()) * num_blocks; }
   int64_t total_bytes() const { return bytes_per_layer() * num_layers; }
 };
 
@@ -54,6 +61,9 @@ struct KvLayerView {
     const int64_t block = block_table[static_cast<size_t>(pos / bs)];
     return ((block * geom->num_kv_heads + head) * bs + pos % bs) * geom->head_dim_v;
   }
+  // Address of element offset `off` (from k_offset / v_offset) in a base.
+  void* k_at(int64_t off) const { return static_cast<std::byte*>(k) + geom->bytes_of(off); }
+  void* v_at(int64_t off) const { return static_cast<std::byte*>(v) + geom->bytes_of(off); }
 };
 
 }  // namespace dynacore

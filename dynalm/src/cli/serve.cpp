@@ -42,7 +42,7 @@ void usage() {
                "  -t, --threads N|auto    compute threads (auto: physical cores)\n"
                "  -c, --ctx N|auto        KV cache capacity in tokens (auto: from free RAM)\n"
                "  --batch N|auto          max tokens per forward pass (auto: 256)\n"
-               "  --kv f16|f32            KV cache dtype (default f16)\n"
+               "  --kv f16|f32|q8_0           KV cache dtype (default f16)\n"
                "  --int8-decode N         int8 activations for matmuls of <= N rows (default 4, 0 = off;\n"
                "                          off makes outputs independent of batching, DD-053)\n"
                "  --policy P              balanced (default) | latency | throughput: first-token wait vs\n"
@@ -120,8 +120,8 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
       if (ok) eo.execution = *x;
     } else if (a == "--kv") {
       const std::string_view v = value();
-      ok = v == "f16" || v == "f32";
-      eo.kv_dtype = v == "f32" ? DType::kF32 : DType::kF16;
+      ok = v == "f16" || v == "f32" || v == "q8_0";
+      eo.kv_dtype = v == "f32" ? DType::kF32 : v == "q8_0" ? DType::kQ8_0 : DType::kF16;
     } else if (!a.starts_with("-")) eo.model_path = a;  // positional wins over file/env
     else ok = false;
     if (!ok) {
@@ -169,7 +169,7 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
   LOG_INFO("Threads: {}", e.threads());
   LOG_INFO("RAM required: {} (weights {}, KV cache {}); available {}", gib(e.weight_bytes() + e.kv_bytes()),
            gib(e.weight_bytes()), gib(e.kv_bytes()), gib(mem.available_bytes));
-  LOG_INFO("KV cache: {} tokens ({}{})", e.kv_capacity_tokens(), eo.kv_dtype == DType::kF32 ? "f32" : "f16",
+  LOG_INFO("KV cache: {} tokens ({}{})", e.kv_capacity_tokens(), dtype_name(eo.kv_dtype),
            ctx == 0 ? ", auto" : "");
   LOG_INFO("Scheduler: continuous batching, {} policy (prefill budget {}, decode budget {}, max batch {})",
            scheduler_policy_name(eo.scheduler.policy), eo.scheduler.prefill_token_budget,

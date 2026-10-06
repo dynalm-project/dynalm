@@ -15,15 +15,17 @@ Result<std::unique_ptr<KvBlockPool>> KvBlockPool::create(const KvGeometry& geom,
       geom.block_size <= 0 || geom.num_blocks <= 0) {
     return InvalidArgument("KvBlockPool: invalid geometry");
   }
-  if (geom.dtype != DType::kF32 && geom.dtype != DType::kF16) {
-    return Unsupported("KvBlockPool: dtype " + std::string(dtype_name(geom.dtype)) + " not supported");
+  if (geom.dtype != DType::kF32 && geom.dtype != DType::kF16 && geom.dtype != DType::kQ8_0) {
+    return Unsupported("KvBlockPool: dtype " + std::string(dtype_name(geom.dtype)) + " not supported (f32, f16, q8_0)");
+  }
+  if (geom.dtype == DType::kQ8_0 && (geom.head_dim % 32 != 0 || geom.head_dim_v % 32 != 0)) {
+    return Unsupported("KvBlockPool: q8_0 KV needs head dimensions that are multiples of 32");
   }
   auto pool = std::unique_ptr<KvBlockPool>(new KvBlockPool());
   pool->geom_ = geom;
   pool->backend_ = &backend;
-  const auto elem = static_cast<size_t>(dtype_block_bytes(geom.dtype));
-  const size_t k_bytes = static_cast<size_t>(geom.k_block_elems() * geom.num_blocks) * elem;
-  const size_t v_bytes = static_cast<size_t>(geom.v_block_elems() * geom.num_blocks) * elem;
+  const size_t k_bytes = static_cast<size_t>(geom.k_block_bytes() * geom.num_blocks);
+  const size_t v_bytes = static_cast<size_t>(geom.v_block_bytes() * geom.num_blocks);
   for (int32_t l = 0; l < geom.num_layers; ++l) {
     ENGINE_ASSIGN_OR_RETURN(auto k, backend.allocate(k_bytes));
     ENGINE_ASSIGN_OR_RETURN(auto v, backend.allocate(v_bytes));
@@ -69,9 +71,8 @@ void KvBlockPool::release(int32_t block) {
 }
 
 void KvBlockPool::copy_block(int32_t dst, int32_t src) {
-  const auto elem = static_cast<size_t>(dtype_block_bytes(geom_.dtype));
-  const size_t kb = static_cast<size_t>(geom_.k_block_elems()) * elem;
-  const size_t vb = static_cast<size_t>(geom_.v_block_elems()) * elem;
+  const auto kb = static_cast<size_t>(geom_.k_block_bytes());
+  const auto vb = static_cast<size_t>(geom_.v_block_bytes());
   for (int32_t l = 0; l < geom_.num_layers; ++l) {
     auto* k = static_cast<std::byte*>(k_[static_cast<size_t>(l)]->data());
     auto* v = static_cast<std::byte*>(v_[static_cast<size_t>(l)]->data());

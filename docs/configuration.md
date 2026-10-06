@@ -36,7 +36,7 @@ scheduler:
   policy: balanced           # balanced | latency | throughput (DD-061)
 
 kv_cache:
-  dtype: f16                 # f16 | f32
+  dtype: f16                 # f16 | f32 | q8_0 (half the memory, same speed; DD-074)
 
 sampling:
   temperature: 0.7
@@ -75,9 +75,10 @@ The older flat format, with one `key = value` per line using option names, still
 | runtime.context_length | `--ctx` | auto |
 | runtime.batch_tokens | `--batch` | 256 |
 | runtime.int8_decode | `--int8-decode` | 4 |
+| runtime.execution | `--execution` (reference, compiled) | reference |
 | scheduler.max_concurrent_requests | `--max-active` | 64 |
 | scheduler.policy | `--policy` | balanced |
-| kv_cache.dtype | `--kv` | f16 |
+| kv_cache.dtype | `--kv` (f16, f32, q8_0) | f16 |
 | sampling.temperature | `--temperature` | 1.0 (serve), 0.8 (interactive chat) |
 | sampling.max_tokens | `--max-tokens` | 1024 (serve), 2048 (interactive chat) |
 | server.host | `--host` | 127.0.0.1 |
