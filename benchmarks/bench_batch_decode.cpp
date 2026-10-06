@@ -81,8 +81,8 @@ int main(int argc, char** argv) {
     return 1;
   }
   for (const auto& v : variants) {
-    if (v != "old" && v != "new") {
-      std::fprintf(stderr, "unknown variant %s (old|new)\n", v.c_str());
+    if (v != "old" && v != "new" && !(v.size() > 1 && v[0] == 'c' && std::atoi(v.c_str() + 1) > 0)) {
+      std::fprintf(stderr, "unknown variant %s (old|new|cN)\n", v.c_str());
       return 1;
     }
   }
@@ -136,7 +136,7 @@ int main(int argc, char** argv) {
   }
 
   std::printf("model,variant,rep,context,seqs,threads,kv,step_p50_ms,step_p90_ms,step_p99_ms,step_mean_ms,"
-              "agg_tok_s,per_req_tok_s,attn_ms_step,profiled_step_ms,attn_share,cpu_util\n");
+              "agg_tok_s,per_req_tok_s,attn_ms_step,profiled_step_ms,attn_share,cpu_util,tail_wait_share\n");
   KernelPlan plan_old = KernelPlan::defaults();
   plan_old.grouped_attention = false;
   KernelPlan plan_new = KernelPlan::defaults();
@@ -156,7 +156,9 @@ int main(int argc, char** argv) {
         if ((rep + point) % 2 == 1) std::reverse(order.begin(), order.end());
         ++point;
         for (const std::string& variant : order) {
-          (*tf)->set_kernel_base(variant == "old" ? plan_old : plan_new);
+          KernelPlan plan = variant == "old" ? plan_old : plan_new;
+          if (variant[0] == 'c') plan.matmul_chunks_per_thread = std::atoi(variant.c_str() + 1);  // cN: N chunks/thread
+          (*tf)->set_kernel_base(plan);
           // N private copies of the source's first ctx positions.
           std::vector<KvBlockTable> tables;
           const int copy_blocks = (ctx + bs - 1) / bs;
@@ -173,6 +175,8 @@ int main(int argc, char** argv) {
           std::vector<TokenId> step_tok(static_cast<size_t>(n));
           std::vector<double> ms;
           double cpu_s = 0, wall_s = 0;
+          int64_t region_ns = 0, tail_ns = 0;
+          pool.set_stats_enabled(true);
           for (int step = 0; step < kWarm + steps + kProfiled; ++step) {
             const bool profiled = step >= kWarm + steps;
             if (step == kWarm + steps) {
@@ -186,12 +190,16 @@ int main(int argc, char** argv) {
                                tables[static_cast<size_t>(s)].block_table(), true});
             }
             const double cpu0 = process_cpu_seconds();
+            const ThreadPoolStats ps0 = pool.stats();
             const Stopwatch sw;
             if (!(*tf)->forward_batch(batch, **kv, {logits.data(), vocab * static_cast<size_t>(n)}).ok()) return 1;
             const double t = sw.elapsed_ms();
             if (step >= kWarm && !profiled) {
               ms.push_back(t);
               cpu_s += process_cpu_seconds() - cpu0;
+              const ThreadPoolStats ps1 = pool.stats();
+              region_ns += ps1.region_ns - ps0.region_ns;
+              tail_ns += ps1.tail_wait_ns - ps0.tail_wait_ns;
               wall_s += t / 1e3;
             }
           }
@@ -210,11 +218,12 @@ int main(int argc, char** argv) {
           const double prof_total = static_cast<double>(pr.total_ns()) / 1e6 / kProfiled;
           const double mean = std::accumulate(ms.begin(), ms.end(), 0.0) / static_cast<double>(ms.size());
           const double p50 = pct(ms, 50);
-          std::printf("%s,%s,%d,%d,%d,%d,%s,%.2f,%.2f,%.2f,%.2f,%.1f,%.2f,%.2f,%.2f,%.3f,%.3f\n",
+          std::printf("%s,%s,%d,%d,%d,%d,%s,%.2f,%.2f,%.2f,%.2f,%.1f,%.2f,%.2f,%.2f,%.3f,%.3f,%.3f\n",
                       (*m)->config.name.empty() ? "model" : (*m)->config.name.c_str(), variant.c_str(), rep, ctx, n,
                       threads, kv_name.c_str(), p50, pct(ms, 90), pct(ms, 99), mean, n * 1000.0 / mean, 1000.0 / mean,
                       attn, prof_total, prof_total > 0 ? attn / prof_total : 0.0,
-                      wall_s > 0 ? cpu_s / wall_s / threads : 0.0);
+                      wall_s > 0 ? cpu_s / wall_s / threads : 0.0,
+                      region_ns > 0 ? static_cast<double>(tail_ns) / static_cast<double>(region_ns) : 0.0);
           std::fflush(stdout);
         }
       }

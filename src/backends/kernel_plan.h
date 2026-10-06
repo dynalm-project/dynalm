@@ -34,6 +34,10 @@ struct KernelPlan {
   int32_t expand_min_rows = 2;
   // GEMM K-slice width (multiple of 256; 0 = no K-blocking).
   int32_t gemm_k_block = 1024;
+  // Chunks per thread when a matmul's output columns are split across the
+  // pool: chunks are claimed dynamically, so more chunks shorten the tail when
+  // fast (P) and slow (E) cores finish unevenly, at the cost of more claims.
+  int32_t matmul_chunks_per_thread = 32;  // DD-067 (was 8)
   // Matmuls with at most this many rows use int8 activations and integer
   // dot products where the backend accelerates them (DD-053); 0 = never.
   // Default 4: the measured crossover with the fp32 expand path, and within
@@ -57,7 +61,7 @@ struct KernelPlan {
   bool grouped_attention = true;
 
   // Defaults, with the tuning overrides DYNALM_MATMUL_EXPAND_MIN,
-  // DYNALM_GEMM_KC, DYNALM_INT8_DECODE_ROWS and DYNALM_ATTN_GROUPED applied (read once per process).
+  // DYNALM_GEMM_KC, DYNALM_INT8_DECODE_ROWS, DYNALM_ATTN_GROUPED and DYNALM_MATMUL_CHUNKS applied (read once per process).
   static const KernelPlan& defaults();
 };
 

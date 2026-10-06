@@ -24,6 +24,9 @@ const KernelPlan& KernelPlan::defaults() {
     if (const char* r = std::getenv("DYNALM_INT8_DECODE_ROWS")) {
       p.int8_decode_max_rows = static_cast<int32_t>(std::max<long>(0, std::strtol(r, nullptr, 10)));
     }
+    if (const char* c = std::getenv("DYNALM_MATMUL_CHUNKS")) {
+      p.matmul_chunks_per_thread = static_cast<int32_t>(std::max<long>(1, std::strtol(c, nullptr, 10)));
+    }
     if (const char* g = std::getenv("DYNALM_ATTN_GROUPED")) p.grouped_attention = std::strtol(g, nullptr, 10) != 0;
     if (const char* kc = std::getenv("DYNALM_GEMM_KC")) {
       const long v = std::strtol(kc, nullptr, 10);

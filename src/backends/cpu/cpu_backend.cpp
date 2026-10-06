@@ -24,8 +24,8 @@ int64_t cols(const TensorView& t) { return t.dim(t.rank() - 1); }
 
 // Chunk size that gives each thread several chunks (load balance across
 // P/E cores) without making chunks so small that dispatch dominates.
-size_t grain_for(size_t n, int threads, size_t min_grain) {
-  return std::max(min_grain, n / (static_cast<size_t>(threads) * 8));
+size_t grain_for(size_t n, int threads, size_t min_grain, int32_t chunks_per_thread) {
+  return std::max(min_grain, n / (static_cast<size_t>(threads) * static_cast<size_t>(chunks_per_thread)));
 }
 
 inline float silu(float x) { return x / (1.0f + std::exp(-x)); }
@@ -148,7 +148,7 @@ void CpuBackend::matmul_many(std::span<const MatmulJob> jobs) {
   const std::vector<size_t>& offsets = first_chunk;  // read by the workers below
   const std::vector<JobPlan>& job_plans = plans;
   const ActBlockQ8* act = act_q8_.data();
-  pool_.parallel_for(total, grain_for(total, pool_.size(), 1), [&](size_t begin, size_t end) {
+  pool_.parallel_for(total, grain_for(total, pool_.size(), 1, plan_.matmul_chunks_per_thread), [&](size_t begin, size_t end) {
     thread_local std::vector<float> panel;
     for (size_t c = begin; c < end; ++c) {
       const size_t ji = static_cast<size_t>(std::upper_bound(offsets.begin(), offsets.end(), c) - offsets.begin()) - 1;
@@ -223,7 +223,7 @@ void CpuBackend::matmul(const TensorView& x, const TensorView& w, const TensorVi
       act_q8_.resize(static_cast<size_t>(m * nb));
       for (int64_t r = 0; r < m; ++r) k_.quantize_act(row_ptr<const float>(x, r), act_q8_.data() + r * nb, k);
       const ActBlockQ8* act = act_q8_.data();
-      pool_.parallel_for(static_cast<size_t>(n), grain_for(static_cast<size_t>(n), pool_.size(), 4),
+      pool_.parallel_for(static_cast<size_t>(n), grain_for(static_cast<size_t>(n), pool_.size(), 4, plan_.matmul_chunks_per_thread),
                          [&](size_t begin, size_t end) {
         float out[kDotRowsMax];
         const ActBlockQ8* xr[kDotRowsMax];
@@ -262,7 +262,7 @@ void CpuBackend::matmul(const TensorView& x, const TensorView& w, const TensorVi
     // panels; partial sums accumulate into y. Slices start on multiples of
     // 256, so every block format dequantizes slice by slice.
     const int64_t kc = (plan_.gemm_k_block > 0 && plan_.gemm_k_block < k) ? plan_.gemm_k_block : k;
-    pool_.parallel_for(panels, grain_for(panels, pool_.size(), 1), [&](size_t begin, size_t end) {
+    pool_.parallel_for(panels, grain_for(panels, pool_.size(), 1, plan_.matmul_chunks_per_thread), [&](size_t begin, size_t end) {
       thread_local std::vector<float> panel;
       panel.resize(static_cast<size_t>(kPanel * kc));
       for (int64_t k0 = 0; k0 < k; k0 += kc) {
@@ -289,7 +289,7 @@ void CpuBackend::matmul(const TensorView& x, const TensorView& w, const TensorVi
     return;
   }
 
-  pool_.parallel_for(static_cast<size_t>(n), grain_for(static_cast<size_t>(n), pool_.size(), 4),
+  pool_.parallel_for(static_cast<size_t>(n), grain_for(static_cast<size_t>(n), pool_.size(), 4, plan_.matmul_chunks_per_thread),
                      [&](size_t begin, size_t end) {
     thread_local std::vector<float> wrow;
     if (expand) wrow.resize(static_cast<size_t>(k));
