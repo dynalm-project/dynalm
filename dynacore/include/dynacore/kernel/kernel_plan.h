@@ -63,6 +63,8 @@ struct KernelPlan {
   // Defaults, with the tuning overrides DYNACORE_MATMUL_EXPAND_MIN,
   // DYNACORE_GEMM_KC, DYNACORE_INT8_DECODE_ROWS, DYNACORE_ATTN_GROUPED and DYNACORE_MATMUL_CHUNKS applied (read once per process).
   static const KernelPlan& defaults();
+
+  friend bool operator==(const KernelPlan&, const KernelPlan&) = default;
 };
 
 // What kernel selection knows about the machine. Filled once when the model

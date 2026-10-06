@@ -1,0 +1,53 @@
+// One decoder layer of a Qwen2.5-1.5B-shaped model in the DynaCore language.
+//
+//   dynacorec examples/dynacore/decoder_layer.dyna --dump-optimized-ir --dump-kernels
+//   dynacorec examples/dynacore/decoder_layer.dyna --benchmark --set M=1
+//
+// Everything a kernel needs to know is in the types: quantized weights
+// (q4_K / q6_K blocks), a paged KV cache (16-token blocks), grouped-query
+// attention (12 query heads over 2 KV heads). The compiler picks the kernels
+// and fuses Q/K/V into one region and gate/up/SwiGLU into one fused call.
+
+graph decoder_layer(M = 1) {
+  config hidden = 1536, heads = 12, kv_heads = 2, head_dim = 128, ff = 8960
+
+  input  x    : tensor<f32>[M, hidden]
+  input  pos  : index[M]
+  input  seq  : index[M]
+
+  weight attn_norm : f32[hidden]
+  weight wq : q4_K[hidden, hidden]
+  weight bq : f32[hidden]
+  weight wk : q4_K[kv_heads * head_dim, hidden]
+  weight bk : f32[kv_heads * head_dim]
+  weight wv : q6_K[kv_heads * head_dim, hidden]
+  weight bv : f32[kv_heads * head_dim]
+  weight wo : q4_K[hidden, hidden]
+  weight ffn_norm : f32[hidden]
+  weight w_gate : q4_K[ff, hidden]
+  weight w_up   : q4_K[ff, hidden]
+  weight w_down : q6_K[hidden, ff]
+
+  kv cache : kv<f16>[64, kv_heads, 16, head_dim]
+
+  // Attention.
+  xn = rmsnorm(x, attn_norm, eps = 1e-6)
+  q  = xn @ wq + bq
+  k  = xn @ wk + bk
+  v  = xn @ wv + bv
+  q  = rope(q, pos, heads, head_dim, base = 1000000)
+  k  = rope(k, pos, kv_heads, head_dim, base = 1000000)
+  cache = kv_write(cache, k, v, pos, seq)
+  a  = attention(q, cache, pos, seq, heads, kv_heads, head_dim)
+  h  = x + a @ wo
+
+  // Gated MLP.
+  hn = rmsnorm(h, ffn_norm, eps = 1e-6)
+  y  = h + swiglu(hn @ w_gate, hn @ w_up) @ w_down
+  output y
+
+  schedule {
+    fuse gated
+    group shared_input
+  }
+}

@@ -15,7 +15,14 @@ add_library(dynacore STATIC
   src/hardware/process_stats.cpp
   src/hardware/system_info.cpp
   src/hardware/thread_qos.cpp
+  src/ir/executor.cpp
+  src/ir/ir.cpp
+  src/ir/passes.cpp
+  src/ir/recording_device.cpp
+  src/ir/text.cpp
+  src/ir/verifier.cpp
   src/kernel/kernel_plan.cpp
+  src/lang/lang.cpp
   src/memory/host_memory.cpp
   src/memory/mapped_file.cpp
   src/memory/storage.cpp
@@ -45,21 +52,29 @@ if(ENABLE_AVX2)
   engine_set_isa(AVX2 cpu/avx2/kernels_avx2.cpp)
 endif()
 
+# dynacorec: the DynaCore compiler driver (DD-073).
+add_executable(dynacorec tools/dynacorec.cpp)
+target_link_libraries(dynacorec PRIVATE dynacore)
+set_target_properties(dynacorec PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
 if(ENABLE_TESTS)
   function(dynacore_add_test name)
     add_executable(${name} ${ARGN})
     target_link_libraries(${name} PRIVATE dynacore GTest::gtest_main)
-    target_compile_definitions(${name} PRIVATE ENGINE_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
+    target_compile_definitions(${name} PRIVATE ENGINE_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data"
+                                             DYNACORE_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
     gtest_discover_tests(${name} DISCOVERY_TIMEOUT 60)
   endfunction()
   dynacore_add_test(dynacore_test_foundation tests/test_status.cpp tests/test_cpu_info.cpp)
   dynacore_add_test(dynacore_test_tensor tests/test_dtype.cpp tests/test_tensor.cpp)
   dynacore_add_test(dynacore_test_quant tests/test_quant.cpp)
   dynacore_add_test(dynacore_test_kernels tests/test_kernels.cpp tests/test_int8_decode.cpp)
+  dynacore_add_test(dynacore_test_ir tests/test_ir.cpp)
+  dynacore_add_test(dynacore_test_lang tests/test_lang.cpp)
 endif()
 
 if(ENABLE_BENCHMARKS)
-  foreach(_b kernels matmul quant tensor thread_pool)
+  foreach(_b elementwise kernels matmul quant tensor thread_pool)
     add_executable(bench_${_b} benchmarks/bench_${_b}.cpp)
     target_link_libraries(bench_${_b} PRIVATE dynacore)
     target_include_directories(bench_${_b} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks)

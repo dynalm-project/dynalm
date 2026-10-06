@@ -123,6 +123,7 @@ endif()
 #   cmake --install build --prefix ~/.local     -> bin/dynalm, share/doc/dynalm
 #   cpack --config build/CPackConfig.cmake      -> dynalm-<ver>-<os>-<arch>.zip/.tar.gz
 include(GNUInstallDirs)
+install(TARGETS dynacorec RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 if(NOT DYNALM_CORE_ONLY)
   install(TARGETS dynalm RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()

@@ -49,6 +49,8 @@ class CpuDevice final : public Device {
                 std::span<const int32_t> row_seq, std::span<const KvLayerView> kv) override;
   void attention(const AttentionParams& p) override;
   void act_mul(Activation act, const TensorView& gate, const TensorView& up, const TensorView& out) override;
+  void matmul_gated(Activation act, const TensorView& x, const TensorView& w_gate, const TensorView& w_up,
+                    const TensorView& out, const TensorView& gate_scratch, const TensorView& up_scratch) override;
   void activation(Activation act, const TensorView& x, const TensorView& out) override;
   void add(const TensorView& a, const TensorView& b, const TensorView& y) override;
   void scale(const TensorView& x, float s) override;

@@ -105,14 +105,15 @@ void CpuDevice::matmul_many(std::span<const MatmulJob> jobs) {
   // no longer pays a fork/join per expert per projection.
   if (jobs.empty()) return;
   if (jobs.size() == 1) {
-    matmul(jobs[0].x, jobs[0].w, nullptr, jobs[0].y);
+    matmul(jobs[0].x, jobs[0].w, jobs[0].bias, jobs[0].y);
     return;
   }
   constexpr int64_t kChunk = 16;
   enum class Path : uint8_t { kInt8, kFused, kPanel };
   struct JobPlan {
     Path path;
-    int64_t act_offset;  // into act_q8_ (int8 path)
+    int64_t act_offset;       // into act_q8_ (int8 path)
+    bool shares_act = false;  // reuses an earlier job's quantized activations
   };
   thread_local std::vector<JobPlan> plans;
   thread_local std::vector<size_t> first_chunk;  // prefix sums of per-job chunk counts
@@ -124,11 +125,22 @@ void CpuDevice::matmul_many(std::span<const MatmulJob> jobs) {
     const DType wt = j.w.dtype();
     // Rows may be strided (MoE slices of a wider buffer): quantization works
     // row by row and the GEMM tile takes a row stride, so neither needs dense x.
-    JobPlan p{Path::kFused, 0};
+    JobPlan p{Path::kFused, 0, false};
     if (m <= plan_.int8_decode_max_rows && int8_accelerated_ && k % kActQ8Block == 0 &&
         k_.dot_q8_rows_for(wt) != nullptr) {
       p = {Path::kInt8, act_blocks};
-      act_blocks += m * (k / kActQ8Block);
+      // Jobs reading the same activations (Q/K/V, gate/up) share one quantized copy.
+      bool shared = false;
+      for (size_t prev = 0; prev < plans.size() && !shared; ++prev) {
+        const MatmulJob& pj = jobs[prev];
+        if (plans[prev].path == Path::kInt8 && pj.x.data() == j.x.data() && rows(pj.x) == m && cols(pj.x) == k &&
+            pj.x.stride(0) == j.x.stride(0)) {
+          p.act_offset = plans[prev].act_offset;
+          p.shares_act = true;
+          shared = true;
+        }
+      }
+      if (!shared) act_blocks += m * (k / kActQ8Block);
     } else if (m >= plan_.expand_min_rows && wt != DType::kF32) {
       p.path = Path::kPanel;
     }
@@ -138,7 +150,7 @@ void CpuDevice::matmul_many(std::span<const MatmulJob> jobs) {
   // Quantize the int8 jobs' activations once, before the region.
   act_q8_.resize(static_cast<size_t>(act_blocks));
   for (size_t ji = 0; ji < jobs.size(); ++ji) {
-    if (plans[ji].path != Path::kInt8) continue;
+    if (plans[ji].path != Path::kInt8 || plans[ji].shares_act) continue;
     const int64_t m = rows(jobs[ji].x), k = cols(jobs[ji].x), nb = k / kActQ8Block;
     for (int64_t r = 0; r < m; ++r) {
       k_.quantize_act(row_ptr<const float>(jobs[ji].x, r), act_q8_.data() + plans[ji].act_offset + r * nb, k);
@@ -195,6 +207,13 @@ void CpuDevice::matmul_many(std::span<const MatmulJob> jobs) {
                           m, k, j.y.data_as<float>() + j0, y_stride, /*accumulate=*/false);
           }
           break;
+        }
+      }
+      if (j.bias != nullptr) {
+        const float* bias = j.bias->data_as<const float>();
+        for (int64_t i = 0; i < m; ++i) {
+          float* yr = row_ptr<float>(j.y, i);
+          for (int64_t r = n0; r < n1; ++r) yr[r] += bias[r];
         }
       }
     }
@@ -632,25 +651,92 @@ void CpuDevice::attention(const AttentionParams& p) {
   });
 }
 
+namespace {
+
+// Elementwise work over [m, d] as (row, column chunk) tasks: a decode step has
+// one row, so splitting columns is what spreads it over the pool.
+constexpr int64_t kEltChunk = 2048;
+
+template <typename Fn>
+void for_row_chunks(ThreadPool& pool, int64_t m, int64_t d, Fn&& fn) {
+  const int64_t chunks = (d + kEltChunk - 1) / kEltChunk;
+  const auto tasks = static_cast<size_t>(m * chunks);
+  if (tasks <= 1) {
+    if (m == 1) fn(int64_t{0}, int64_t{0}, d);
+    return;
+  }
+  pool.parallel_for(tasks, 1, [&](size_t begin, size_t end) {
+    for (size_t t = begin; t < end; ++t) {
+      const int64_t r = static_cast<int64_t>(t) / chunks, c = static_cast<int64_t>(t) % chunks;
+      fn(r, c * kEltChunk, std::min(d, (c + 1) * kEltChunk));
+    }
+  });
+}
+
+template <typename ActFn>
+void act_mul_span(ActFn f, const float* g, const float* u, float* o, int64_t n) {
+  for (int64_t i = 0; i < n; ++i) o[i] = f(g[i]) * u[i];
+}
+
+}  // namespace
+
 void CpuDevice::act_mul(Activation act, const TensorView& gate, const TensorView& up, const TensorView& out) {
   const int64_t m = rows(gate), d = cols(gate);
-  pool_.parallel_for(static_cast<size_t>(m), 1, [&](size_t begin, size_t end) {
-    for (size_t r = begin; r < end; ++r) {
-      const float* gr = row_ptr<const float>(gate, static_cast<int64_t>(r));
-      const float* ur = row_ptr<const float>(up, static_cast<int64_t>(r));
-      float* o = row_ptr<float>(out, static_cast<int64_t>(r));
-      for (int64_t i = 0; i < d; ++i) o[i] = apply_act(act, gr[i]) * ur[i];
+  for_row_chunks(pool_, m, d, [&](int64_t r, int64_t c0, int64_t c1) {
+    const float* gr = row_ptr<const float>(gate, r) + c0;
+    const float* ur = row_ptr<const float>(up, r) + c0;
+    float* o = row_ptr<float>(out, r) + c0;
+    // One loop per activation (no switch per element) so each vectorizes.
+    switch (act) {
+      case Activation::kSilu: act_mul_span(silu, gr, ur, o, c1 - c0); break;
+      case Activation::kGelu: act_mul_span(gelu, gr, ur, o, c1 - c0); break;
+      case Activation::kGeluTanh: act_mul_span(gelu_tanh, gr, ur, o, c1 - c0); break;
+    }
+  });
+}
+
+void CpuDevice::matmul_gated(Activation act, const TensorView& x, const TensorView& w_gate, const TensorView& w_up,
+                             const TensorView& out, const TensorView& gate_scratch, const TensorView& up_scratch) {
+  const int64_t m = rows(x), k = cols(x), n = rows(w_gate);
+  const DotQ8RowsFn dot_gate = k_.dot_q8_rows_for(w_gate.dtype());
+  const DotQ8RowsFn dot_up = k_.dot_q8_rows_for(w_up.dtype());
+  // Fused only where both projections take the int8 decode path (DD-053);
+  // otherwise the unfused sequence (GEMM paths amortize differently).
+  if (!(m <= plan_.int8_decode_max_rows && int8_accelerated_ && k % kActQ8Block == 0 && dot_gate && dot_up &&
+        rows(w_up) == n)) {
+    Device::matmul_gated(act, x, w_gate, w_up, out, gate_scratch, up_scratch);
+    return;
+  }
+  const int64_t nb = k / kActQ8Block;
+  act_q8_.resize(static_cast<size_t>(m * nb));
+  for (int64_t r = 0; r < m; ++r) k_.quantize_act(row_ptr<const float>(x, r), act_q8_.data() + r * nb, k);
+  const ActBlockQ8* actq = act_q8_.data();
+  const int64_t g_row = dtype_row_bytes(w_gate.dtype(), k), u_row = dtype_row_bytes(w_up.dtype(), k);
+  const auto* gbase = static_cast<const std::byte*>(w_gate.data());
+  const auto* ubase = static_cast<const std::byte*>(w_up.data());
+  pool_.parallel_for(static_cast<size_t>(n), grain_for(static_cast<size_t>(n), pool_.size(), 4, plan_.matmul_chunks_per_thread),
+                     [&](size_t begin, size_t end) {
+    float g[kDotRowsMax], u[kDotRowsMax];
+    const ActBlockQ8* xr[kDotRowsMax];
+    for (size_t j = begin; j < end; ++j) {
+      for (int64_t r0 = 0; r0 < m; r0 += kDotRowsMax) {
+        const int mm = static_cast<int>(std::min<int64_t>(kDotRowsMax, m - r0));
+        for (int t = 0; t < mm; ++t) xr[t] = actq + (r0 + t) * nb;
+        dot_gate(gbase + static_cast<int64_t>(j) * g_row, xr, mm, k, g);
+        dot_up(ubase + static_cast<int64_t>(j) * u_row, xr, mm, k, u);
+        for (int t = 0; t < mm; ++t) row_ptr<float>(out, r0 + t)[j] = apply_act(act, g[t]) * u[t];
+      }
     }
   });
 }
 
 void CpuDevice::activation(Activation act, const TensorView& x, const TensorView& out) {
   const int64_t m = rows(x), d = cols(x);
-  for (int64_t r = 0; r < m; ++r) {
-    const float* xr = row_ptr<const float>(x, r);
-    float* o = row_ptr<float>(out, r);
-    for (int64_t i = 0; i < d; ++i) o[i] = apply_act(act, xr[i]);
-  }
+  for_row_chunks(pool_, m, d, [&](int64_t r, int64_t c0, int64_t c1) {
+    const float* xr = row_ptr<const float>(x, r) + c0;
+    float* o = row_ptr<float>(out, r) + c0;
+    for (int64_t i = 0; i < c1 - c0; ++i) o[i] = apply_act(act, xr[i]);
+  });
 }
 
 void CpuDevice::add(const TensorView& a, const TensorView& b, const TensorView& y) {

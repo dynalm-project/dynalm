@@ -77,14 +77,15 @@ class Device {
   virtual void embedding(const TensorView& table, std::span<const int32_t> ids, const TensorView& out) = 0;
   // y[m, n] = x[m, k] · w[n, k]ᵀ (+ bias[n])
   virtual void matmul(const TensorView& x, const TensorView& w, const TensorView* bias, const TensorView& y) = 0;
-  // Several independent matmuls (no bias), e.g. the active experts of an MoE
-  // layer. Backends may run them in one parallel region; the default runs
-  // them in order.
+  // Several independent matmuls, e.g. the active experts of an MoE layer, or
+  // projections sharing one input (Q/K/V, gate/up) grouped by the compiler.
+  // `bias` is optional and must outlive the call.
   struct MatmulJob {
     TensorView x, w, y;
+    const TensorView* bias = nullptr;
   };
   virtual void matmul_many(std::span<const MatmulJob> jobs) {
-    for (const MatmulJob& j : jobs) matmul(j.x, j.w, nullptr, j.y);
+    for (const MatmulJob& j : jobs) matmul(j.x, j.w, j.bias, j.y);
   }
   // Row-wise RMSNorm: y = x / rms(x) * weight
   virtual void rms_norm(const TensorView& x, const TensorView& weight, float eps, const TensorView& y) = 0;
@@ -102,6 +103,18 @@ class Device {
   virtual void attention(const AttentionParams& p) = 0;
   // out = act(gate) * up  (elementwise)
   virtual void act_mul(Activation act, const TensorView& gate, const TensorView& up, const TensorView& out) = 0;
+  // Gated MLP projection (SwiGLU / GeGLU), a compiler fusion (DD-072):
+  //   out[M, N] = act(x . w_gate^T) * (x . w_up^T)
+  // `gate_scratch` / `up_scratch` ([M, N]) may be used and clobbered; a
+  // device with a fused kernel computes both projections per output column
+  // and applies the activation while the values are in registers. The default
+  // is the unfused sequence.
+  virtual void matmul_gated(Activation act, const TensorView& x, const TensorView& w_gate, const TensorView& w_up,
+                            const TensorView& out, const TensorView& gate_scratch, const TensorView& up_scratch) {
+    matmul(x, w_gate, nullptr, gate_scratch);
+    matmul(x, w_up, nullptr, up_scratch);
+    act_mul(act, gate_scratch, up_scratch, out);
+  }
   // out = act(x)
   virtual void activation(Activation act, const TensorView& x, const TensorView& out) = 0;
   // y = a + b (same shapes); may alias a or b
