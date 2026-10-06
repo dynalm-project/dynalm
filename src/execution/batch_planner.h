@@ -19,20 +19,6 @@
 
 namespace engine {
 
-// What the planner knows about the machine. Filled once at engine creation.
-struct HardwareProfile {
-  int32_t threads = 1;         // compute threads available to kernels
-  int32_t physical_cores = 1;
-  int32_t performance_cores = 0;  // 0 = not a hybrid CPU
-  int32_t efficiency_cores = 0;
-  int64_t l2_bytes = 0;        // per core
-  int64_t llc_bytes = 0;
-  std::string_view isa;        // e.g. "avx2" (informational)
-
-  // From platform/cpu_info, with `threads` compute threads.
-  static HardwareProfile detect(int32_t threads, std::string_view isa);
-};
-
 enum class StepPhase : uint8_t {
   kDecode,   // every sequence contributes one row
   kPrefill,  // every sequence contributes a prompt chunk

@@ -65,4 +65,34 @@ struct KernelPlan {
   static const KernelPlan& defaults();
 };
 
+// What kernel selection knows about the machine. Filled once when the model
+// runtime is created.
+struct HardwareProfile {
+  int32_t threads = 1;         // compute threads available to kernels
+  int32_t physical_cores = 1;
+  int32_t performance_cores = 0;  // 0 = not a hybrid CPU
+  int32_t efficiency_cores = 0;
+  int64_t l2_bytes = 0;        // per core
+  int64_t llc_bytes = 0;
+  std::string_view isa;        // e.g. "avx2" (informational)
+
+  // From the detected CPU, with `threads` compute threads.
+  static HardwareProfile detect(int32_t threads, std::string_view isa);
+};
+
+// The numeric shape of one forward step: everything kernel selection needs,
+// and nothing about sequences, requests or model families. The caller reduces
+// its batch to this; plan_kernels() turns it into a KernelPlan.
+struct StepShape {
+  int32_t rows = 0;            // query rows through the step
+  int32_t max_context = 0;     // longest attention span of any row (tokens)
+  int32_t num_kv_heads = 0;
+  int32_t sliding_window = 0;  // window of windowed layers (tokens)
+  bool has_window_layers = false;
+};
+
+// Per-step kernel decisions (DD-051): `base` with the attention strategy and
+// split-K chunking chosen for this shape on this hardware.
+KernelPlan plan_kernels(const StepShape& shape, const HardwareProfile& hw, const KernelPlan& base);
+
 }  // namespace engine
