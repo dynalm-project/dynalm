@@ -101,6 +101,16 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
+    },
+    {
+      "name": "core-only",
+      "inherits": "base",
+      "displayName": "DynaCore alone (boundary check)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "DYNALM_CORE_ONLY": "ON",
+        "ENABLE_SERVER": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -135,6 +145,10 @@
     {
       "name": "macos-release",
       "configurePreset": "macos-release"
+    },
+    {
+      "name": "core-only",
+      "configurePreset": "core-only"
     }
   ],
   "testPresets": [
@@ -190,6 +204,13 @@
     {
       "name": "macos-release",
       "configurePreset": "macos-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "core-only",
+      "configurePreset": "core-only",
       "output": {
         "outputOnFailure": true
       }

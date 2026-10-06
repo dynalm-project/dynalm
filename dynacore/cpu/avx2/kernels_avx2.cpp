@@ -755,7 +755,7 @@ void dot_rows_q6_K_m(const void* w, const ActBlockQ8* const* x, int64_t n, float
   for (int r = 0; r < M; ++r) out[r] = hsum(acc[r]);
 }
 
-#define DYNALM_DOT_ROWS(name)                                                                       \
+#define DYNACORE_DOT_ROWS(name)                                                                       \
   void name(const void* w, const ActBlockQ8* const* x, int m, int64_t n, float* out) {             \
     switch (m) {                                                                                    \
       case 1: name##_m<1>(w, x, n, out); break;                                                     \
@@ -764,12 +764,12 @@ void dot_rows_q6_K_m(const void* w, const ActBlockQ8* const* x, int64_t n, float
       default: name##_m<4>(w, x, n, out); break;                                                    \
     }                                                                                               \
   }
-DYNALM_DOT_ROWS(dot_rows_q8_0)
-DYNALM_DOT_ROWS(dot_rows_q4_0)
-DYNALM_DOT_ROWS(dot_rows_q5_0)
-DYNALM_DOT_ROWS(dot_rows_q4_K)
-DYNALM_DOT_ROWS(dot_rows_q6_K)
-#undef DYNALM_DOT_ROWS
+DYNACORE_DOT_ROWS(dot_rows_q8_0)
+DYNACORE_DOT_ROWS(dot_rows_q4_0)
+DYNACORE_DOT_ROWS(dot_rows_q5_0)
+DYNACORE_DOT_ROWS(dot_rows_q4_K)
+DYNACORE_DOT_ROWS(dot_rows_q6_K)
+#undef DYNACORE_DOT_ROWS
 
 }  // namespace
 

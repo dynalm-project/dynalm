@@ -60,7 +60,7 @@ reports Before / After / Delta from measurement (method: [docs/performance.md](d
 - [x] P9 — INT8 activations / AVX-VNNI: int8 decode for ≤ 4 rows shipped in P3 (DD-053); a VNNI GEMM
   prototype for larger M measured 0.75–0.89× fp32 (per-block scaling), so it was not adopted (DD-058)
 - [x] P10 — CPU topology: thread-count sweep confirms one thread per physical core (SMT hurts); per-core
-  map + opt-in pinning (`DYNALM_PIN_THREADS=1`), never better on Windows; NUMA needs multi-socket hardware (DD-059)
+  map + opt-in pinning (`DYNACORE_PIN_THREADS=1`), never better on Windows; NUMA needs multi-socket hardware (DD-059)
 - [x] P11 — MoE: grouped expert execution, one region per projection with per-expert paths;
   Granite-MoE regions 1,857 → 313 per step, +5–7% tok/s at c=4/16 (DD-060)
 - [x] P12 — Scheduler policies `--policy latency|balanced|throughput`; aggregate tok/s is saturated at c ≥ 16, budgets

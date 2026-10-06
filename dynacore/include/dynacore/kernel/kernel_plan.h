@@ -60,8 +60,8 @@ struct KernelPlan {
   // (the pre-DD-066 path, kept for A/B measurement and as a reference).
   bool grouped_attention = true;
 
-  // Defaults, with the tuning overrides DYNALM_MATMUL_EXPAND_MIN,
-  // DYNALM_GEMM_KC, DYNALM_INT8_DECODE_ROWS, DYNALM_ATTN_GROUPED and DYNALM_MATMUL_CHUNKS applied (read once per process).
+  // Defaults, with the tuning overrides DYNACORE_MATMUL_EXPAND_MIN,
+  // DYNACORE_GEMM_KC, DYNACORE_INT8_DECODE_ROWS, DYNACORE_ATTN_GROUPED and DYNACORE_MATMUL_CHUNKS applied (read once per process).
   static const KernelPlan& defaults();
 };
 

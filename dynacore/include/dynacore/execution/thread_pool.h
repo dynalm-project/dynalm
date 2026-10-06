@@ -45,7 +45,7 @@ class ThreadPool {
   int size() const { return static_cast<int>(workers_.size()) + 1; }
 
   // One compute thread per physical core, performance cores first (P10,
-  // DD-059): with DYNALM_PIN_THREADS=1, worker i is bound to core i + 1 and
+  // DD-059): with DYNACORE_PIN_THREADS=1, worker i is bound to core i + 1 and
   // the thread calling pin_caller() (the scheduler) to core 0.
   static bool pinning_enabled();
   void pin_caller() const;

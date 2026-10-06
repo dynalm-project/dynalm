@@ -106,6 +106,12 @@ option(DYNALM_CORE_ONLY "Configure only DynaCore and its tests (boundary check)"
 if(ENABLE_TESTS)
   enable_testing()
   include(DynalmTesting)
+  # DynaCore must not depend on DynaLM: include graph + banned-concept scan.
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_FOUND)
+    add_test(NAME boundary.dynacore
+             COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/tests/boundary/check_boundary.py)
+  endif()
 endif()
 
 add_subdirectory(dynacore)

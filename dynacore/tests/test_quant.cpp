@@ -21,7 +21,7 @@ std::vector<char> read_file(const std::string& path) {
 
 class Dequant : public ::testing::TestWithParam<DType> {};
 
-TEST_P(Dequant, MatchesGgufPy) {
+TEST_P(Dequant, MatchesReferenceNumpy) {
   const DType t = GetParam();
   const std::string base = std::string(ENGINE_TEST_DATA_DIR) + "/quant/" + std::string(dtype_name(t));
   const auto raw = read_file(base + ".bin");

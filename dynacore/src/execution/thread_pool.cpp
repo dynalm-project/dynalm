@@ -96,7 +96,7 @@ void ThreadPool::worker_loop() {
 
 bool ThreadPool::pinning_enabled() {
   static const bool on = [] {
-    const char* v = std::getenv("DYNALM_PIN_THREADS");
+    const char* v = std::getenv("DYNACORE_PIN_THREADS");
     return v && v[0] == '1';
   }();
   return on;

@@ -14,6 +14,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  boundary:
+    name: DynaCore boundary (scan + core-only build)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build libgtest-dev
+      - run: python3 tests/boundary/check_boundary.py
+      # DynaCore alone: the dynalm/ tree is not configured, so any dependency
+      # on it fails to compile.
+      - run: cmake --preset core-only
+      - run: cmake --build --preset core-only
+      - run: ctest --preset core-only --timeout 900
+
   linux:
     name: linux-x64 (${{ matrix.preset }})
     runs-on: ubuntu-24.04
