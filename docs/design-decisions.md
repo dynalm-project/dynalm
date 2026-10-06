@@ -1941,3 +1941,38 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
     sampling is 0.3–0.7% of wall time, and planning + emission + prefix cache are < 0.1%.
   - **Thread pool:** tail wait is 7–14% of region time, and CPU utilization is 0.76–0.86.
 - **Alternatives:** none needed. The per-head path stays available as the reference.
+
+## DD-068: Split the engine into DynaCore (runtime library) and DynaLM (platform), same repo
+
+- **Decision:**
+  - `engine_core` becomes two static libraries: `dynacore` (tensors, dtypes, quant formats,
+    memory, thread pool, hardware detection, devices and kernels) and `dynalm_runtime`
+    (loaders, models, tokenizer, KV policy, scheduler, sampling, engine, API, server).
+    Both stay in this repository and ship inside the one `dynalm` binary.
+  - The dependency runs one way, `dynalm → dynacore`. Three checks enforce it: separate public
+    include directories, a `core-only` CI build, and `tests/boundary/check_boundary.py`, which
+    rejects model, file-format and HTTP names under `dynacore/`.
+  - The `Backend` interface becomes `dynacore::Device` unchanged in shape: coarse ops with
+    caller-owned outputs, chosen over allocating free functions (`gemm(A, B) -> Tensor`).
+  - Paged-KV *layout* (`KvGeometry`, `KvLayerView`) moves to DynaCore because attention kernels
+    address it. KV *policy* (pool, block tables, refcounts, prefix sharing, eviction) stays in
+    DynaLM.
+  - The batch planner splits: DynaLM reduces `SeqBatch[]` to a numeric `StepShape`, and
+    DynaCore's `plan_kernels()` turns that into a `KernelPlan`.
+  - The future IR enters as a recording `Device` that captures the op stream, so it needs no
+    DynaLM rewrite.
+- **Reason:** the platform spec asks for a reusable inference runtime with no LLM knowledge.
+  An include scan found four crossings in today's code: `backend.h` includes
+  `model_ir/model_config.h` and `kv_cache/kv_layout.h`, backends include `runtime/thread_pool.h`,
+  and the planner mixes model views with kernel heuristics. Every other module is already clean,
+  so the split is a move, not a rewrite.
+- **Alternatives:**
+  - Two repositories: rejected while DynaCore has one consumer. It would add version skew and
+    cross-repo changes for every new op.
+  - A shared `libdynacore`: deferred until an external consumer exists. Static linking keeps a
+    one-file install and LTO across the boundary.
+  - YAML library for config: rejected in favor of a strict two-level subset parser, to avoid a
+    new runtime dependency.
+- **Gate for the implementation (R0):** all tests pass, and aggregate output tok/s on
+  Qwen2.5-0.5B is within noise (±2%) of the pre-split binary in an interleaved A/B.
+- **Full design:** [platform-design.md](platform-design.md).

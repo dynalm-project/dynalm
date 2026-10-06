@@ -3,6 +3,9 @@
 Status: **Phase 6** (single-sequence inference works end to end). This document describes the target architecture and marks
 what exists today. Implemented parts are marked ✅; everything else is planned.
 
+The planned split into DynaCore (runtime library) and DynaLM (platform) is designed in
+[platform-design.md](platform-design.md) (DD-068).
+
 ## Layering
 
 ```
