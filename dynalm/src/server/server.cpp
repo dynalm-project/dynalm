@@ -321,6 +321,19 @@ std::string Server::Impl::render_metrics() const {
   counter("dynalm_requests_cancelled_total", "Requests cancelled (e.g. client disconnect)", requests_cancelled.value());
   counter("dynalm_requests_rejected_total", "Requests refused with 503 (overload or draining)", requests_rejected.value());
   counter("dynalm_requests_timed_out_total", "Requests that hit their timeout", st.scheduler.timed_out);
+  render_gauge("dynalm_execution_compiled", "1 when the DynaCore compiled execution mode is on", st.compiled ? 1 : 0, out);
+  if (st.compiled) {
+    counter("dynalm_compiled_segments_total", "Recorded segments executed", static_cast<uint64_t>(st.compiled_segments));
+    counter("dynalm_compiled_plan_cache_hits_total", "Segments that reused a cached plan",
+            static_cast<uint64_t>(st.compiled_cache_hits));
+    counter("dynalm_compiled_plan_cache_misses_total", "Segments compiled from IR",
+            static_cast<uint64_t>(st.compiled_cache_misses));
+    counter("dynalm_compiled_fallbacks_total", "Segments run unplanned after a compiler error",
+            static_cast<uint64_t>(st.compiled_fallbacks));
+    counter("dynalm_compiled_recorded_calls_total", "Device calls recorded", static_cast<uint64_t>(st.compiled_recorded_calls));
+    counter("dynalm_compiled_device_calls_total", "Device calls executed after fusion",
+            static_cast<uint64_t>(st.compiled_device_calls));
+  }
   render_gauge("dynalm_requests_active", "Requests currently being served", active.load(), out);
   counter("dynalm_prompt_tokens_total", "Prompt tokens of completed requests", prompt_tokens.value());
   counter("dynalm_generation_tokens_total", "Tokens generated", st.scheduler.tokens_generated);

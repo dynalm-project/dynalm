@@ -251,6 +251,16 @@ void Engine::loop() {
     st.tokenize_ms = static_cast<double>(tokenize_ns_.load(std::memory_order_relaxed)) * 1e-6;
     st.tokenized_requests = tokenized_.load(std::memory_order_relaxed);
     st.profiling = profiling_;
+    if (compiled_) {
+      const auto& cs = static_cast<const dynacore::ir::RecordingDevice&>(*compiled_).stats();
+      st.compiled = true;
+      st.compiled_segments = cs.segments;
+      st.compiled_cache_hits = cs.cache_hits;
+      st.compiled_cache_misses = cs.cache_misses;
+      st.compiled_fallbacks = cs.fallbacks;
+      st.compiled_device_calls = cs.planned_steps;
+      st.compiled_recorded_calls = cs.ops;
+    }
     if (profiling_) {
       st.forward = transformer_->profile();
       st.pool = pool_->stats();

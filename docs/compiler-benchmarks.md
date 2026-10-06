@@ -42,6 +42,19 @@ Raw data: `results/compiler-e2e-reference.jsonl` and `results/compiler-e2e-compi
 | IR only (record + cached plan) | ±2% | ±2% |
 | Q/K/V group + gated MLP | −4.1 / −7.7 / −8.6 / −9.1% | −1.6 / −4.3 / −5.8 / −6.0% |
 
+### Larger model: Qwen3-4B Q4_K_M (32 query / 8 KV heads, QK-norm)
+
+Same harness, 3 rounds, 24 steps, context 256.
+
+| Variant | 1 sequence | 4 sequences |
+|---|---|---|
+| IR only | +2.5 / +3.9 / −2.0% | −1.4 / +1.3 / −1.0% |
+| all fusions | −1.6 / +1.4 / −2.4% | −3.9 / −1.1 / −1.4% |
+
+The gain shrinks to about 1–2%, near the noise floor. A 4B model's decode step is more
+GEMV-bound (larger matrices), so the latency-bound pieces the fusions remove are a smaller
+share. This, and not the 1.5B result alone, is why compiled mode stays opt-in.
+
 ## One layer in the DynaCore language (`dynacorec --benchmark`)
 
 | Graph | Unplanned | Compiled | Change |

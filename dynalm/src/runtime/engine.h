@@ -133,6 +133,10 @@ struct EngineStats {
   uint64_t tokenized_requests = 0;
   // Filled only while profiling is on (Engine::set_profiling).
   bool profiling = false;
+  // Compiled execution (DD-072); zero in reference mode.
+  bool compiled = false;
+  int64_t compiled_segments = 0, compiled_cache_hits = 0, compiled_cache_misses = 0, compiled_fallbacks = 0;
+  int64_t compiled_device_calls = 0, compiled_recorded_calls = 0;
   ForwardProfile forward;
   ThreadPoolStats pool;
 };
