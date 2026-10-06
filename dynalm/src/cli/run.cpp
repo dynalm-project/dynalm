@@ -45,6 +45,7 @@ void usage() {
                "  --kv f16|f32          KV cache dtype (default f16)\n"
                "  --int8-decode N       int8 activations for matmuls of <= N rows (default 4, 0 = off)\n"
                "  --backend cpu         compute backend (GPU backends are not built yet)\n"
+               "  --execution MODE      reference (default) | compiled: DynaCore IR + fusion (DD-072)\n"
                "  --no-stream           print only the final text\n"
                "sampling (default: greedy; chat: temp 0.8, top-k 40, top-p 0.9, repeat-penalty 1.1):\n"
                "  --temp T              temperature (0 = greedy)\n"
@@ -186,7 +187,8 @@ int run_speculative(const std::string& path, const std::string& spec, int k, boo
 
 // Options `run` takes from the config file and DYNALM_* (config/config.h).
 constexpr OptionSpec kRunConfigOptions[] = {
-    {"model"}, {"threads"}, {"ctx"}, {"batch"}, {"kv"}, {"backend"}, {"int8-decode"}, {"temperature"}, {"max-tokens"},
+    {"model"}, {"threads"}, {"ctx"}, {"batch"}, {"kv"}, {"backend"}, {"execution"}, {"int8-decode"}, {"temperature"},
+    {"max-tokens"},
 };
 
 int cmd_run(std::span<const std::string_view> raw_args) {
@@ -244,6 +246,10 @@ int cmd_run(std::span<const std::string_view> raw_args) {
       auto k = parse_device_kind(value());
       ok = k.ok();
       if (ok) opts.backend = *k;
+    } else if (a == "--execution") {
+      auto x = parse_execution_mode(value());
+      ok = x.ok();
+      if (ok) opts.execution = *x;
     } else if (a == "--kv") {
       const std::string_view v = value();
       ok = v == "f16" || v == "f32";

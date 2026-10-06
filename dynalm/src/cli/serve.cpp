@@ -29,7 +29,7 @@ extern "C" void on_signal(int) { g_signals.fetch_add(1); }
 constexpr OptionSpec kServeOptions[] = {
     {"model"},        {"host"},        {"port"},           {"model-id"},         {"threads"},
     {"ctx"},          {"batch"},       {"kv"},             {"http-threads"},     {"max-tokens"},
-    {"max-active"},   {"request-timeout"}, {"temperature"}, {"backend"}, {"shutdown-timeout"}, {"disable-admin", false}, {"int8-decode"}, {"policy"},
+    {"max-active"},   {"request-timeout"}, {"temperature"}, {"backend"}, {"execution"}, {"shutdown-timeout"}, {"disable-admin", false}, {"int8-decode"}, {"policy"},
 };
 
 void usage() {
@@ -48,6 +48,7 @@ void usage() {
                "  --policy P              balanced (default) | latency | throughput: first-token wait vs\n"
                "                          smooth streaming under load (DD-061)\n"
                "  --backend cpu           compute backend (GPU backends are not built yet)\n"
+               "  --execution MODE        reference (default) | compiled: DynaCore IR + fusion (DD-072)\n"
                "  --max-active N          concurrent requests before 503 (default 64)\n"
                "  --http-threads N|auto   HTTP workers (auto: max-active + 8)\n"
                "  --max-tokens N          default max_tokens per request (default 1024)\n"
@@ -113,6 +114,10 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
       auto k = parse_device_kind(value());
       ok = k.ok();
       if (ok) eo.backend = *k;
+    } else if (a == "--execution") {
+      auto x = parse_execution_mode(value());
+      ok = x.ok();
+      if (ok) eo.execution = *x;
     } else if (a == "--kv") {
       const std::string_view v = value();
       ok = v == "f16" || v == "f32";

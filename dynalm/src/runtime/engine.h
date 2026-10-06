@@ -39,8 +39,19 @@
 
 namespace dynalm {
 
+// How forward passes reach the hardware (DD-072):
+//   kReference  Device ops run as the model issues them (the hand-written
+//               C++ kernels; the A/B baseline).
+//   kCompiled   ops are recorded as DynaCore IR, compiled (canonicalize,
+//               kernel selection, fusion) at every sync point and executed;
+//               any compiler failure runs the recorded ops unchanged.
+enum class ExecutionMode : uint8_t { kReference, kCompiled };
+std::string_view execution_mode_name(ExecutionMode m);
+Result<ExecutionMode> parse_execution_mode(std::string_view s);
+
 struct EngineOptions {
   std::string model_path;
+  ExecutionMode execution = ExecutionMode::kReference;
   int threads = 0;              // 0 = physical cores
   int64_t kv_tokens = 0;        // KV capacity in tokens; 0 = auto (auto_kv_tokens)
   DeviceKind backend = DeviceKind::kCpu;  // DD-045: only CPU is built
@@ -142,7 +153,7 @@ class Engine {
                                                        const GenerateParams& params);
 
   const LoadedModel& model() const { return *model_; }
-  std::string backend_name() const { return std::string(backend_->name()); }
+  std::string backend_name() const { return std::string(compiled_ ? compiled_->name() : backend_->name()); }
   int threads() const { return pool_->size(); }
   const KvGeometry& kv_geometry() const { return kv_->geometry(); }
   // Snapshot taken on the scheduler thread after its latest step.
@@ -171,6 +182,7 @@ class Engine {
   std::unique_ptr<LoadedModel> model_;
   std::unique_ptr<ThreadPool> pool_;
   std::unique_ptr<Device> backend_;
+  std::unique_ptr<Device> compiled_;  // RecordingDevice over backend_ (kCompiled)
   std::unique_ptr<KvBlockPool> kv_;
   std::unique_ptr<Transformer> transformer_;
   std::unique_ptr<Scheduler> scheduler_;

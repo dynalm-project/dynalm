@@ -16,6 +16,7 @@ constexpr YamlKey kYamlKeys[] = {
     {"model.path", "model", "", "model file, directory or name (qwen3:4b)"},
     {"model.id", "model-id", "file name", "id reported by /v1/models"},
     {"runtime.device", "backend", "auto", "auto | cpu (GPU devices are not built yet)"},
+    {"runtime.execution", "execution", "reference", "reference | compiled (DynaCore IR + fusion)"},
     {"runtime.threads", "threads", "auto", "compute threads; auto = physical cores"},
     {"runtime.context_length", "ctx", "auto", "KV cache capacity in tokens; auto = from free RAM"},
     {"runtime.batch_tokens", "batch", "256", "max tokens per forward pass"},

@@ -109,3 +109,6 @@ engine_add_test(test_execution
 
 engine_add_test(test_registry
   test_registry.cpp)
+
+engine_add_test(test_compiled
+  test_compiled.cpp)

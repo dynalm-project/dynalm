@@ -74,6 +74,7 @@ int cmd_benchmark(std::span<const std::string_view> args) {
   int requests = 0, threads = 0, ctx = 32768, int8_rows = -1;
   int prefill_budget = -1, decode_budget = -1, chunk = -1, batch = -1;
   SchedulerPolicy policy = SchedulerPolicy::kBalanced;
+  ExecutionMode execution = ExecutionMode::kReference;
   for (size_t i = 0; i < args.size(); ++i) {
     const std::string_view a = args[i];
     auto value = [&]() -> std::string_view { return i + 1 < args.size() ? args[++i] : std::string_view(); };
@@ -94,6 +95,11 @@ int cmd_benchmark(std::span<const std::string_view> args) {
     else if (a == "--chunk") ok = parse_int(value(), chunk) && chunk >= 0;
     else if (a == "--batch") ok = parse_int(value(), batch) && batch > 0;
     else if (a == "--policy") ok = parse_scheduler_policy(value(), policy);
+    else if (a == "--execution") {
+      auto x = parse_execution_mode(value());
+      ok = x.ok();
+      if (ok) execution = *x;
+    }
     else if (a == "--out") out_file = value();
     else if (path.empty() && !a.starts_with("-")) path = a;
     else ok = false;
@@ -124,6 +130,7 @@ int cmd_benchmark(std::span<const std::string_view> args) {
   const Tokenizer* tokenizer = nullptr;
   if (url.empty()) {
     EngineOptions o;
+    o.execution = execution;
     o.model_path = path;
     o.threads = threads;
     o.kv_tokens = ctx;

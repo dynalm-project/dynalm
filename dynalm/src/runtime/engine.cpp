@@ -1,5 +1,8 @@
 #include "runtime/engine.h"
 
+#include "dynacore/ir/passes.h"
+#include "dynacore/ir/recording_device.h"
+
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
@@ -128,6 +131,16 @@ void prefault_weights(const TensorRegistry& weights, int64_t weight_bytes, Threa
 
 }  // namespace
 
+std::string_view execution_mode_name(ExecutionMode m) {
+  return m == ExecutionMode::kCompiled ? "compiled" : "reference";
+}
+
+Result<ExecutionMode> parse_execution_mode(std::string_view s) {
+  if (s == "reference" || s == "auto") return ExecutionMode::kReference;
+  if (s == "compiled") return ExecutionMode::kCompiled;
+  return InvalidArgument("unknown execution mode '" + std::string(s) + "' (reference, compiled)");
+}
+
 Result<std::unique_ptr<Engine>> Engine::create(EngineOptions opts) {
   request_full_speed_process();  // DD-052
   std::unique_ptr<Engine> e(new Engine());
@@ -137,12 +150,22 @@ Result<std::unique_ptr<Engine>> Engine::create(EngineOptions opts) {
   e->pool_ = std::make_unique<ThreadPool>(threads);
   prefault_weights(e->model_->weights, e->model_->weight_bytes, *e->pool_);
   ENGINE_ASSIGN_OR_RETURN(e->backend_, create_device(opts.backend, *e->pool_));
+  Device* device = e->backend_.get();
+  if (opts.execution == ExecutionMode::kCompiled) {
+    auto rec = std::make_unique<dynacore::ir::RecordingDevice>(*e->backend_, dynacore::ir::RecordingDevice::Mode::kDeferred);
+    KernelPlan base = KernelPlan::defaults();
+    if (opts.int8_decode_rows >= 0) base.int8_decode_max_rows = opts.int8_decode_rows;
+    dynacore::ir::CompileOptions co;
+    co.cost = dynacore::ir::CostModel::from(base, threads);
+    rec->set_planner(dynacore::ir::make_planner(co));
+    device = rec.get();
+    e->compiled_ = std::move(rec);
+  }
   const int64_t kv_tokens = opts.kv_tokens > 0 ? opts.kv_tokens
                                                : auto_kv_tokens(c, opts.kv_dtype, e->model_->weight_bytes,
                                                                 memory_info().available_bytes);
-  ENGINE_ASSIGN_OR_RETURN(e->kv_, KvBlockPool::create(kv_geometry_for(c, opts.kv_dtype, 16, kv_tokens), *e->backend_));
-  ENGINE_ASSIGN_OR_RETURN(e->transformer_,
-                          Transformer::create(c, e->model_->weights, *e->backend_, opts.max_batch_tokens));
+  ENGINE_ASSIGN_OR_RETURN(e->kv_, KvBlockPool::create(kv_geometry_for(c, opts.kv_dtype, 16, kv_tokens), *device));
+  ENGINE_ASSIGN_OR_RETURN(e->transformer_, Transformer::create(c, e->model_->weights, *device, opts.max_batch_tokens));
   if (opts.int8_decode_rows >= 0) {
     KernelPlan base = KernelPlan::defaults();
     base.int8_decode_max_rows = opts.int8_decode_rows;
