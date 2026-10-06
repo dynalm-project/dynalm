@@ -1812,3 +1812,38 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   - Load takes longer: +300 ms for a 2.4 GB model.
   - The weights count toward the working set from the start. They would after the first request
     anyway.
+
+## DD-065: No dedicated small-batch prefill kernel: short prompts already run at the chip's GEMM rate
+
+- **Decision:** prefill steps of 5–64 rows keep the existing path, which dequantizes 4-row weight
+  panels to fp32 once and runs the 4×3 FMA tile. No new small-M kernel was added.
+  `bench_small_m` stays as a diagnostic.
+- **Reason:** a short-prompt prefill on Qwen3-4B Q4_K_M takes ~480 ms for 11 tokens, about 3.4× a
+  decode step, so it looked like a small-batch weakness. Measurement says otherwise.
+  - **Per-row cost:** a fit of `bench_decode_matmul` (`ffn_gate`, 9728×2560, Q4_K, 10 threads)
+    is 0.86 ms fixed plus 0.216 ms per row:
+
+    | rows | 6 | 12 | 24 | 64 |
+    |---|---|---|---|---|
+    | ms | 2.16 | 3.63 | 5.87 | 14.66 |
+
+    The fixed part is reading the weights once (one decode row alone takes 0.7–1.0 ms). Each
+    extra row adds 50 MFLOP at about 230 GFLOP/s.
+  - **Large batches are no faster:** a 512-token prefill of the same model runs at about
+    184 GFLOP/s (22.3 s, 22.7 tok/s). Small batches are not worse per row than large ones.
+    Prefill cost ≈ one decode step + about 30 ms per prompt token, and that per-token cost is
+    whole-chip arithmetic throughput.
+  - **The tile is already efficient:** `bench_small_m` splits one thread's share (243 panels).
+    Dequantization is a fixed ~0.28 ms whatever the row count. The tile adds ~0.045–0.05 ms per
+    row, about 100–106 GFLOP/s on one core, roughly 70% of a P-core's FMA peak.
+  - **Remaining gap:** this is single-core speed vs speed with all cores busy (2 P-cores and
+    8 E-cores, which run 256-bit FMA at half rate). A new tile does not change that.
+- **Alternatives:**
+  - int8/VNNI small-M kernels: already measured at 0.75–0.89× fp32 (DD-058), because of
+    per-block scales.
+  - An outer-product microkernel layout: same FMA-to-load ratio as the 4×3 tile, so the
+    expected gain is a few percent at most.
+  - Formats with one scale per row: the open option from DD-058.
+- **Measurement note:** the Windows clock query in the benchmark diagnostics reported exactly
+  1367 MHz on every run, including prefill-heavy ones. It looks like a fixed value, not a live
+  clock, so throttling cannot be confirmed or ruled out from it.
