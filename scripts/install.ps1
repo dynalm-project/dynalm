@@ -51,7 +51,11 @@ cmd /c $steps
 if ($LASTEXITCODE -ne 0) { throw "build failed (exit $LASTEXITCODE)" }
 
 $exe = Join-Path $Prefix 'bin\dynalm.exe'
-& $exe version
+try {
+  & $exe version
+} catch {
+  Write-Warning "Could not run dynalm.exe version check (blocked by Windows security/App Control policy): $_"
+}
 Say "Installed: $exe"
 
 $bin = Join-Path $Prefix 'bin'

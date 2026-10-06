@@ -5,7 +5,8 @@
 #   tools/fetch_models.sh            # all
 #   tools/fetch_models.sh smollm     # only SmolLM2-135M (llama arch, fastest)
 #   tools/fetch_models.sh f16        # f16 Qwen2.5-0.5B + Gemma-3-270M (Phase 7 golden tests)
-set -euo pipefail
+#   tools/fetch_models.sh qwen27b    # Qwen3.8-27B-GSQ-RCO-IQ3_S.gguf (ISTA-DASLab 27B model)
+set -eu
 cd "$(dirname "$0")/.."
 mkdir -p models
 
@@ -24,16 +25,21 @@ F16=(
   "https://huggingface.co/unsloth/gemma-3-270m-it-GGUF/resolve/main/gemma-3-270m-it-F16.gguf"
 )
 
+QWEN27B=(
+  "https://huggingface.co/ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF/resolve/main/Qwen3.8-27B-GSQ-RCO-IQ3_S.gguf"
+)
+
 case "${1:-all}" in
   smollm) urls=("${SMOLLM[@]}") ;;
   qwen) urls=("${QWEN[@]}") ;;
   f16) urls=("${F16[@]}") ;;
+  qwen27b) urls=("${QWEN27B[@]}") ;;
   *) urls=("${SMOLLM[@]}" "${QWEN[@]}" "${F16[@]}") ;;
 esac
 
 for u in "${urls[@]}"; do
   f="models/$(basename "$u")"
   echo "fetching $f"
-  curl -sSL --fail --retry 3 -C - -o "$f" "$u"
+  curl -L --progress-bar --fail --retry 3 -C - -o "$f" "$u"
 done
 ls -la models
