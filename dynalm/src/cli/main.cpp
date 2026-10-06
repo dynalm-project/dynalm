@@ -11,6 +11,8 @@
 #include "logging/log.h"
 #include "dynacore/hardware/cpu_info.h"
 #include "dynacore/hardware/isa.h"
+#include "dynacore/hardware/system_info.h"
+#include "dynacore/version.h"
 #include "common/core.h"
 
 #if defined(_WIN32)
@@ -46,89 +48,43 @@ void use_utf8_console() {
 // reaches the tokenizer intact.
 #endif
 
-using dynalm::CpuIsa;
 
-constexpr double kGiB = 1024.0 * 1024.0 * 1024.0;
 
 void print_usage() {
   std::printf(
-      "usage: dynalm [--log-level trace|debug|info|warn|error|off] <command> [args]\n"
+      "usage: dynalm [-q | -v | --log-level LEVEL] <command> [args]\n"
+      "\n"
+      "Get started:\n"
+      "  dynalm doctor                 check this machine\n"
+      "  dynalm pull qwen3:4b          download a model (dynalm models --available lists names)\n"
+      "  dynalm run qwen3:4b           chat in the terminal\n"
+      "  dynalm serve qwen3:4b         OpenAI-compatible API on http://127.0.0.1:8000/v1\n"
       "\n"
       "commands:\n"
-      "  version              print version and build configuration\n"
-      "  info                 print detected hardware and selected CPU backend\n"
-      "  inspect <model>      show model metadata, config and memory estimate\n"
-      "  run <model> -p TEXT  generate from a prompt (dynalm run for options)\n"
-      "  chat <model>         interactive chat, like `ollama run` (also: run <model> without -p)\n"
-      "  serve <model>        OpenAI-compatible HTTP server (dynalm serve for options)\n"
-      "  benchmark <model>    load test (in-process or --url server), P50-P99 latency\n"
-      "  pull <link>          download a GGUF model (Hugging Face link or URL) into ./models\n"
-      "  rm <model>...        delete downloaded models (asks first; -y to skip)\n"
-      "  list [dir]           GGUF models under dir (default ./models or $DYNALM_MODELS_DIR)\n"
-      "  stop | unload        ask a local server to drain and exit (--host, --port)\n");
+      "  run <model> [-p TEXT]   chat, or generate once with -p (dynalm run for options)\n"
+      "  serve <model>           OpenAI-compatible HTTP server (dynalm serve for options)\n"
+      "  pull <model|link>       download a model by name, Hugging Face link or URL\n"
+      "  models [rm|--available] local models; remove one; names you can pull\n"
+      "  inspect <model>         architecture, parameters, quantization, memory estimate\n"
+      "  benchmark <model>       throughput and latency (in-process or --url server)\n"
+      "  doctor [--json]         system report: CPU, ISA, RAM, GPU, device, status\n"
+      "  config [show|path|init] effective configuration and ~/.dynalm/config.yaml\n"
+      "  stop                    ask a local server to drain and exit (--host, --port)\n"
+      "  version                 DynaLM and DynaCore versions, build configuration\n"
+      "\n"
+      "<model> is a name (qwen3:4b, llama:3b, gemma:270m), a .gguf file or a Hugging Face directory.\n"
+      "Log levels: quiet, normal, verbose, debug, trace (-q = quiet, -v = verbose; or DYNALM_LOG_LEVEL).\n");
 }
 
 int cmd_version() {
-  std::printf("DynaLM %s\n", ENGINE_VERSION_STRING);
-  std::printf("build:    %s, %s %s\n", ENGINE_BUILD_TYPE, ENGINE_COMPILER_ID, ENGINE_COMPILER_VERSION);
-  std::printf("kernels:  generic%s%s%s%s\n", ENGINE_HAS_AVX2 ? " avx2" : "", ENGINE_HAS_AVX512 ? " avx512" : "",
-              ENGINE_HAS_AMX ? " amx" : "", ENGINE_HAS_NEON ? " neon" : "");
-  std::printf("backends: cpu (built); cuda, hip, metal, vulkan: designed, not built (DD-045)\n");
-  return 0;
-}
-
-std::string feature_list(const dynalm::CpuFeatures& f) {
-  std::string s;
-  auto add = [&](bool on, const char* name) {
-    if (!on) return;
-    if (!s.empty()) s += ' ';
-    s += name;
-  };
-  add(f.sse42, "sse4.2");
-  add(f.avx, "avx");
-  add(f.avx2, "avx2");
-  add(f.fma, "fma");
-  add(f.f16c, "f16c");
-  add(f.avx_vnni, "avx-vnni");
-  add(f.avx512f, "avx512f");
-  add(f.avx512bw, "avx512bw");
-  add(f.avx512vl, "avx512vl");
-  add(f.avx512dq, "avx512dq");
-  add(f.avx512_vnni, "avx512-vnni");
-  add(f.avx512_bf16, "avx512-bf16");
-  add(f.amx_tile, "amx-tile");
-  add(f.amx_int8, "amx-int8");
-  add(f.amx_bf16, "amx-bf16");
-  add(f.neon, "neon");
-  add(f.arm_dotprod, "dotprod");
-  return s.empty() ? "(none)" : s;
-}
-
-int cmd_info() {
-  const dynalm::CpuInfo& cpu = dynalm::cpu_info();
-  const dynalm::MemoryInfo mem = dynalm::memory_info();
-
-  std::printf("CPU:            %s (%s)\n", cpu.brand.c_str(), cpu.vendor.c_str());
-  std::printf("Cores:          %d physical, %d logical", cpu.physical_cores, cpu.logical_cores);
-  if (cpu.performance_cores > 0) {
-    std::printf(" (hybrid: %d P-cores, %d E-cores)", cpu.performance_cores, cpu.efficiency_cores);
-  }
-  std::printf("\n");
-  std::printf("Caches:         L1d %lld KiB/core, L2 %lld KiB, L3 %lld KiB\n",
-              static_cast<long long>(cpu.l1d_bytes / 1024), static_cast<long long>(cpu.l2_bytes / 1024),
-              static_cast<long long>(cpu.l3_bytes / 1024));
-  std::printf("Features:       %s\n", feature_list(cpu.features).c_str());
-  std::printf("RAM:            %.1f GiB total, %.1f GiB available\n", mem.total_bytes / kGiB,
-              mem.available_bytes / kGiB);
-
-  std::string usable;
-  for (CpuIsa isa : dynalm::usable_isas(cpu.features)) {
-    if (!usable.empty()) usable += ", ";
-    usable += dynalm::isa_name(isa);
-  }
-  std::printf("Usable kernels: %s\n", usable.c_str());
-  std::printf("Device:        CPU/%s\n",
-              std::string(dynalm::isa_name(dynalm::select_best_isa(cpu.features))).c_str());
+  std::printf("DynaLM   %s\n", ENGINE_VERSION_STRING);
+  std::printf("DynaCore %s\n", dynacore::kVersionString);
+  std::printf("build:    %s, %s %s, %s\n", ENGINE_BUILD_TYPE, ENGINE_COMPILER_ID, ENGINE_COMPILER_VERSION,
+              dynacore::os_info().arch.c_str());
+  std::printf("kernels:  generic%s%s%s%s (selected at run time: %s)\n", ENGINE_HAS_AVX2 ? " avx2" : "",
+              ENGINE_HAS_AVX512 ? " avx512" : "", ENGINE_HAS_AMX ? " amx" : "", ENGINE_HAS_NEON ? " neon" : "",
+              std::string(dynalm::isa_name(dynalm::select_best_isa(dynalm::cpu_info().features))).c_str());
+  std::printf("devices:  cpu; cuda, hip, metal, vulkan: designed, not built (DD-045)\n");
   return 0;
 }
 
@@ -140,21 +96,34 @@ int main(int argc, char** argv) {
 #endif
   std::vector<std::string_view> args(argv + 1, argv + argc);
 
-  // Global options precede the command.
+  // Global options precede the command. DYNALM_LOG_LEVEL sets the default.
+  auto set_level = [](std::string_view name) {
+    dynalm::log::Level lvl;
+    if (!dynalm::log::parse_level(name, lvl)) {
+      std::fprintf(stderr, "dynalm: invalid log level '%.*s' (quiet, normal, verbose, debug, trace)\n",
+                   static_cast<int>(name.size()), name.data());
+      return false;
+    }
+    dynalm::log::set_level(lvl);
+    return true;
+  };
+  if (const char* env = std::getenv("DYNALM_LOG_LEVEL"); env != nullptr && *env != '\0' && !set_level(env)) return 1;
   size_t i = 0;
-  while (i < args.size() && args[i].starts_with("--")) {
+  while (i < args.size() && args[i].starts_with("-")) {
     if (args[i] == "--log-level" && i + 1 < args.size()) {
-      dynalm::log::Level lvl;
-      if (!dynalm::log::parse_level(args[i + 1], lvl)) {
-        std::fprintf(stderr, "dynalm: invalid log level '%.*s'\n",
-                     static_cast<int>(args[i + 1].size()), args[i + 1].data());
-        return 1;
-      }
-      dynalm::log::set_level(lvl);
+      if (!set_level(args[i + 1])) return 1;
       i += 2;
-    } else if (args[i] == "--help") {
+    } else if (args[i] == "-q" || args[i] == "--quiet") {
+      set_level("quiet");
+      ++i;
+    } else if (args[i] == "-v" || args[i] == "--verbose") {
+      set_level("verbose");
+      ++i;
+    } else if (args[i] == "--help" || args[i] == "-h") {
       print_usage();
       return 0;
+    } else if (args[i] == "--version") {
+      return cmd_version();
     } else {
       std::fprintf(stderr, "dynalm: unknown option '%.*s'\n", static_cast<int>(args[i].size()),
                    args[i].data());
@@ -168,25 +137,27 @@ int main(int argc, char** argv) {
   }
 
   const std::string_view cmd = args[i];
+  const auto rest = std::span(args).subspan(i + 1);
   if (cmd == "version") return cmd_version();
-  if (cmd == "info") return cmd_info();
-  if (cmd == "inspect") return dynalm::cli::cmd_inspect(std::span(args).subspan(i + 1));
-  if (cmd == "run") return dynalm::cli::cmd_run(std::span(args).subspan(i + 1));
-  if (cmd == "chat") return dynalm::cli::cmd_run(std::span(args).subspan(i + 1));  // run without -p
+  if (cmd == "doctor" || cmd == "info") return dynalm::cli::cmd_doctor(rest);  // info: pre-R1 name
+  if (cmd == "config") return dynalm::cli::cmd_config(rest);
+  if (cmd == "inspect") return dynalm::cli::cmd_inspect(rest);
+  if (cmd == "run") return dynalm::cli::cmd_run(rest);
+  if (cmd == "chat") return dynalm::cli::cmd_run(rest);  // run without -p
 #if ENGINE_HAS_SERVER
-  if (cmd == "serve") return dynalm::cli::cmd_serve(std::span(args).subspan(i + 1));
+  if (cmd == "serve") return dynalm::cli::cmd_serve(rest);
 #else
   if (cmd == "serve") {
     std::fprintf(stderr, "dynalm: built without the server (ENABLE_SERVER=OFF)\n");
     return 2;
   }
 #endif
-  if (cmd == "benchmark") return dynalm::cli::cmd_benchmark(std::span(args).subspan(i + 1));
-  if (cmd == "pull") return dynalm::cli::cmd_pull(std::span(args).subspan(i + 1));
-  if (cmd == "rm" || cmd == "delete") return dynalm::cli::cmd_rm(std::span(args).subspan(i + 1));
-  if (cmd == "list") return dynalm::cli::cmd_list(std::span(args).subspan(i + 1));
+  if (cmd == "benchmark") return dynalm::cli::cmd_benchmark(rest);
+  if (cmd == "pull") return dynalm::cli::cmd_pull(rest);
+  if (cmd == "models" || cmd == "list" || cmd == "ls") return dynalm::cli::cmd_models(rest);  // list: pre-R1 name
+  if (cmd == "rm" || cmd == "delete") return dynalm::cli::cmd_rm(rest);
   // One model per server process (DD-039): unloading it means stopping it.
-  if (cmd == "stop" || cmd == "unload") return dynalm::cli::cmd_stop(std::span(args).subspan(i + 1));
+  if (cmd == "stop" || cmd == "unload") return dynalm::cli::cmd_stop(rest);
   if (cmd == "help") {
     print_usage();
     return 0;

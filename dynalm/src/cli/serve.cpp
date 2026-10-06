@@ -12,6 +12,7 @@
 #include "dynacore/device/device_registry.h"
 #include "cli/commands.h"
 #include "config/config.h"
+#include "registry/model_registry.h"
 #include "logging/log.h"
 #include "dynacore/hardware/cpu_info.h"
 #include "runtime/engine.h"
@@ -127,6 +128,17 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
   if (eo.model_path.empty() || max_tokens <= 0 || max_active <= 0 || request_timeout_s < 0 || shutdown_timeout_s < 0 ||
       so.port < 0 || so.port > 65535) {
     usage();
+    return 1;
+  }
+  // A registry name is also the id clients see in /v1/models.
+  if (const RegistryEntry* entry = is_model_name(eo.model_path) ? find_registry_entry(eo.model_path) : nullptr;
+      entry != nullptr && so.model_id.empty()) {
+    so.model_id = entry->name;
+  }
+  if (auto resolved = ensure_model(eo.model_path, true); resolved.ok()) {
+    eo.model_path = *resolved;
+  } else {
+    std::fprintf(stderr, "serve: %s\n", resolved.status().message().c_str());
     return 1;
   }
   eo.threads = threads;

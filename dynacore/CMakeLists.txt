@@ -13,6 +13,7 @@ add_library(dynacore STATIC
   src/hardware/isa.cpp
   src/hardware/perf_counters.cpp
   src/hardware/process_stats.cpp
+  src/hardware/system_info.cpp
   src/hardware/thread_qos.cpp
   src/kernel/kernel_plan.cpp
   src/memory/host_memory.cpp
@@ -29,6 +30,7 @@ add_library(dynacore STATIC
 )
 target_include_directories(dynacore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(dynacore PUBLIC engine_options)
+target_link_libraries(dynacore PRIVATE ${CMAKE_DL_LIBS})  # GPU driver probe (dlopen)
 if(WIN32)
   target_link_libraries(dynacore PRIVATE pdh)  # effective CPU frequency (DD-066)
 endif()

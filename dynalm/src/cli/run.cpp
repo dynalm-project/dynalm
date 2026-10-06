@@ -12,6 +12,7 @@
 #include "dynacore/device/device_registry.h"
 #include "cli/chat.h"
 #include "cli/commands.h"
+#include "config/config.h"
 #include "dynacore/base/timer.h"
 #include "logging/log.h"
 #include "dynacore/hardware/cpu_info.h"
@@ -183,9 +184,21 @@ int run_speculative(const std::string& path, const std::string& spec, int k, boo
 
 }  // namespace
 
-int cmd_run(std::span<const std::string_view> args) {
+// Options `run` takes from the config file and DYNALM_* (config/config.h).
+constexpr OptionSpec kRunConfigOptions[] = {
+    {"model"}, {"threads"}, {"ctx"}, {"batch"}, {"kv"}, {"backend"}, {"int8-decode"}, {"temperature"}, {"max-tokens"},
+};
+
+int cmd_run(std::span<const std::string_view> raw_args) {
+  auto merged = merge_config(raw_args, kRunConfigOptions);
+  if (!merged.ok()) {
+    std::fprintf(stderr, "run: %s\n", merged.status().message().c_str());
+    return 1;
+  }
+  const std::vector<std::string_view> arg_views(merged->begin(), merged->end());
+  const std::span<const std::string_view> args(arg_views);
   bool max_set = false, sampling_set = false;
-  std::string path, prompt, system;
+  std::string path, prompt, system, config_model;
   int max_tokens = 128, threads = 0, ctx = 4096, batch = 256;
   bool chat = true, stream = true;
   std::string spec;
@@ -202,9 +215,10 @@ int cmd_run(std::span<const std::string_view> args) {
     else if (a == "--system") system = value();
     else if (a == "--stop") params.stop.emplace_back(value());
     else if (a == "-n" || a == "--max-tokens") ok = parse_int(value(), max_tokens), max_set = true;
-    else if (a == "-t" || a == "--threads") ok = parse_int(value(), threads);
-    else if (a == "-c" || a == "--ctx") ok = parse_int(value(), ctx);
-    else if (a == "--batch") ok = parse_int(value(), batch);
+    else if (a == "-t" || a == "--threads") ok = parse_int_or_auto(value(), threads);
+    else if (a == "-c" || a == "--ctx") ok = parse_int_or_auto(value(), ctx);
+    else if (a == "--batch") ok = parse_int_or_auto(value(), batch);
+    else if (a == "--model") config_model = value();
     else if (a == "--int8-decode") ok = parse_int(value(), opts.int8_decode_rows) && opts.int8_decode_rows >= 0;
     else if (a == "--chat") chat = true;
     else if (a == "--raw") chat = false;
@@ -246,6 +260,9 @@ int cmd_run(std::span<const std::string_view> args) {
       return 1;
     }
   }
+  if (path.empty()) path = config_model;  // model.path from the config file
+  if (ctx == 0) ctx = 4096;               // auto
+  if (batch == 0) batch = 256;            // auto
   const bool interactive = prompt.empty();
   if (interactive && (!chat || !spec.empty())) {
     std::fprintf(stderr, "run: interactive chat needs chat mode (no --raw, no --spec); pass -p for one prompt\n");
@@ -263,6 +280,20 @@ int cmd_run(std::span<const std::string_view> args) {
   if (path.empty() || max_tokens <= 0 || threads < 0 || ctx <= 0 || batch <= 0) {
     usage();
     return 1;
+  }
+  if (auto resolved = ensure_model(path, true); resolved.ok()) {
+    path = *resolved;
+  } else {
+    std::fprintf(stderr, "run: %s\n", resolved.status().message().c_str());
+    return 1;
+  }
+  if (!spec.empty() && spec != "ngram") {
+    if (auto draft = ensure_model(spec, true); draft.ok()) {
+      spec = *draft;
+    } else {
+      std::fprintf(stderr, "run: draft model: %s\n", draft.status().message().c_str());
+      return 1;
+    }
   }
   if (Status st = params.sampling.validate(); !st.ok()) {
     std::fprintf(stderr, "run: %s\n", st.to_string().c_str());

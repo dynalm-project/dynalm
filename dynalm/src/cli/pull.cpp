@@ -1,6 +1,7 @@
-// dynalm pull <link> [-o DIR] [--force]
+// dynalm pull <name|link> [-o DIR] [--force]
 //
-// Downloads one GGUF model file into the models directory. The link is a
+// Downloads one GGUF model file into the model store. The argument is a
+// registry name (qwen3:4b; registry/model_registry.h), or a
 // Hugging Face file link (page or download form), the short form
 // <owner>/<repo>/<file>.gguf, or any direct http(s) URL. Before the full
 // download, the first 256 KiB are fetched and the architecture is checked, so
@@ -24,6 +25,7 @@
 #include "loader/gguf/gguf.h"
 #include "loader/model_source.h"
 #include "model/architecture.h"
+#include "registry/model_registry.h"
 #include "common/core.h"
 
 #if defined(_WIN32)
@@ -105,12 +107,13 @@ std::string curl_error(int rc) {
 
 void print_usage() {
   std::fprintf(stderr,
-               "usage: dynalm pull <link> [-o DIR] [--force]\n"
+               "usage: dynalm pull <name|link> [-o DIR] [--force]\n"
                "\n"
+               "  <name>   a model name, e.g. qwen3:4b, llama3.2:3b, gemma3:270m (dynalm models --available)\n"
                "  <link>   a .gguf file on Hugging Face or any http(s) URL, e.g.\n"
                "             https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/blob/main/qwen2.5-0.5b-instruct-q4_k_m.gguf\n"
                "             Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q4_k_m.gguf\n"
-               "  -o DIR   where to save (default $DYNALM_MODELS_DIR or ./models)\n"
+               "  -o DIR   where to save (default $DYNALM_MODELS_DIR or ~/.dynalm/models)\n"
                "  --force  download even if the model looks unsupported, or is already present\n"
                "  --check  only check whether DynaLM supports the model (reads 256 KiB, saves nothing)\n"
                "\n"
@@ -121,8 +124,7 @@ void print_usage() {
 }  // namespace
 
 int cmd_pull(std::span<const std::string_view> args) {
-  std::string link, dir = "models";
-  if (const char* env = std::getenv("DYNALM_MODELS_DIR"); env && *env) dir = env;
+  std::string link, dir = models_dir();
   bool force = false, check_only = false;
   for (size_t i = 0; i < args.size(); ++i) {
     if (args[i] == "--force") force = true;
@@ -134,7 +136,13 @@ int cmd_pull(std::span<const std::string_view> args) {
   }
   if (link.empty()) { print_usage(); return 1; }
 
-  auto url = resolve_model_url(link);
+  const RegistryEntry* entry = is_model_name(link) ? find_registry_entry(link) : nullptr;
+  if (entry != nullptr) {
+    std::printf("pulling %s: %s, %s, about %.1f GB\n", std::string(entry->name).c_str(),
+                std::string(entry->note).c_str(), std::string(entry->quant).c_str(),
+                static_cast<double>(entry->size_bytes) / 1e9);
+  }
+  auto url = entry != nullptr ? Result<std::string>(std::string(entry->url)) : resolve_model_url(link);
   if (!url.ok()) {
     std::fprintf(stderr, "pull: %s\n", url.status().message().c_str());
     return 1;
@@ -242,9 +250,22 @@ int cmd_pull(std::span<const std::string_view> args) {
   std::printf("%s %s (%.1f MiB): %s\n", present && !force ? "found" : "saved", dest.string().c_str(),
               static_cast<double>((*f)->file().size()) / (1024.0 * 1024.0), verdict.c_str());
   if (verdict == "ok") {
-    std::printf("try it:  dynalm run \"%s\" -p \"Hello\"\n", dest.generic_string().c_str());
+    const std::string ref = entry != nullptr ? std::string(entry->name) : "\"" + dest.generic_string() + "\"";
+    std::printf("try it:  dynalm run %s\n", ref.c_str());
   }
   return 0;
+}
+
+Result<std::string> ensure_model(std::string_view ref, bool pull_if_missing) {
+  auto r = resolve_model(ref);
+  if (!r.ok()) return r.status();
+  if (r->downloaded) return r->path;
+  const std::string name(r->entry->name);
+  if (!pull_if_missing) return NotFound("model " + name + " is not downloaded; run: dynalm pull " + name);
+  std::printf("%s is not downloaded yet\n", name.c_str());
+  const std::string_view args[] = {r->entry->name};
+  if (cmd_pull(args) != 0) return IoError("could not download " + name);
+  return r->path;
 }
 
 }  // namespace dynalm::cli

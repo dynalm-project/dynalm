@@ -38,8 +38,15 @@ TEST_F(LogTest, ParseLevel) {
   Level l = Level::kInfo;
   EXPECT_TRUE(parse_level("debug", l));
   EXPECT_EQ(l, Level::kDebug);
-  EXPECT_FALSE(parse_level("verbose", l));
+  EXPECT_FALSE(parse_level("loud", l));
   EXPECT_EQ(l, Level::kDebug);  // unchanged on failure
+  // User-facing names (R1): quiet = errors, normal = info, verbose = debug.
+  EXPECT_TRUE(parse_level("quiet", l));
+  EXPECT_EQ(l, Level::kError);
+  EXPECT_TRUE(parse_level("normal", l));
+  EXPECT_EQ(l, Level::kInfo);
+  EXPECT_TRUE(parse_level("verbose", l));
+  EXPECT_EQ(l, Level::kDebug);
   EXPECT_EQ(level_name(Level::kWarn), "WARN");
 }
 

@@ -71,6 +71,12 @@ int cmd_inspect(std::span<const std::string_view> args) {
     std::fprintf(stderr, "usage: dynalm inspect <model> [--metadata] [--tensors]\n");
     return 1;
   }
+  if (auto resolved = ensure_model(path, false); resolved.ok()) {
+    path = *resolved;
+  } else {
+    std::fprintf(stderr, "inspect: %s\n", resolved.status().message().c_str());
+    return 1;
+  }
 
   if (hf::is_hf_model(path)) return inspect_hf(path, show_metadata, show_tensors);
 
@@ -93,6 +99,9 @@ int cmd_inspect(std::span<const std::string_view> args) {
   std::printf("Architecture:  %s\n", str_or("general.architecture", "(missing)").c_str());
   std::printf("Metadata keys: %zu\n", g.metadata().size());
   std::printf("Tensors:       %zu (%.1f MiB)\n", g.tensors().size(), g.total_tensor_bytes() / kMiB);
+  int64_t params = 0;
+  for (const auto& t : g.tensors()) params += t.shape.numel();
+  std::printf("Parameters:    %.2fB (%lld)\n", static_cast<double>(params) / 1e9, static_cast<long long>(params));
 
   struct TypeStat {
     int count = 0;

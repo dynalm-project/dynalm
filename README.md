@@ -140,7 +140,7 @@ and edge devices. If you have a GPU, llama.cpp, Ollama or vLLM will be faster to
 
 **How do I chat with a model like in Ollama?**
 Run `dynalm chat models/<model>.gguf` (or `dynalm run` without `-p`). It keeps the model loaded, remembers the
-conversation, and supports `/clear`, `/system`, `/set temp`, `/think off` and `/bye`. See [docs/cmd.md](docs/cmd.md).
+conversation, and supports `/clear`, `/system`, `/set temp`, `/think off` and `/bye`. See [docs/cli.md](docs/cli.md).
 
 **How do I run an LLM locally on a CPU without a GPU?**
 Install DynaLM, download a quantized GGUF model with `dynalm pull`, then use `dynalm run` to chat or
@@ -186,7 +186,7 @@ Yes. DynaLM is licensed under Apache-2.0. The models you run have their own lice
 
 ## Documentation
 
-- [docs/cmd.md](docs/cmd.md): every command and option, chat commands, HTTP endpoints, Ollama equivalents.
+- [docs/cli.md](docs/cli.md): every command and option, chat commands, HTTP endpoints, Ollama equivalents.
 - [docs/model-support.md](docs/model-support.md): every supported model, with download commands.
 - [docs/development.md](docs/development.md): building, testing, configuration, serving.
 - [docs/architecture.md](docs/architecture.md): how the engine is put together.

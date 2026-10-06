@@ -2023,3 +2023,45 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
     function bodies), so nothing points to a real change. No speed-up is claimed. Resolving a
     ±2% gate would need many more repetitions than the noise allows here. The medians show
     no regression.
+
+## DD-070: Model names through a small built-in registry; YAML-subset config; doctor
+
+- **Decision:**
+  - **Model references.** A model reference is a path, or a registry name `family:size`.
+    - The registry is a compiled-in table in `dynalm/src/registry/`. It holds 12 entries.
+      Each entry gives a direct GGUF URL (HTTP 200 checked when added), the quantization and
+      the approximate size.
+    - There are aliases such as `llama:3b` and `gemma:270m`. A bare family name picks a
+      default size.
+    - `run`, `serve` and `benchmark` pull a missing named model, as Ollama does. `inspect`
+      does not pull.
+  - **Store.** Models live in `~/.dynalm/models` or `$DYNALM_MODELS_DIR`. `./models` is
+    searched as well.
+  - **Config.** The config file accepts a strict two-level YAML subset, parsed by hand.
+    - A documented key maps to one existing command-line option, so precedence and
+      validation stay in one place. `--threads` and `runtime.threads` cannot drift apart.
+    - Unknown keys are errors with a line number.
+    - A known key that the running command does not use is skipped, so one file serves both
+      `run` and `serve`.
+    - `~/.dynalm/config.yaml` applies when present. Tests that inject an environment never
+      read it.
+  - **Doctor.** `doctor` replaces `info`. GPU detection loads the NVIDIA driver library at
+    run time (`cuInit`, `cuDeviceGet*`), so a CPU-only build still reports a usable GPU, and no
+    CUDA SDK is needed to build.
+- **Reason:** this is the platform spec's user path `install → doctor → pull qwen3:4b → run
+  qwen3:4b` (platform-design.md R1).
+  - A remote registry service would need hosting and trust decisions, and would add a network
+    call to every resolution. A table that ships with the binary is versioned and testable.
+  - YAML via a library would be the first new runtime dependency after cpp-httplib.
+- **Alternatives:**
+  - Ollama-style manifests and blobs: rejected. GGUF files stay as plain files that users can
+    see and reuse with other tools.
+  - Auto-pulling in `inspect`: rejected. Inspecting must stay a cheap, read-only command.
+- **Evidence:**
+  - Unit tests: `test_registry` covers names, aliases, resolution and every YAML-subset rule.
+  - Manual end-to-end runs:
+    - `run smollm2:135m` with a YAML config;
+    - `serve smollm2:135m` with the port taken from YAML;
+    - `/v1/models` reports `id: smollm2:135m`;
+    - SSE streaming works;
+    - `stop` drains the server.

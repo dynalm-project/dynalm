@@ -107,6 +107,12 @@ int cmd_benchmark(std::span<const std::string_view> args) {
     usage();
     return 1;
   }
+  if (auto resolved = ensure_model(path, true); resolved.ok()) {
+    path = *resolved;
+  } else {
+    std::fprintf(stderr, "benchmark: %s\n", resolved.status().message().c_str());
+    return 1;
+  }
 
   // The model file supplies the tokenizer used to size prompts exactly (also
   // for --url targets serving the same model).

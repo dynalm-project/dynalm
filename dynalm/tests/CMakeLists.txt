@@ -106,3 +106,6 @@ engine_add_test(test_device_backend
 
 engine_add_test(test_execution
   test_execution_planner.cpp)
+
+engine_add_test(test_registry
+  test_registry.cpp)

@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+### Product surface: names, doctor, models, config (R1, DD-070)
+- Model names: `dynalm run qwen3:4b`, `dynalm serve llama:3b`, `dynalm pull gemma:270m`. A
+  built-in registry maps 12 names to tested GGUF downloads. `run`, `serve` and `benchmark`
+  download a named model on first use. `/v1/models` reports the name.
+- Model store: `~/.dynalm/models`, or `$DYNALM_MODELS_DIR` when set (previously `./models`,
+  which is still searched).
+- `dynalm doctor [--json]` replaces `info` (`info` remains an alias). It reports OS, CPU, ISA,
+  RAM, GPU (probed through the NVIDIA driver, no SDK needed), device, threads, store and
+  config, with actionable warnings.
+- `dynalm models` replaces `list`, and `list` remains an alias. It shows NAME, FORMAT, SIZE,
+  LOCATION, QUANTIZATION and STATUS. `--available` lists the registry names.
+- Config files may be a two-level YAML subset (`runtime.threads`, `server.port`, ...).
+  `~/.dynalm/config.yaml` applies automatically when present. New commands:
+  `dynalm config show|path|init`. `run` now reads the config and `DYNALM_*` too.
+- `dynalm version` / `--version` print the DynaLM and DynaCore versions. Logging takes
+  `-q` / `-v`, the level names `quiet|normal|verbose|debug|trace`, and `DYNALM_LOG_LEVEL`.
+- `dynalm inspect` prints the parameter count.
+
+### DynaCore / DynaLM split (R0, DD-068, DD-069)
+- The engine is now two libraries:
+  - `dynacore`: tensors, memory, devices, kernels, hardware. It knows no LLM concepts.
+  - `dynalm_runtime`: models, scheduler, KV policy, API, CLI.
+- A ctest and a CI job enforce the boundary. A `core-only` preset builds DynaCore alone.
+- The binary is built at `build/<preset>/bin/dynalm`.
+- The experiment knobs are renamed `DYNALM_*` → `DYNACORE_*`: `GEMM_KC`,
+  `MATMUL_EXPAND_MIN`, `INT8_DECODE_ROWS`, `MATMUL_CHUNKS`, `ATTN_GROUPED` and `PIN_THREADS`.
+- Throughput is unchanged within noise (`results/r0-split-ab.csv`).
+
 ### Grouped GQA attention (DD-066)
 - Query heads sharing a KV head are scored and accumulated in one pass. Attention is 4–22% faster
   at most measured points; end-to-end aggregate tok/s is unchanged within noise (attention is

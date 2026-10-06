@@ -24,7 +24,9 @@ std::string_view level_name(Level l) {
 bool parse_level(std::string_view s, Level& out) {
   static constexpr std::pair<std::string_view, Level> kLevels[] = {
       {"trace", Level::kTrace}, {"debug", Level::kDebug}, {"info", Level::kInfo},
-      {"warn", Level::kWarn},   {"error", Level::kError}, {"off", Level::kOff}};
+      {"warn", Level::kWarn},   {"error", Level::kError}, {"off", Level::kOff},
+      // User-facing names (dynalm -q / -v): quiet = errors only, normal = info, verbose = debug.
+      {"quiet", Level::kError}, {"normal", Level::kInfo},   {"verbose", Level::kDebug}};
   for (const auto& [name, lvl] : kLevels) {
     if (s == name) {
       out = lvl;

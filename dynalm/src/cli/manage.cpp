@@ -1,6 +1,7 @@
 // Model management commands:
-//   dynalm list [dir]                 GGUF files and Hugging Face model directories under dir
-//                                     (default $DYNALM_MODELS_DIR or ./models)
+//   dynalm models [--dir DIR]         GGUF files and Hugging Face model directories in the model
+//                                     store ($DYNALM_MODELS_DIR or ~/.dynalm/models) and ./models
+//   dynalm models --available         names accepted by pull/run (registry/model_registry.h)
 //   dynalm pull <link>                download a GGUF model (cli/pull.cpp)
 //   dynalm rm <model>... [-y]         delete downloaded models (GGUF files, partial downloads,
 //                                     Hugging Face model directories)
@@ -18,11 +19,13 @@
 #include <vector>
 
 #include "cli/commands.h"
+#include "config/config.h"
 #include "loader/gguf/gguf.h"
 #include "loader/gguf/gguf_model.h"
 #include "loader/hf/hf_model.h"
 #include "loader/model_source.h"
 #include "model/architecture.h"
+#include "registry/model_registry.h"
 #include "common/core.h"
 #if ENGINE_HAS_SERVER
 #include "server/server.h"
@@ -30,75 +33,165 @@
 
 namespace dynalm::cli {
 
-int cmd_list(std::span<const std::string_view> args) {
-  namespace fs = std::filesystem;
-  std::string dir = "models";
-  if (const char* env = std::getenv("DYNALM_MODELS_DIR")) dir = env;
-  if (!args.empty()) dir = args[0];
-  std::error_code ec;
-  if (!fs::is_directory(dir, ec)) {
-    std::fprintf(stderr, "list: '%s' is not a directory\n", dir.c_str());
-    return 1;
+namespace {
+
+std::string human_size(double bytes) {
+  char buf[32];
+  if (bytes >= 1e9) {
+    std::snprintf(buf, sizeof buf, "%.1f GB", bytes / 1e9);
+  } else {
+    std::snprintf(buf, sizeof buf, "%.0f MB", bytes / 1e6);
   }
+  return buf;
+}
+
+// "~/.dynalm/models" instead of the full home path, for narrow terminals.
+std::string short_dir(const std::string& dir) {
+  const std::string home = std::filesystem::path(dynalm_home()).parent_path().string();
+  if (!home.empty() && dir.rfind(home, 0) == 0) return "~" + dir.substr(home.size());
+  return dir;
+}
+
+struct ModelRow {
+  std::string name, format, size, location, quant, status;
+};
+
+void print_rows(const std::vector<ModelRow>& rows) {
+  std::printf("%-40s %-12s %8s  %-20s %-12s %s\n", "NAME", "FORMAT", "SIZE", "LOCATION", "QUANTIZATION", "STATUS");
+  for (const ModelRow& r : rows) {
+    std::printf("%-40s %-12s %8s  %-20s %-12s %s\n", r.name.c_str(), r.format.c_str(), r.size.c_str(),
+                r.location.c_str(), r.quant.c_str(), r.status.c_str());
+  }
+}
+
+void scan_dir(const std::string& dir, std::vector<ModelRow>& rows) {
+  namespace fs = std::filesystem;
+  std::error_code ec;
   std::vector<fs::path> files, parts, hf_dirs;
   for (auto it = fs::recursive_directory_iterator(dir, fs::directory_options::skip_permission_denied, ec);
        !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
     if (it.depth() > 2) it.disable_recursion_pending();
     if (it->is_regular_file(ec) && it->path().extension() == ".gguf") files.push_back(it->path());
     if (it->is_regular_file(ec) && it->path().filename().string().ends_with(".gguf.part")) parts.push_back(it->path());
-    if (it->is_directory(ec) && hf::is_hf_model(it->path().string()) &&
-        hf::locate(it->path().string()).ok()) {
+    if (it->is_directory(ec) && hf::is_hf_model(it->path().string()) && hf::locate(it->path().string()).ok()) {
       hf_dirs.push_back(it->path());
     }
   }
-  std::sort(hf_dirs.begin(), hf_dirs.end());
   std::sort(files.begin(), files.end());
-  std::printf("%-48s %-10s %-10s %9s %8s  %s\n", "MODEL", "ARCH", "QUANT", "SIZE MiB", "CONTEXT", "STATUS");
+  std::sort(hf_dirs.begin(), hf_dirs.end());
+  const std::string loc = short_dir(dir);
   for (const fs::path& p : files) {
-    const std::string rel = fs::relative(p, dir, ec).generic_string();
+    ModelRow r;
+    const RegistryEntry* e = registry_entry_for_file(p.filename().string());
+    r.name = e != nullptr ? std::string(e->name) : fs::relative(p, dir, ec).generic_string();
+    r.format = "GGUF";
+    r.location = loc;
     auto g = gguf::GgufFile::open(p.string());
     if (!g.ok()) {
-      std::printf("%-48s %-10s %-10s %9s %8s  unreadable: %s\n", rel.c_str(), "-", "-", "-", "-",
-                  g.status().message().c_str());
+      r.size = human_size(static_cast<double>(fs::file_size(p, ec)));
+      r.quant = "-";
+      r.status = "unreadable: " + g.status().message();
+      rows.push_back(std::move(r));
       continue;
     }
     const gguf::GgufFile& f = **g;
-    auto arch = f.get_string("general.architecture");
-    const std::string arch_s = arch.ok() ? std::string(*arch) : "?";
-    std::string quant = "?";
-    if (auto ft = f.get_uint("general.file_type"); ft.ok()) quant = std::string(gguf::file_type_name(static_cast<uint32_t>(*ft)));
-    std::string ctx = "?";
-    if (auto c = f.get_uint(arch_s + ".context_length"); c.ok()) ctx = std::to_string(*c);
-    std::printf("%-48s %-10s %-10s %9.1f %8s  %s\n", rel.c_str(), arch_s.c_str(), quant.c_str(),
-                static_cast<double>(f.file().size()) / (1024.0 * 1024.0), ctx.c_str(),
-                gguf_support_status(f).c_str());
-  }
-  // Hugging Face directories (config.json + safetensors).
-  for (const fs::path& p : hf_dirs) {
-    const std::string rel = fs::relative(p, dir, ec).generic_string() + "/";
-    double mib = 0;
-    if (auto f = hf::locate(p.string()); f.ok()) {
-      for (const std::string& w : f->weights) mib += static_cast<double>(fs::file_size(w, ec)) / (1024.0 * 1024.0);
+    r.size = human_size(static_cast<double>(f.file().size()));
+    r.quant = "?";
+    if (auto ft = f.get_uint("general.file_type"); ft.ok()) {
+      r.quant = std::string(gguf::file_type_name(static_cast<uint32_t>(*ft)));
     }
+    const std::string st = gguf_support_status(f);
+    r.status = st == "ok" ? "ready" : st;
+    rows.push_back(std::move(r));
+  }
+  for (const fs::path& p : hf_dirs) {
+    ModelRow r;
+    r.name = fs::relative(p, dir, ec).generic_string() + "/";
+    r.format = "SafeTensors";
+    r.location = loc;
+    double bytes = 0;
+    if (auto f = hf::locate(p.string()); f.ok()) {
+      for (const std::string& w : f->weights) bytes += static_cast<double>(fs::file_size(w, ec));
+    }
+    r.size = human_size(bytes);
     auto cfg_json = hf::read_json_file((p / "config.json").string(), 4 << 20);
     auto cfg = cfg_json.ok() ? hf::read_config(*cfg_json) : Result<ModelConfig>(cfg_json.status());
     const json::Value* dt = cfg_json.ok() ? cfg_json->find("torch_dtype") : nullptr;
-    const std::string dtype = dt && dt->is_string() ? dt->as_string() : "?";
+    r.quant = dt && dt->is_string() ? dt->as_string() : "?";
     if (!cfg.ok()) {
-      std::printf("%-48s %-10s %-10s %9.1f %8s  %s\n", rel.c_str(), "-", dtype.c_str(), mib, "-",
-                  cfg.status().message().c_str());
-      continue;
+      r.status = cfg.status().message();
+    } else {
+      r.status = find_architecture(cfg->architecture) ? "ready" : "unsupported architecture " + cfg->architecture;
     }
-    std::printf("%-48s %-10s %-10s %9.1f %8lld  %s\n", rel.c_str(), cfg->architecture.c_str(), dtype.c_str(), mib,
-                static_cast<long long>(cfg->context_length),
-                find_architecture(cfg->architecture) ? "ok (safetensors)" : "unsupported architecture");
+    rows.push_back(std::move(r));
   }
   for (const fs::path& p : parts) {
-    std::printf("%-48s %-10s %-10s %9.1f %8s  %s\n", fs::relative(p, dir, ec).generic_string().c_str(), "-", "-",
-                static_cast<double>(fs::file_size(p, ec)) / (1024.0 * 1024.0), "-",
-                "partial download (rerun dynalm pull to resume, or dynalm rm)");
+    ModelRow r;
+    std::string file = p.filename().string();
+    file.resize(file.size() - 5);  // drop ".part"
+    const RegistryEntry* e = registry_entry_for_file(file);
+    r.name = e != nullptr ? std::string(e->name) : fs::relative(p, dir, ec).generic_string();
+    r.format = "GGUF";
+    r.size = human_size(static_cast<double>(fs::file_size(p, ec)));
+    r.location = loc;
+    r.quant = e != nullptr ? std::string(e->quant) : "-";
+    r.status = "partial (dynalm pull to resume)";
+    rows.push_back(std::move(r));
   }
-  if (files.empty() && parts.empty() && hf_dirs.empty()) std::printf("(no models under %s)\n", dir.c_str());
+}
+
+int list_available() {
+  std::printf("%-20s %-12s %-8s %8s  %-6s %s\n", "NAME", "ARCH", "QUANT", "SIZE", "LOCAL", "DESCRIPTION");
+  for (const RegistryEntry& e : registry_entries()) {
+    auto r = resolve_model(e.name);
+    std::printf("%-20s %-12s %-8s %8s  %-6s %s\n", std::string(e.name).c_str(), std::string(e.arch).c_str(),
+                std::string(e.quant).c_str(), human_size(static_cast<double>(e.size_bytes)).c_str(),
+                r.ok() && r->downloaded ? "yes" : "-", std::string(e.note).c_str());
+  }
+  std::printf("\nShort names work too: qwen3, llama, llama:3b, gemma, gemma:270m, phi, ...\n");
+  return 0;
+}
+
+}  // namespace
+
+int cmd_models(std::span<const std::string_view> args) {
+  if (!args.empty() && (args[0] == "rm" || args[0] == "delete")) return cmd_rm(args.subspan(1));
+  if (!args.empty() && args[0] == "pull") return cmd_pull(args.subspan(1));
+  if (!args.empty() && (args[0] == "ls" || args[0] == "list")) args = args.subspan(1);
+  std::vector<std::string> dirs;
+  for (size_t i = 0; i < args.size(); ++i) {
+    if (args[i] == "--available" || args[i] == "-a") return list_available();
+    if (args[i] == "--dir" && i + 1 < args.size()) {
+      dirs.emplace_back(args[++i]);
+    } else if (!args[i].starts_with("-") && dirs.empty()) {
+      dirs.emplace_back(args[i]);  // `dynalm list DIR`, the pre-R1 form
+    } else {
+      std::fprintf(stderr,
+                   "usage: dynalm models [ls] [--dir DIR] [--available]\n"
+                   "       dynalm models rm <name>... [-y]\n"
+                   "       dynalm models pull <name>\n"
+                   "Lists local models in %s and ./models (or DIR).\n"
+                   "--available lists the model names `dynalm pull` and `dynalm run` accept.\n",
+                   models_dir().c_str());
+      return 1;
+    }
+  }
+  if (dirs.empty()) dirs = model_search_dirs();
+  std::error_code ec;
+  std::vector<ModelRow> rows;
+  for (const std::string& d : dirs) {
+    if (!std::filesystem::is_directory(d, ec)) {
+      std::fprintf(stderr, "models: '%s' is not a directory\n", d.c_str());
+      return 1;
+    }
+    scan_dir(d, rows);
+  }
+  if (rows.empty()) {
+    std::printf("No local models in %s.\nDownload one:  dynalm pull qwen3:4b   (list: dynalm models --available)\n",
+                short_dir(models_dir()).c_str());
+    return 0;
+  }
+  print_rows(rows);
   return 0;
 }
 
@@ -117,20 +210,19 @@ static uintmax_t disk_size(const std::filesystem::path& p) {
 
 int cmd_rm(std::span<const std::string_view> args) {
   namespace fs = std::filesystem;
-  std::string dir = "models";
-  if (const char* env = std::getenv("DYNALM_MODELS_DIR"); env && *env) dir = env;
+  std::vector<std::string> dirs = model_search_dirs();
   bool yes = false, bad_arg = false;
   std::vector<std::string> names;
   for (size_t i = 0; i < args.size(); ++i) {
     if (args[i] == "-y" || args[i] == "--yes") yes = true;
-    else if (args[i] == "--dir" && i + 1 < args.size()) dir = args[++i];
+    else if (args[i] == "--dir" && i + 1 < args.size()) dirs = {std::string(args[++i])};
     else if (!args[i].starts_with("-")) names.emplace_back(args[i]);
     else bad_arg = true;
   }
   if (names.empty() || bad_arg) {
     std::fprintf(stderr,
                  "usage: dynalm rm <model>... [-y] [--dir DIR]\n"
-                 "  <model>  a name as shown by `dynalm list` (the .gguf extension is optional), or a path\n"
+                 "  <model>  a name as shown by `dynalm models` (the .gguf extension is optional), or a path\n"
                  "  -y       do not ask for confirmation\n"
                  "Deletes only GGUF files, partial downloads (.gguf.part) and Hugging Face model directories.\n");
     return 1;
@@ -140,15 +232,25 @@ int cmd_rm(std::span<const std::string_view> args) {
     // A path as given, else a name under the models directory.
     std::error_code ec;
     fs::path target;
-    for (const fs::path& c : {fs::path(name), fs::path(dir) / name, fs::path(dir) / (name + ".gguf"),
-                              fs::path(dir) / (name + ".part"), fs::path(dir) / (name + ".gguf.part")}) {
+    std::vector<fs::path> candidates = {fs::path(name)};
+    const RegistryEntry* entry = is_model_name(name) ? find_registry_entry(name) : nullptr;
+    for (const std::string& dir : dirs) {
+      if (entry != nullptr) {
+        candidates.push_back(fs::path(dir) / std::string(entry->file()));
+        candidates.push_back(fs::path(dir) / (std::string(entry->file()) + ".part"));
+      }
+      for (const std::string& c : {name, name + ".gguf", name + ".part", name + ".gguf.part"}) {
+        candidates.push_back(fs::path(dir) / c);
+      }
+    }
+    for (const fs::path& c : candidates) {
       if (fs::exists(c, ec)) {
         target = c;
         break;
       }
     }
     if (target.empty()) {
-      std::fprintf(stderr, "rm: no model '%s' (see dynalm list)\n", name.c_str());
+      std::fprintf(stderr, "rm: no model '%s' (see dynalm models)\n", name.c_str());
       ++failed;
       continue;
     }

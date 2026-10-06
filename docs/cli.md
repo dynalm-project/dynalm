@@ -3,34 +3,59 @@
 Every `dynalm` command, with all options and examples. Run `dynalm help`, or any command without
 arguments, to see the same help in the terminal.
 
-**Quick start (like Ollama):**
+**Quick start:**
 
 ```sh
-dynalm pull Qwen/Qwen3-4B-GGUF/Qwen3-4B-Q4_K_M.gguf     # download a model
-dynalm chat models/Qwen3-4B-Q4_K_M.gguf                 # chat with it (Ctrl+D or /bye to exit)
+dynalm doctor                 # check this machine
+dynalm pull qwen3:4b          # download a model by name
+dynalm run qwen3:4b           # chat in the terminal (Ctrl+D or /bye to exit)
+dynalm serve qwen3:4b         # OpenAI-compatible API on http://127.0.0.1:8000/v1
 ```
+
+`run`, `serve` and `benchmark` download a named model on first use.
 
 | Ollama | DynaLM |
 |---|---|
-| `ollama pull qwen3:4b` | `dynalm pull Qwen/Qwen3-4B-GGUF/Qwen3-4B-Q4_K_M.gguf` |
-| `ollama run qwen3:4b` | `dynalm chat models/Qwen3-4B-Q4_K_M.gguf` (or `dynalm run` without `-p`) |
-| `ollama run qwen3:4b "question"` | `dynalm run models/Qwen3-4B-Q4_K_M.gguf -p "question"` |
-| `ollama list` | `dynalm list` |
-| `ollama rm qwen3:4b` | `dynalm rm Qwen3-4B-Q4_K_M` |
-| `ollama show qwen3:4b` | `dynalm inspect models/Qwen3-4B-Q4_K_M.gguf` |
-| `ollama serve` | `dynalm serve models/Qwen3-4B-Q4_K_M.gguf` (one model per server) |
+| `ollama pull qwen3:4b` | `dynalm pull qwen3:4b` |
+| `ollama run qwen3:4b` | `dynalm run qwen3:4b` |
+| `ollama run qwen3:4b "question"` | `dynalm run qwen3:4b -p "question"` |
+| `ollama list` | `dynalm models` |
+| `ollama rm qwen3:4b` | `dynalm models rm qwen3:4b` |
+| `ollama show qwen3:4b` | `dynalm inspect qwen3:4b` |
+| `ollama serve` | `dynalm serve qwen3:4b` (one model per server) |
 | `ollama stop` | `dynalm stop` |
+
+## Model references
+
+Wherever a command takes `<model>`, any of these work:
+
+| Form | Example |
+|---|---|
+| Registry name `family:size` | `qwen3:4b`, `llama3.2:3b`, `gemma3:270m`, `granite3.1-moe:1b` |
+| Alias or family | `qwen3`, `llama:3b`, `gemma:270m`, `phi` |
+| GGUF file | `./models/qwen3-4b.gguf` |
+| Hugging Face model folder | `./models/st/qwen2.5-0.5b-instruct` |
+
+`dynalm models --available` lists the names. Each name maps to one tested GGUF download (source,
+quantization and size are listed there). Downloads go to `$DYNALM_MODELS_DIR`, or
+`~/.dynalm/models` when that variable is unset. `./models` is also searched.
 
 ---
 
 ## Global options
 
 ```text
-dynalm [--log-level trace|debug|info|warn|error|off] <command> [args]
-dynalm help | --help
+dynalm [-q | -v | --log-level LEVEL] <command> [args]
+dynalm help | --help | --version
 ```
 
-`--log-level` controls the `[INFO]` lines. Use `--log-level warn` to hide them.
+| Option | Effect |
+|---|---|
+| `-q`, `--quiet` | errors only |
+| `-v`, `--verbose` | debug detail |
+| `--log-level L` | `quiet`, `normal` (default), `verbose`, `debug`, `trace` (also `error`, `warn`, `info`, `off`) |
+
+`DYNALM_LOG_LEVEL` sets the default.
 
 ---
 
@@ -39,17 +64,19 @@ dynalm help | --help
 ### `dynalm pull`: download a model
 
 ```text
-dynalm pull <link> [-o DIR] [--force] [--check]
+dynalm pull <name|link> [-o DIR] [--force] [--check]
 ```
 
 | Option | Meaning |
 |---|---|
+| `<name>` | A registry name: `qwen3:4b`, `llama:3b`, ... (`dynalm models --available`) |
 | `<link>` | A Hugging Face file link (page or download link), the short form `<owner>/<repo>/<file>.gguf`, or any http(s) URL to a `.gguf` |
-| `-o DIR` | Where to save (default `$DYNALM_MODELS_DIR` or `./models`) |
+| `-o DIR` | Where to save (default `$DYNALM_MODELS_DIR` or `~/.dynalm/models`) |
 | `--check` | Only check whether DynaLM can run it (reads 256 KiB, saves nothing) |
 | `--force` | Download even if it looks unsupported, or download again |
 
 ```sh
+dynalm pull qwen3:4b
 dynalm pull https://huggingface.co/Qwen/Qwen3-4B-GGUF/blob/main/Qwen3-4B-Q4_K_M.gguf
 dynalm pull bartowski/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct-Q4_K_M.gguf
 dynalm pull unsloth/gemma-3-4b-it-GGUF/gemma-3-4b-it-Q4_K_M.gguf --check
@@ -62,24 +89,31 @@ dynalm pull unsloth/gemma-3-4b-it-GGUF/gemma-3-4b-it-Q4_K_M.gguf --check
 
 Which models to pick: [model-support.md](model-support.md).
 
-### `dynalm list`: show downloaded models
+### `dynalm models`: local models
 
 ```text
-dynalm list [DIR]
+dynalm models [--dir DIR]          (aliases: dynalm list, dynalm ls)
+dynalm models --available          names that pull/run accept
+dynalm models rm <name>... [-y]
 ```
 
-Lists GGUF files, Hugging Face model folders and unfinished downloads in `DIR` (default
-`$DYNALM_MODELS_DIR` or `./models`). For each it shows architecture, quantization, size, context
-length, and whether DynaLM can run it. Nothing is loaded into RAM.
+```text
+NAME                                     FORMAT           SIZE  LOCATION             QUANTIZATION STATUS
+qwen3:4b                                 GGUF           2.5 GB  ~/.dynalm/models     Q4_K_M       ready
+st/qwen2.5-0.5b-instruct/                SafeTensors    988 MB  models               bfloat16     ready
+```
+
+Lists GGUF files, Hugging Face model folders and unfinished downloads in the model store and
+`./models`. Files from the registry show their name. Nothing is loaded into RAM.
 
 ### `dynalm rm`: delete models
 
 ```text
-dynalm rm <model>... [-y] [--dir DIR]       (alias: dynalm delete)
+dynalm rm <model>... [-y] [--dir DIR]       (also: dynalm models rm, dynalm delete)
 ```
 
 ```sh
-dynalm rm Qwen3-4B-Q4_K_M                  # asks "delete ... ? [y/N]"
+dynalm rm qwen3:4b                         # asks "delete ... ? [y/N]"
 dynalm rm modelA modelB -y                 # no question
 dynalm rm st/qwen2.5-0.5b-instruct         # a Hugging Face folder
 ```
@@ -92,8 +126,9 @@ Deletes only GGUF files, `.gguf.part` downloads and Hugging Face model folders. 
 dynalm inspect <model> [--metadata] [--tensors]
 ```
 
-Shows architecture, layers, context length, quantization by tensor type, the RAM estimate and whether it is
-supported. `--metadata` adds every GGUF key; `--tensors` lists every tensor. Works on GGUF files and
+Shows architecture, parameter count, layers, attention heads and GQA grouping, MoE experts, context length,
+vocabulary, quantization by tensor type, the RAM estimate and whether it is supported. Registry names work
+for downloaded models. `--metadata` adds every GGUF key; `--tensors` lists every tensor. Works on GGUF files and
 Hugging Face folders.
 
 ---
@@ -261,13 +296,17 @@ Request fields: `messages` / `prompt`, `max_tokens`, `temperature`, `top_p`, `to
 
 ---
 
-## Diagnostics
+## Diagnostics and configuration
 
 | Command | What it shows |
 |---|---|
-| `dynalm version` | Version, compiler, built SIMD kernels |
-| `dynalm info` | CPU, cores, SIMD features, RAM, and the kernel tier DynaLM will use |
-| `dynalm benchmark <model> [options]` | Load test: throughput and P50–P99 latency |
+| `dynalm doctor [--json]` | System report for bug reports. Versions (DynaLM, DynaCore), OS, CPU and cores (P/E), caches, ISA support, RAM, GPUs, the device and kernel tier DynaLM will use, thread count, model store, config file, actionable warnings, and status. Exit code 1 when not ready. (`dynalm info` is an alias.) |
+| `dynalm version` | DynaLM and DynaCore versions, build type, compiler, compiled and selected kernels |
+| `dynalm config [show]` | Every configuration key, its effective value and its source (default, file, environment) |
+| `dynalm config path` / `init` | The config file in use / write a commented starter `~/.dynalm/config.yaml` |
+| `dynalm benchmark <model> [options]` | Load test: throughput and P50-P99 latency |
+
+Configuration keys and precedence: [configuration.md](configuration.md).
 
 `dynalm benchmark` options:
 
@@ -288,9 +327,10 @@ Request fields: `messages` / `prompt`, `max_tokens`, `temperature`, `top_p`, `to
 
 | Variable | Meaning |
 |---|---|
-| `DYNALM_MODELS_DIR` | Default models folder for `pull`, `list`, `rm` |
-| `DYNALM_CONFIG` | Config file for `serve` |
-| `DYNALM_<OPTION>` | Any `serve` option, e.g. `DYNALM_PORT`, `DYNALM_HOST`, `DYNALM_THREADS` |
+| `DYNALM_MODELS_DIR` | Model store for `pull`, `models`, `rm` and name lookup (default `~/.dynalm/models`) |
+| `DYNALM_CONFIG` | Config file (default `~/.dynalm/config.yaml` when present) |
+| `DYNALM_LOG_LEVEL` | Default log level |
+| `DYNALM_<OPTION>` | Any configurable `serve`/`run` option, e.g. `DYNALM_PORT`, `DYNALM_HOST`, `DYNALM_THREADS` |
 | `HF_TOKEN` | Hugging Face token for gated models (`pull`) |
 
 ## Tips
