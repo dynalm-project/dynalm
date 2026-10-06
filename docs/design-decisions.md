@@ -1942,6 +1942,35 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   - **Thread pool:** tail wait is 7–14% of region time, and CPU utilization is 0.76–0.86.
 - **Alternatives:** none needed. The per-head path stays available as the reference.
 
+## DD-067: 32 matmul chunks per thread (was 8): P/E-core tail, neutral to slightly positive
+
+- **Decision:** `KernelPlan::matmul_chunks_per_thread` defaults to 32 (`DYNACORE_MATMUL_CHUNKS`
+  overrides it). Output columns of a parallel matmul are cut into about 32 dynamically
+  claimed chunks per thread, so fast P-cores take over work that slow E-cores would otherwise
+  finish last.
+- **Evidence:** Qwen2.5-1.5B Q4_K_M on the i7-1255U (2 P + 8 E cores), 10 threads.
+  - **Decode** (`bench_batch_decode`, context 512, 4 repetitions interleaved, data
+    `results/dd067-chunks-decode-ab.csv`):
+
+    | Sequences | 8 chunks | 32 chunks | Paired range |
+    |---|---|---|---|
+    | 1 | 11.8 tok/s | 12.3 tok/s | −0.8% to +21% |
+    | 4 | 25.6 | 25.7 | −9.5% to +2.4% |
+    | 16 | 43.2 | 43.5 | −2.9% to +7.5% |
+
+    The thread-pool tail-wait share falls slightly (1 seq: 0.216 → 0.207; 4 seq: 0.191 →
+    0.171).
+  - **Prefill** (512-token prompt, TTFT p50, 3 runs each, alternating): 8 chunks gave 7781,
+    7836 and 7783 ms; 32 chunks gave 7588, 7825 and 7707 ms (about −1%).
+    Data: `results/dd067-chunks*-prefill.jsonl`.
+  - **Classification: NEUTRAL to slightly positive.** No regression at any point, so the
+    default is kept. No end-to-end gain is claimed.
+- **P/E placement alternatives:** measured in DD-059.
+  - Thread counts: 2 threads (P-cores only) gave 21.6 tok/s and 10 threads (P + E) 30.2 at
+    c=1. Using E-cores helps.
+  - Pinning was never better on Windows.
+  - A P-core-only prefill would idle 8 cores, so it is not pursued.
+
 ## DD-068: Split the engine into DynaCore (runtime library) and DynaLM (platform), same repo
 
 - **Decision:**
