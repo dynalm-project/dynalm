@@ -25,8 +25,8 @@ Key facts:
 ## Docs
 
 - [README](https://github.com/dynalm-project/dynalm/blob/main/README.md): overview, install, usage, FAQ
-- [Supported models](https://github.com/dynalm-project/dynalm/blob/main/docs/model-support.md): models with `dynalm pull` commands and RAM needs
-- [Development guide](https://github.com/dynalm-project/dynalm/blob/main/docs/development.md): building, testing, configuration, serving
+- [DynaLM](https://github.com/dynalm-project/dynalm/blob/main/docs/dynalm.md): modules and supported models
+- [Build](https://github.com/dynalm-project/dynalm/blob/main/docs/build.md): targets, options, tests
 - [Architecture](https://github.com/dynalm-project/dynalm/blob/main/docs/architecture.md)
-- [Benchmarks](https://github.com/dynalm-project/dynalm/blob/main/docs/benchmarks.md): including comparisons with llama.cpp and Ollama
+- [Compiler benchmarks](https://github.com/dynalm-project/dynalm/blob/main/docs/compiler-benchmarks.md)
 - [Design decisions](https://github.com/dynalm-project/dynalm/blob/main/docs/design-decisions.md)

@@ -17,7 +17,7 @@ welcome.
 
 ## Building and testing
 
-See [docs/development.md](docs/development.md). In short:
+See [docs/build.md](docs/build.md). In short:
 
 ```sh
 cmake --preset linux-release          # or macos-release, msvc-release

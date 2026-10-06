@@ -67,7 +67,7 @@ struct Classification {
   std::vector<std::string> evidence;
 };
 
-// Thresholds and priority are documented in DD-050 and docs/performance.md.
+// Thresholds and priority are documented in DD-050.
 Classification classify(const ClassifierInputs& in);
 
 }  // namespace dynalm::bench

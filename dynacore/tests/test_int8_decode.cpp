@@ -4,7 +4,7 @@
 // where x_reconstructed = d * q is the int8 activation; every tier must agree
 // with that reference up to fp32 summation order. The difference to the fp32
 // path is then only the activation quantization itself, which is bounded here
-// and measured end to end on real models in docs/benchmarks.md.
+// and measured end to end on real models (DD-053).
 
 #include <gtest/gtest.h>
 

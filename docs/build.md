@@ -56,4 +56,24 @@ in this repository.
   scheduler, the product name).
 - The CI job `boundary` runs the check and the `core-only` build.
 
-More: [development.md](development.md) (platforms, CI, sanitizers, Smart App Control).
+## Platforms
+
+| Platform | Kernels | Verified by |
+|---|---|---|
+| Linux x86-64 | generic + AVX2 | CI: gcc, clang, ASAN/UBSAN, TSAN |
+| Linux ARM64 | generic + NEON | CI (`ubuntu-24.04-arm`) |
+| macOS Apple Silicon | NEON | CI (`macos-14`) |
+| Windows x64 | generic + AVX2 | MSVC build and full suite locally; CI |
+
+## Test models
+
+`bash tools/fetch_models.sh` downloads SmolLM2-135M and Qwen2.5-0.5B into `models/`, which is
+git-ignored. Real-model tests use them when present.
+
+## Windows Smart App Control
+
+- In enforce mode, Smart App Control can block freshly linked, unsigned test executables
+  ("An Application Control policy has blocked this file").
+- gtest discovery then reports `Error running test executable`.
+- The build does not work around this host policy. Rely on the CI jobs, or change the policy
+  yourself.

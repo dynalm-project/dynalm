@@ -87,7 +87,7 @@ dynalm pull unsloth/gemma-3-4b-it-GGUF/gemma-3-4b-it-Q4_K_M.gguf --check
 - Gated models (e.g. official Llama): accept the license on Hugging Face, then set `HF_TOKEN`.
 - Needs `curl`, which is built into Windows 10+, macOS and Linux.
 
-Which models to pick: [model-support.md](model-support.md).
+Which models to pick: [dynalm.md](dynalm.md#supported-models), or `dynalm models --available`.
 
 ### `dynalm models`: local models
 
@@ -341,4 +341,4 @@ Configuration keys and precedence: [configuration.md](configuration.md).
   - Keep the model in free RAM: close Docker/WSL and heavy apps.
   - `dynalm chat` or `dynalm serve` keep the model loaded between questions.
 - **Hide the `[INFO]` lines:** `dynalm --log-level warn chat ...`.
-- **Building and testing DynaLM:** [development.md](development.md).
+- **Building and testing DynaLM:** [build.md](build.md).

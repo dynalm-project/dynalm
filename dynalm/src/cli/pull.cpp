@@ -195,7 +195,7 @@ int cmd_pull(std::span<const std::string_view> args) {
                        arch->c_str());
           if (check_only) return 1;
           if (!force) {
-            std::fprintf(stderr, "      (supported models: docs/model-support.md; download anyway with --force)\n");
+            std::fprintf(stderr, "      (supported models: docs/dynalm.md; download anyway with --force)\n");
             return 1;
           }
         } else {

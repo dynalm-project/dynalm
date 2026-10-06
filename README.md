@@ -25,7 +25,7 @@ dynalm serve models/Qwen3-4B-Q4_K_M.gguf --port 8000       # OpenAI-compatible s
 - **Fast on CPUs.**
   - Hand-written AVX2 (x86-64) and NEON (ARM64 / Apple Silicon) kernels.
   - On the same laptop, it matches or beats llama.cpp's throughput, with up to 3× lower time to first
-    token under concurrent load ([benchmarks](docs/benchmarks.md)).
+    token under concurrent load.
 - **Built for many users at once.**
   - Continuous batching, so new requests join running ones.
   - Paged KV cache, chunked prefill, and a radix prefix cache that reuses shared prompts.
@@ -118,8 +118,8 @@ Good starting points:
 - Qwen3.5 / Qwen3.8 (`qwen35`), LFM2, full DeepSeek-V3/R1.
 - IQ-quantized files.
 
-`dynalm pull` refuses these before downloading. The full list, with sizes, test status and caveats, is in
-[docs/model-support.md](docs/model-support.md).
+`dynalm pull` refuses these before downloading. The supported list is in
+[docs/dynalm.md](docs/dynalm.md#supported-models).
 
 ## How DynaLM compares
 
@@ -187,12 +187,7 @@ Yes. DynaLM is licensed under Apache-2.0. The models you run have their own lice
 ## Documentation
 
 - [docs/cli.md](docs/cli.md): every command and option, chat commands, HTTP endpoints, Ollama equivalents.
-- [docs/model-support.md](docs/model-support.md): every supported model, with download commands.
-- [docs/development.md](docs/development.md): building, testing, configuration, serving.
 - [docs/architecture.md](docs/architecture.md): how the engine is put together.
-- [docs/benchmarks.md](docs/benchmarks.md): measured performance, including comparisons with llama.cpp and
-  Ollama.
-- [docs/performance.md](docs/performance.md) and [docs/quantization.md](docs/quantization.md).
 - [docs/design-decisions.md](docs/design-decisions.md): every major design choice, with evidence.
 - [docs/gpu-backend.md](docs/gpu-backend.md): the GPU backend contract.
 - [docs/platform-design.md](docs/platform-design.md): DynaLM on DynaCore, the low-level runtime it is built on.

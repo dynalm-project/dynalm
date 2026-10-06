@@ -18,6 +18,26 @@ the user sees.
 | `cli/` | the `dynalm` commands ([cli.md](cli.md)) |
 | `logging/`, `metrics/`, `bench/` | logs, Prometheus metrics, load generator |
 
+## Supported models
+
+- **Architectures:**
+  - Llama 2/3.x;
+  - Qwen 2/2.5/3, including the Qwen2/Qwen3 MoE models;
+  - Mistral and Mixtral;
+  - Gemma 1/2/3 (text);
+  - Phi-3;
+  - DeepSeek-R1 distills (Qwen/Llama based);
+  - Granite 3.x and Granite MoE.
+- **Formats:** GGUF with F32/F16/BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0 and Q2_K–Q6_K weights;
+  Hugging Face SafeTensors folders; GPTQ and AWQ checkpoints (repacked at load).
+- **Names:** `dynalm models --available` lists the tested downloads (`qwen3:4b`,
+  `llama3.2:3b`, `gemma3:270m`, `granite3.1-moe:1b`, ...).
+- **Any other GGUF:** check it with `dynalm pull <link> --check`, which reads 256 KiB and
+  saves nothing.
+- **Not supported yet:** Qwen3.5 (`qwen35`), LFM2, full DeepSeek-V3/R1, IQ-quantized files.
+  `dynalm pull` refuses them before downloading.
+- **RAM:** roughly the file size, plus the KV cache. `--kv q8_0` halves the KV cache.
+
 Execution modes:
 
 - `reference`: the Transformer calls the DynaCore CPU device directly.

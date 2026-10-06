@@ -14,7 +14,7 @@ namespace fs = std::filesystem;
 constexpr int64_t kMB = 1000 * 1000;
 
 // Every URL resolved (HTTP 200) when it was added. Sizes are approximate, for
-// messages only. Supported architectures only (docs/model-support.md).
+// messages only. Supported architectures only (docs/dynalm.md).
 constexpr RegistryEntry kEntries[] = {
     {"qwen3:0.6b", "qwen3", "Q8_0", "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf",
      639 * kMB, "Qwen3 0.6B (thinking model)"},

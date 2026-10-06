@@ -9,7 +9,7 @@ for every target, plus a diagnostics table (bottleneck class, decode step
 cost, thread-pool and bandwidth figures) for in-process runs.
 
 --svg DIR writes the eight standard graphs of the performance program
-(docs/performance.md) using only the standard library:
+(DD-050) using only the standard library:
   1 aggregate output tok/s vs concurrency      5 output tok/s vs context length
   2 single-stream output tok/s                 6 est. memory bandwidth vs context length
   3 ITL p50/p99 vs concurrency                 7 CPU utilization vs concurrency

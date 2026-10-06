@@ -40,7 +40,7 @@ welcome (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 
 Objective: maximize **aggregate output tokens/s under concurrency** on the same hardware and model,
 while keeping numerical correctness, p99 and memory under control. Phases run in order. Each phase
-reports Before / After / Delta from measurement (method: [docs/performance.md](docs/performance.md)).
+reports Before / After / Delta from measurement.
 
 - [x] P1 — Measurement: engine/scheduler timing, thread-pool and OS/hardware counters, bandwidth
   ceiling and traffic model, bottleneck classifier, sweep + 8 graphs (DD-050)
