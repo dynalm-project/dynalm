@@ -70,6 +70,15 @@ struct CpuKernels {
   void (*attn_accum_f16)(const uint16_t* v, int64_t n, int32_t dim, const float* w, float* acc) = nullptr;
   void (*attn_scores_f32)(const float* k, int64_t n, int32_t dim, const float* q, float scale, float* scores) = nullptr;
   void (*attn_accum_f32)(const float* v, int64_t n, int32_t dim, const float* w, float* acc) = nullptr;
+  // Scores of nh query heads sharing one KV head (GQA, DD-066): q holds nh
+  // heads `dim` apart; scores[h * s_stride + t] = scale * dot(q_h, k[t]).
+  // Each k vector is loaded once for all heads.
+  void (*attn_scores_heads_f32)(const float* k, int64_t n, int32_t dim, const float* q, int32_t nh, float scale,
+                                float* scores, int64_t s_stride) = nullptr;
+  // acc[h * dim + i] += sum_t w[h * w_stride + t] * v[t][i] for nh heads
+  // sharing one KV head: each v vector is loaded once for all heads.
+  void (*attn_accum_heads_f32)(const float* v, int64_t n, int32_t dim, const float* w, int32_t nh, int64_t w_stride,
+                               float* acc) = nullptr;
 
   // int8 activation path: entries are null for types without an integer kernel
   // (the backend then uses vec_dot / dequant).

@@ -270,6 +270,117 @@ TEST(GqaAttention, OneRowMatchesNaiveInEveryLayout) {
   }
 }
 
+// DD-066: grouped GQA kernels (all heads of a KV head per K/V load) against
+// the per-head path and a naive double-precision softmax: f32/f16 KV, head
+// dims that are and are not multiples of 8, group sizes 1..9 (9 = two passes
+// of at most 8 heads), three decode rows from two sequences with scrambled
+// block tables, on the best ISA and on the generic kernels.
+TEST(GqaAttention, GroupedMatchesPerHeadAndNaive) {
+  for (CpuIsa isa : {select_best_isa(cpu_info().features), CpuIsa::kGeneric}) {
+    for (DType kvt : {DType::kF32, DType::kF16}) {
+      for (int32_t hd : {64, 128, 72}) {
+        for (int32_t group : {1, 2, 3, 4, 6, 7, 8, 9}) {
+          ThreadPool tp(4);
+          CpuBackend be(tp, isa);
+          constexpr int32_t kNkv = 2, kBlocks = 80, kBs = 16;
+          KvGeometry g;
+          g.num_layers = 1;
+          g.num_kv_heads = kNkv;
+          g.head_dim = hd;
+          g.head_dim_v = hd;
+          g.block_size = kBs;
+          g.num_blocks = kBlocks;
+          g.dtype = kvt;
+          auto cache = KvBlockPool::create(g, be);
+          ASSERT_TRUE(cache.ok());
+          // Two sequences, 40 blocks each, interleaved and scrambled.
+          std::vector<int32_t> t0(40), t1(40);
+          for (int32_t i = 0; i < 40; ++i) {
+            t0[static_cast<size_t>(i)] = (i * 2 * 13) % kBlocks;
+            t1[static_cast<size_t>(i)] = (i * 2 * 13 + 1) % kBlocks;
+          }
+          const KvLayerView views[] = {(*cache)->layer_view(0, t0), (*cache)->layer_view(0, t1)};
+          const int64_t T = 600, H = static_cast<int64_t>(group) * kNkv, W = kNkv * hd;
+          std::mt19937 rng(static_cast<unsigned>(hd * 31 + group));
+          std::normal_distribution<float> nd(0, 1);
+          auto fill = [&](int64_t r, int64_t c) {
+            auto t = Tensor::empty(DType::kF32, {r, c});
+            for (int64_t i = 0; i < r * c; ++i) t->data_as<float>()[i] = nd(rng);
+            return std::move(*t);
+          };
+          // T positions of K/V for each sequence.
+          Tensor k0 = fill(T, W), v0 = fill(T, W), k1 = fill(T, W), v1 = fill(T, W);
+          std::vector<int32_t> pos(static_cast<size_t>(T)), seq0(static_cast<size_t>(T), 0), seq1(static_cast<size_t>(T), 1);
+          for (int64_t i = 0; i < T; ++i) pos[static_cast<size_t>(i)] = static_cast<int32_t>(i);
+          be.kv_store(k0, v0, pos, seq0, views);
+          be.kv_store(k1, v1, pos, seq1, views);
+          auto stored = [&](const Tensor& src, int64_t t, int64_t c) {
+            const float x = src.data_as<const float>()[t * W + c];
+            return kvt == DType::kF16 ? fp16_to_fp32(fp32_to_fp16(x)) : x;
+          };
+          // Rows: seq 0 at 299, seq 1 at 599, seq 0 at 517 (causal ranges differ).
+          const int32_t qpos[] = {299, 599, 517};
+          const int32_t qseq[] = {0, 1, 0};
+          Tensor q = fill(3, H * hd);
+          const float scale = 1.0f / std::sqrt(static_cast<float>(hd));
+          std::vector<double> ref(static_cast<size_t>(3 * H * hd));
+          for (int64_t r = 0; r < 3; ++r) {
+            const Tensor& kk = qseq[r] == 0 ? k0 : k1;
+            const Tensor& vv = qseq[r] == 0 ? v0 : v1;
+            const int64_t n = qpos[r] + 1;
+            for (int64_t h = 0; h < H; ++h) {
+              const int64_t kvh = h / group;
+              std::vector<double> s(static_cast<size_t>(n));
+              double mx = -1e300;
+              for (int64_t t = 0; t < n; ++t) {
+                double d = 0;
+                for (int64_t c = 0; c < hd; ++c) {
+                  d += double{q.data_as<float>()[r * H * hd + h * hd + c]} * stored(kk, t, kvh * hd + c);
+                }
+                s[static_cast<size_t>(t)] = d * scale;
+                mx = std::max(mx, s[static_cast<size_t>(t)]);
+              }
+              double z = 0;
+              for (int64_t t = 0; t < n; ++t) z += std::exp(s[static_cast<size_t>(t)] - mx);
+              for (int64_t c = 0; c < hd; ++c) {
+                double a = 0;
+                for (int64_t t = 0; t < n; ++t) a += std::exp(s[static_cast<size_t>(t)] - mx) / z * stored(vv, t, kvh * hd + c);
+                ref[static_cast<size_t>(r * H * hd + h * hd + c)] = a;
+              }
+            }
+          }
+          std::vector<float> outs[2];
+          for (int grouped = 0; grouped < 2; ++grouped) {
+            KernelPlan kp = KernelPlan::defaults();
+            kp.grouped_attention = grouped == 1;
+            kp.attention_full = AttentionStrategy::kPerPair;
+            be.set_kernel_plan(kp);
+            auto out = Tensor::zeros(DType::kF32, {3, H * hd});
+            AttentionParams ap;
+            ap.q = q;
+            ap.out = *out;
+            ap.positions = qpos;
+            ap.row_seq = qseq;
+            ap.kv = views;
+            ap.num_heads = static_cast<int32_t>(H);
+            ap.scale = scale;
+            be.attention(ap);
+            outs[grouped].assign(out->data_as<float>(), out->data_as<float>() + 3 * H * hd);
+            for (int64_t i = 0; i < 3 * H * hd; ++i) {
+              ASSERT_NEAR(outs[grouped][static_cast<size_t>(i)], ref[static_cast<size_t>(i)], 1e-4)
+                  << isa_name(isa) << " " << dtype_name(kvt) << " hd=" << hd << " group=" << group
+                  << " grouped=" << grouped << " i=" << i;
+            }
+          }
+          double max_diff = 0;
+          for (size_t i = 0; i < outs[0].size(); ++i) max_diff = std::max(max_diff, std::fabs(double{outs[0][i]} - outs[1][i]));
+          EXPECT_LT(max_diff, 1e-5) << isa_name(isa) << " " << dtype_name(kvt) << " hd=" << hd << " group=" << group;
+        }
+      }
+    }
+  }
+}
+
 INSTANTIATE_TEST_SUITE_P(Arch, PlannedForward, ::testing::Values("llama", "gemma2", "qwen2"),
                          [](const auto& pi) { return pi.param; });
 

@@ -168,6 +168,14 @@ void attn_scores_f32(const float* k, int64_t n, int32_t dim, const float* q, flo
 void attn_accum_f32(const float* v, int64_t n, int32_t dim, const float* w, float* acc) {
   for (int64_t t = 0; t < n; ++t) axpy_f32(w[t], v + t * dim, acc, dim);
 }
+void attn_accum_heads_f32(const float* v, int64_t n, int32_t dim, const float* w, int32_t nh, int64_t w_stride,
+                          float* acc) {
+  for (int32_t h = 0; h < nh; ++h) attn_accum_f32(v, n, dim, w + h * w_stride, acc + static_cast<int64_t>(h) * dim);
+}
+void attn_scores_heads_f32(const float* k, int64_t n, int32_t dim, const float* q, int32_t nh, float scale,
+                           float* scores, int64_t s_stride) {
+  for (int32_t h = 0; h < nh; ++h) attn_scores_f32(k, n, dim, q + static_cast<int64_t>(h) * dim, scale, scores + h * s_stride);
+}
 
 // --- int8 activation path (DD-053) -------------------------------------------
 // Reference integer arithmetic: weight codes times int8 activation codes,
@@ -330,6 +338,8 @@ void register_generic_kernels(CpuKernels& k) {
   k.attn_accum_f16 = attn_accum_f16;
   k.attn_scores_f32 = attn_scores_f32;
   k.attn_accum_f32 = attn_accum_f32;
+  k.attn_scores_heads_f32 = attn_scores_heads_f32;
+  k.attn_accum_heads_f32 = attn_accum_heads_f32;
 
   auto set = [&](DType t, VecDotFn vd, DequantFn dq) {
     k.vec_dot[static_cast<size_t>(t)] = vd;

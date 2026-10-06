@@ -441,6 +441,12 @@ void CpuBackend::attend_group(const AttentionParams& p, size_t r, int32_t kvh, i
     const int64_t n = std::min<int64_t>(t1 - t, bs - t % bs);
     const int64_t off = kv.k_offset(t, kvh);
     if (convert) to_f32(static_cast<const uint16_t*>(kv.k) + off, kv_f32.data(), n * hd);
+    if ((f32 || convert) && group > 1 && plan_.grouped_attention) {  // all heads per k load (DD-066)
+      k_.attn_scores_heads_f32(convert ? kv_f32.data() : static_cast<const float*>(kv.k) + off, n, hd, q0, group,
+                               p.scale, scores.data() + static_cast<size_t>(t - t0), static_cast<int64_t>(len));
+      t += n;
+      continue;
+    }
     for (int32_t gi = 0; gi < group; ++gi) {
       const float* q = q0 + static_cast<int64_t>(gi) * hd;
       float* s = scores.data() + static_cast<size_t>(gi) * len + static_cast<size_t>(t - t0);
@@ -463,12 +469,25 @@ void CpuBackend::attend_group(const AttentionParams& p, size_t r, int32_t kvh, i
     sum_out[gi] = 0;
   }
   std::fill(acc, acc + static_cast<size_t>(group) * hdv, 0.0f);
-  thread_local std::vector<float> w;  // softmax numerators of one block run
-  w.resize(static_cast<size_t>(bs));
+  thread_local std::vector<float> w;  // softmax numerators of one block run, [group][bs]
+  w.resize(static_cast<size_t>(group) * static_cast<size_t>(bs));
   for (int64_t t = t0; t < t1;) {
     const int64_t n = std::min<int64_t>(t1 - t, bs - t % bs);
     const int64_t off = kv.v_offset(t, kvh);
     if (convert) to_f32(static_cast<const uint16_t*>(kv.v) + off, kv_f32.data(), n * hdv);
+    if ((f32 || convert) && group > 1 && plan_.grouped_attention) {  // all heads per v load (DD-066)
+      for (int32_t gi = 0; gi < group; ++gi) {
+        const float* s = scores.data() + static_cast<size_t>(gi) * len + static_cast<size_t>(t - t0);
+        float* wg = w.data() + static_cast<size_t>(gi) * static_cast<size_t>(bs);
+        const float m = mx_out[gi];
+        for (int64_t j = 0; j < n; ++j) wg[j] = exp_nonpos(s[j] - m);  // vectorizes
+        for (int64_t j = 0; j < n; ++j) sum_out[gi] += wg[j];
+      }
+      k_.attn_accum_heads_f32(convert ? kv_f32.data() : static_cast<const float*>(kv.v) + off, n, hdv, w.data(), group,
+                              bs, acc);
+      t += n;
+      continue;
+    }
     for (int32_t gi = 0; gi < group; ++gi) {
       const float* s = scores.data() + static_cast<size_t>(gi) * len + static_cast<size_t>(t - t0);
       const float m = mx_out[gi];

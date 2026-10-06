@@ -12,6 +12,7 @@
 
 #include <immintrin.h>
 
+#include <algorithm>
 #include <cstring>
 
 #include "dtype/fp16.h"
@@ -500,6 +501,90 @@ void attn_accum_f32(const float* v, int64_t n, int32_t dim, const float* w, floa
   }
 }
 
+// GQA scores (DD-066): for each position, each 8-wide chunk of k is loaded
+// once and multiplied into one accumulator per query head (NH <= 8); the NH
+// sums are reduced together by one hadd tree instead of NH horizontal sums.
+template <int NH>
+void attn_scores_heads_tile(const float* k, int64_t n, int32_t dim, const float* q, float scale, float* scores,
+                            int64_t s_stride) {
+  const __m256 vs = _mm256_set1_ps(scale);
+  for (int64_t t = 0; t < n; ++t) {
+    const float* kt = k + t * dim;
+    __m256 a[8];
+    for (int h = 0; h < 8; ++h) a[h] = _mm256_setzero_ps();
+    for (int32_t c = 0; c < dim; c += 8) {
+      const __m256 vk = _mm256_loadu_ps(kt + c);
+      for (int h = 0; h < NH; ++h) a[h] = _mm256_fmadd_ps(vk, _mm256_loadu_ps(q + h * dim + c), a[h]);
+    }
+    const __m256 t0 = _mm256_hadd_ps(_mm256_hadd_ps(a[0], a[1]), _mm256_hadd_ps(a[2], a[3]));
+    const __m256 t1 = _mm256_hadd_ps(_mm256_hadd_ps(a[4], a[5]), _mm256_hadd_ps(a[6], a[7]));
+    const __m256 sum = _mm256_add_ps(_mm256_permute2f128_ps(t0, t1, 0x20), _mm256_permute2f128_ps(t0, t1, 0x31));
+    alignas(32) float out[8];
+    _mm256_store_ps(out, _mm256_mul_ps(sum, vs));
+    for (int h = 0; h < NH; ++h) scores[h * s_stride + t] = out[h];
+  }
+}
+
+void attn_scores_heads_f32(const float* k, int64_t n, int32_t dim, const float* q, int32_t nh, float scale,
+                           float* scores, int64_t s_stride) {
+  if (dim % 8 != 0) {
+    for (int32_t h = 0; h < nh; ++h) attn_scores_f32(k, n, dim, q + static_cast<int64_t>(h) * dim, scale, scores + h * s_stride);
+    return;
+  }
+  for (int32_t h0 = 0; h0 < nh; h0 += 8) {
+    const float* qh = q + static_cast<int64_t>(h0) * dim;
+    float* sh = scores + h0 * s_stride;
+    switch (std::min(8, nh - h0)) {
+      case 1: attn_scores_heads_tile<1>(k, n, dim, qh, scale, sh, s_stride); break;
+      case 2: attn_scores_heads_tile<2>(k, n, dim, qh, scale, sh, s_stride); break;
+      case 3: attn_scores_heads_tile<3>(k, n, dim, qh, scale, sh, s_stride); break;
+      case 4: attn_scores_heads_tile<4>(k, n, dim, qh, scale, sh, s_stride); break;
+      case 5: attn_scores_heads_tile<5>(k, n, dim, qh, scale, sh, s_stride); break;
+      case 6: attn_scores_heads_tile<6>(k, n, dim, qh, scale, sh, s_stride); break;
+      case 7: attn_scores_heads_tile<7>(k, n, dim, qh, scale, sh, s_stride); break;
+      default: attn_scores_heads_tile<8>(k, n, dim, qh, scale, sh, s_stride); break;
+    }
+  }
+}
+
+// GQA value accumulation (DD-066): per 8-wide chunk of the head dimension,
+// NH accumulators stay in registers over the run and each v vector is loaded
+// once for all heads.
+template <int NH>
+void attn_accum_heads_tile(const float* v, int64_t n, int32_t dim, const float* w, int64_t w_stride, float* acc) {
+  for (int32_t c = 0; c < dim; c += 8) {
+    __m256 a[NH];
+    for (int h = 0; h < NH; ++h) a[h] = _mm256_loadu_ps(acc + h * dim + c);
+    for (int64_t t = 0; t < n; ++t) {
+      const __m256 vv = _mm256_loadu_ps(v + t * dim + c);
+      for (int h = 0; h < NH; ++h) a[h] = _mm256_fmadd_ps(_mm256_broadcast_ss(w + h * w_stride + t), vv, a[h]);
+    }
+    for (int h = 0; h < NH; ++h) _mm256_storeu_ps(acc + h * dim + c, a[h]);
+  }
+}
+
+void attn_accum_heads_f32(const float* v, int64_t n, int32_t dim, const float* w, int32_t nh, int64_t w_stride,
+                          float* acc) {
+  if (dim % 8 != 0) {
+    for (int32_t h = 0; h < nh; ++h) attn_accum_f32(v, n, dim, w + h * w_stride, acc + static_cast<int64_t>(h) * dim);
+    return;
+  }
+  for (int32_t h0 = 0; h0 < nh; h0 += 8) {
+    const float* wh = w + h0 * w_stride;
+    float* ah = acc + static_cast<int64_t>(h0) * dim;
+    switch (std::min(8, nh - h0)) {
+      case 1: attn_accum_heads_tile<1>(v, n, dim, wh, w_stride, ah); break;
+      case 2: attn_accum_heads_tile<2>(v, n, dim, wh, w_stride, ah); break;
+      case 3: attn_accum_heads_tile<3>(v, n, dim, wh, w_stride, ah); break;
+      case 4: attn_accum_heads_tile<4>(v, n, dim, wh, w_stride, ah); break;
+      case 5: attn_accum_heads_tile<5>(v, n, dim, wh, w_stride, ah); break;
+      case 6: attn_accum_heads_tile<6>(v, n, dim, wh, w_stride, ah); break;
+      case 7: attn_accum_heads_tile<7>(v, n, dim, wh, w_stride, ah); break;
+      default: attn_accum_heads_tile<8>(v, n, dim, wh, w_stride, ah); break;
+    }
+  }
+}
+
 // --- int8 activation path (DD-053) ----------------------------------------------
 // Weights stay packed; each block is unpacked once to int8 codes and multiplied
 // against up to four int8 activation rows held in registers. maddubs does 32
@@ -696,6 +781,8 @@ bool register_avx2_kernels(CpuKernels& k) {
   k.axpy_f16 = axpy_f16;
   k.gemm_panel = gemm_panel;
   k.attn_scores_f16 = attn_scores_f16;
+  k.attn_scores_heads_f32 = attn_scores_heads_f32;
+  k.attn_accum_heads_f32 = attn_accum_heads_f32;
   k.attn_accum_f16 = attn_accum_f16;
   k.attn_scores_f32 = attn_scores_f32;
   k.attn_accum_f32 = attn_accum_f32;

@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Grouped GQA attention (DD-066)
+- Query heads sharing a KV head are scored and accumulated in one pass. Attention is 4–22% faster
+  at most measured points; end-to-end aggregate tok/s is unchanged within noise (attention is
+  5–8% of a decode step). `DYNALM_ATTN_GROUPED=0` selects the per-head path.
+- Benchmark diagnostics on Windows report the effective CPU clock (PDH `% Processor
+  Performance`), not the constant base clock (1367 MHz on an i7-1255U).
+- `bench_batch_decode` runs in-process old/new A/B with alternating order and a free-memory
+  floor; new `bench_attn_accuracy` and `tools/ab_summary.py`.
+
 ### Faster first token (DD-064)
 - Weight pages are mapped in parallel at load instead of faulting in during the first request:
   Qwen3-4B first-request TTFT 874–891 → 477–508 ms, Gemma-3-270M 127–133 → 36–41 ms

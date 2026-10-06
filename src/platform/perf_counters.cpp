@@ -1,12 +1,13 @@
 #include "platform/perf_counters.h"
 
+#include <mutex>
 #include <vector>
 
 #include "common/platform.h"
 
 #if ENGINE_OS_WINDOWS
 #include <windows.h>
-#include <powerbase.h>
+#include <pdh.h>
 #include <psapi.h>
 #else
 #include <sys/resource.h>
@@ -215,20 +216,39 @@ PerfSample PerfCounters::read() const {
 
 double cpu_current_mhz() {
 #if ENGINE_OS_WINDOWS
-  // CallNtPowerInformation(ProcessorInformation) fills one record per logical CPU.
-  struct ProcessorPowerInformation {
-    ULONG Number, MaxMhz, CurrentMhz, MhzLimit, MaxIdleState, CurrentIdleState;
+  // Effective frequency = nominal frequency x "% Processor Performance" (the
+  // source Task Manager uses), averaged over logical CPUs. CallNtPowerInformation's
+  // CurrentMhz is not usable: on hybrid CPUs it returns each core type's base
+  // clock (1700 / 1200 MHz on an i7-1255U, mean 1367) regardless of load
+  // (DD-066). "% Processor Performance" is a rate counter: the first call
+  // starts the query and returns -1; later calls cover the time since the
+  // previous call.
+  struct Query {
+    PDH_HQUERY q = nullptr;
+    PDH_HCOUNTER perf = nullptr, freq = nullptr;
+    bool ok = false;
+    std::mutex mu;
+    Query() {
+      if (PdhOpenQueryW(nullptr, 0, &q) != ERROR_SUCCESS) return;
+      ok = PdhAddEnglishCounterW(q, L"\\Processor Information(_Total)\\% Processor Performance", 0, &perf) ==
+               ERROR_SUCCESS &&
+           PdhAddEnglishCounterW(q, L"\\Processor Information(_Total)\\Processor Frequency", 0, &freq) == ERROR_SUCCESS &&
+           PdhCollectQueryData(q) == ERROR_SUCCESS;
+    }
+    ~Query() {
+      if (q) PdhCloseQuery(q);
+    }
   };
-  SYSTEM_INFO si{};
-  GetSystemInfo(&si);
-  std::vector<ProcessorPowerInformation> info(si.dwNumberOfProcessors);
-  if (CallNtPowerInformation(ProcessorInformation, nullptr, 0, info.data(),
-                             static_cast<ULONG>(info.size() * sizeof(ProcessorPowerInformation))) != 0) {
+  static Query query;
+  if (!query.ok) return -1;
+  std::lock_guard<std::mutex> lock(query.mu);
+  if (PdhCollectQueryData(query.q) != ERROR_SUCCESS) return -1;
+  PDH_FMT_COUNTERVALUE perf{}, freq{};
+  if (PdhGetFormattedCounterValue(query.perf, PDH_FMT_DOUBLE, nullptr, &perf) != ERROR_SUCCESS ||
+      PdhGetFormattedCounterValue(query.freq, PDH_FMT_DOUBLE, nullptr, &freq) != ERROR_SUCCESS) {
     return -1;
   }
-  double sum = 0;
-  for (const auto& p : info) sum += p.CurrentMhz;
-  return info.empty() ? -1 : sum / static_cast<double>(info.size());
+  return freq.doubleValue * perf.doubleValue / 100.0;
 #else
   return -1;
 #endif

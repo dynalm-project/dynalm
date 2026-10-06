@@ -1,0 +1,56 @@
+model: models/SmolLM2-135M-Instruct-Q8_0.gguf (Q8_0) | heads 9, kv heads 3 (group 3), head dim 64 | 10 threads
+context positions    max|dl|         rmse      KL mean    top1%    top5%    ppl old    ppl new  greedy same
+     64        33   1.12e+00     1.85e-01     2.03e-03    93.9%    94.5%    15.3225    15.1045      30 / 48
+   1024        33   7.14e-01     1.46e-01     1.01e-05   100.0%    96.4%     1.0049     1.0050      48 / 48
+   3072        33   9.84e-01     1.84e-01     7.60e-06   100.0%    98.8%     1.0022     1.0022      48 / 48
+accuracy contract (DD-053: perplexity <= 1%, mean KL <= 0.0025): FAIL
+model: models/qwen2.5-0.5b-instruct-q4_k_m.gguf (Q4_K_M) | heads 14, kv heads 2 (group 7), head dim 64 | 10 threads
+context positions    max|dl|         rmse      KL mean    top1%    top5%    ppl old    ppl new  greedy same
+     64        33   5.11e-01     6.39e-02     1.06e-03    97.0%    98.8%    12.3867    12.4304       2 / 48
+   1024        33   3.55e-01     5.73e-02     5.42e-07   100.0%    98.8%     1.0005     1.0005      48 / 48
+   3072        33   3.40e-01     5.77e-02     4.77e-07   100.0%    97.0%     1.0003     1.0003      48 / 48
+accuracy contract (DD-053: perplexity <= 1%, mean KL <= 0.0025): PASS
+model: models/gemma-3-270m-it-F16.gguf (F16) | heads 4, kv heads 1 (group 4), head dim 256 | 10 threads
+context positions    max|dl|         rmse      KL mean    top1%    top5%    ppl old    ppl new  greedy same
+     64        33   7.78e-03     1.06e-03     9.63e-08   100.0%   100.0%    24.9248    24.9228      48 / 48
+   1024        33   1.42e-02     1.66e-03     2.54e-10   100.0%   100.0%     1.0005     1.0005      48 / 48
+   3072        33   2.70e-02     2.27e-03     3.81e-09   100.0%   100.0%     1.0020     1.0020      48 / 48
+accuracy contract (DD-053: perplexity <= 1%, mean KL <= 0.0025): PASS
+model: models/qwen2.5-1.5b-instruct-q4_k_m.gguf (Q4_K_M) | heads 12, kv heads 2 (group 6), head dim 128 | 10 threads
+context positions    max|dl|         rmse      KL mean    top1%    top5%    ppl old    ppl new  greedy same
+     64        33   4.27e-01     6.31e-02     8.49e-04   100.0%    98.2%     8.0104     8.0298      48 / 48
+   1024        33   3.80e-01     5.58e-02     1.98e-07   100.0%    98.8%     1.0001     1.0001      48 / 48
+   2048        33   4.06e-01     5.33e-02     1.23e-07   100.0%    98.8%     1.0001     1.0001      48 / 48
+accuracy contract (DD-053: perplexity <= 1%, mean KL <= 0.0025): PASS
+model: models/Qwen3-4B-Q4_K_M.gguf (Q4_K_M) | heads 32, kv heads 8 (group 4), head dim 128 | 10 threads
+context positions    max|dl|         rmse      KL mean    top1%    top5%    ppl old    ppl new  greedy same
+     64        33   3.67e-01     5.65e-02     8.44e-04    97.0%    99.4%    12.8952    12.9933      11 / 48
+    512        33   1.71e+00     1.02e-01     4.19e-03   100.0%    98.2%     1.0079     1.0021      48 / 48
+   1024        33   1.40e+00     1.15e-01     5.32e-07   100.0%    98.8%     1.0000     1.0000      48 / 48
+accuracy contract (DD-053: perplexity <= 1%, mean KL <= 0.0025): FAIL
+mode: noise floor (per-pair vs split-K, both pre-DD-066)
+model: models/SmolLM2-135M-Instruct-Q8_0.gguf (Q8_0) | heads 9, kv heads 3 (group 3), head dim 64 | 10 threads
+context positions    max|dl|         rmse      KL mean    top1%    top5%    ppl old    ppl new  greedy same
+     64        33   9.99e-01     1.76e-01     2.39e-03    97.0%    94.5%    15.3225    15.3089      46 / 48
+   1024        33   8.86e-01     1.58e-01     2.01e-05   100.0%    97.0%     1.0048     1.0050      48 / 48
+accuracy contract (DD-053: perplexity <= 1%, mean KL <= 0.0025): PASS
+mode: noise floor (per-pair vs split-K, both pre-DD-066)
+model: models/qwen2.5-0.5b-instruct-q4_k_m.gguf (Q4_K_M) | heads 14, kv heads 2 (group 7), head dim 64 | 10 threads
+context positions    max|dl|         rmse      KL mean    top1%    top5%    ppl old    ppl new  greedy same
+     64        33   4.21e-01     6.31e-02     9.68e-04    97.0%    98.2%    12.3867    12.4386       2 / 48
+   1024        33   3.57e-01     6.08e-02     4.49e-07   100.0%    98.2%     1.0005     1.0005      48 / 48
+accuracy contract (DD-053: perplexity <= 1%, mean KL <= 0.0025): PASS
+mode: noise floor (per-pair vs split-K, both pre-DD-066)
+model: models/Qwen3-4B-Q4_K_M.gguf (Q4_K_M) | heads 32, kv heads 8 (group 4), head dim 128 | 10 threads
+context positions    max|dl|         rmse      KL mean    top1%    top5%    ppl old    ppl new  greedy same
+     64        33   3.74e-01     5.96e-02     9.04e-04   100.0%    98.8%    12.8952    13.2444      45 / 48
+    512        33   1.94e+00     9.64e-02     9.41e-04   100.0%    98.8%     1.0038     1.0033      48 / 48
+   1024        33   1.20e+00     1.12e-01     1.46e-07   100.0%    99.4%     1.0000     1.0000      48 / 48
+accuracy contract (DD-053: perplexity <= 1%, mean KL <= 0.0025): FAIL
+=== Qwen3-4B old vs new, int8 off
+model: models/Qwen3-4B-Q4_K_M.gguf (Q4_K_M) | heads 32, kv heads 8 (group 4), head dim 128 | 10 threads
+context positions    max|dl|         rmse      KL mean    top1%    top5%    ppl old    ppl new  greedy same
+     64        33   6.32e-03     1.10e-03     1.81e-07   100.0%   100.0%    13.1156    13.1122      48 / 48
+    512        33   5.95e-02     2.96e-03     1.11e-06   100.0%   100.0%     1.0063     1.0062      48 / 48
+   1024        33   4.92e-02     3.50e-03     1.33e-10   100.0%   100.0%     1.0000     1.0000      48 / 48
+accuracy contract (DD-053: perplexity <= 1%, mean KL <= 0.0025): PASS

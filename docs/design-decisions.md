@@ -1847,3 +1847,97 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
 - **Measurement note:** the Windows clock query in the benchmark diagnostics reported exactly
   1367 MHz on every run, including prefill-heavy ones. It looks like a fixed value, not a live
   clock, so throttling cannot be confirmed or ruled out from it.
+
+## DD-066: Grouped GQA attention kernels: attention 4–22% faster, end-to-end NEUTRAL
+
+- **Decision:**
+  - **Kernels:** `attn_scores_heads_f32` and `attn_accum_heads_f32` (generic, and AVX2 templated
+    on up to 8 heads) process all query heads that share a KV head in one pass.
+    - Scores: each K vector is loaded once and FMA'd into one accumulator per head. The head
+      sums are reduced by one `hadd` tree.
+    - Accumulation: each V vector is loaded once, with one register accumulator per head.
+    - `attend_group` uses them whenever several heads share the converted fp32 run (f16 KV
+      with group > 1, or f32 KV).
+  - **Switch:** `KernelPlan::grouped_attention`, default on; `DYNALM_ATTN_GROUPED=0` turns it
+    off. It exists for A/B measurement, and the per-head path remains the reference.
+  - **Diagnostics changed alongside:**
+    - `cpu_current_mhz()` on Windows now reads the effective clock through PDH
+      (`% Processor Performance` × nominal frequency). `CallNtPowerInformation` returned a
+      constant per-core-type base clock: 1700 MHz on P-cores, 1200 MHz on E-cores, mean 1367,
+      regardless of load. Under full decode load the effective clocks were about 2.39 GHz on
+      P-cores and 1.34 GHz on E-cores (turbo maxima 4.7 / 3.5 GHz).
+    - `bench_batch_decode` was rewritten for in-process A/B with alternating order. It also
+      reports memory and stops below a free-memory floor.
+    - New: `bench_attn_accuracy` and `tools/ab_summary.py`.
+- **End-to-end classification: NEUTRAL.** Attention is reproducibly faster. Aggregate output
+  tok/s does not separate from run-to-run noise at any measured point. The change is kept
+  because it is correct to rounding, never slower beyond noise, and shrinks the attention share
+  that grows with context × concurrency. No throughput gain is claimed.
+- **Evidence (Qwen2.5-1.5B Q4_K_M):** 10 threads, f16 KV, 24 timed decode steps plus 12
+  profiled steps per measurement. 3 repetitions per point, old/new alternating with the order
+  flipped each repetition. Docker Desktop was running (~3 GB), which leaves 3–4 GB available.
+  Data: `results/dd066-ab.csv`, `results/dd066-ab-summary.txt`. Medians, old → new:
+
+  | context × seqs | attention ms/step | aggregate tok/s | ITL p50 | ITL p99 |
+  |---|---|---|---|---|
+  | 512 × 1 | 4.5 → 5.3 (+19%, ~) | 12.2 → 11.7 (−4.1%, ~) | +8.0% ~ | −6.6% ~ |
+  | 512 × 4 | 12.6 → 9.8 (−22%, separated) | 25.0 → 23.8 (−4.8%, ~) | +2.0% ~ | +66% ~ (one outlier run) |
+  | 512 × 8 | 18.2 → 16.9 (−7%, separated) | 30.1 → 31.6 (+5.0%, ~) | −3.0% ~ | −22% ~ |
+  | 512 × 16 | 31.1 → 26.4 (−15%, separated) | 38.4 → 40.9 (+6.5%, ~) | −7.5% ~ | +5.0% ~ |
+  | 512 × 32 | 55.2 → 50.1 (−9%, ~) | 49.7 → 52.1 (+4.8%, ~) | −6.3% ~ | −6.8% ~ |
+  | 2K × 1 | 9.1 → 7.2 (−22%, ~) | 12.3 → 12.0 (−2.4%, ~) | +1.6% ~ | +0.9% ~ |
+  | 2K × 4 | 25.5 → 22.0 (−14%, separated) | 24.6 → 24.1 (−2.0%, ~) | −0.1% ~ | +4.3% ~ |
+  | 2K × 8 | 51.8 → 45.5 (−12%, separated) | 29.6 → 30.1 (+1.7%, ~) | +0.1% ~ | −6.4% ~ |
+  | 2K × 16 | 109.2 → 104.5 (−4%, ~) | 30.3 → 33.3 (+9.9%, ~) | −11.6% separated | −8.6% ~ |
+
+  "~" means the old and new [min, max] ranges overlap. Attention is only 5–8% of a decode step
+  (see the profile below), so even a 20% attention gain is ≤ 2% of the step. That is below
+  this laptop's run-to-run noise.
+  - **Not measured:** 2K × 32 and all 4K points did not fit beside the other workloads in the
+    available memory.
+  - **First attempts:** two earlier runs (a full matrix, then one under memory pressure) were
+    stopped by the OS and by the benchmark's memory floor. Their single repetitions disagreed
+    in sign at several points and are not used.
+- **Accuracy:** `results/dd066-accuracy.txt`, `bench_attn_accuracy`. Prefill and 32
+  teacher-forced decode positions, then 48 greedy tokens. Models: SmolLM2-135M (3 heads per KV
+  head, dim 64), Qwen2.5-0.5B (7, 64), Gemma-3-270M (4, 256, sliding window), Qwen2.5-1.5B
+  (6, 128), Qwen3-4B (4, 128). Contexts 64–3072.
+  - **Without int8 activations** (F16 Gemma; `DYNALM_INT8_DECODE_ROWS=0` for the others):
+    rounding-level everywhere. Mean KL ≤ 1.1e-6, top-1 and top-5 agreement 100%, greedy
+    continuation identical (48/48).
+  - **With int8 decode** (the default for quantized models), small differences are amplified
+    by the int8 activation rounding.
+    - **Noise floor:** the same amplification appears between two pre-DD-066 runs that differ
+      only in float ordering (per-pair vs split-K attention). Qwen2.5-0.5B at 64 tokens
+      diverges in greedy after 2 tokens in both comparisons. Qwen3-4B at 64 tokens changes
+      perplexity by +2.7% in the floor comparison alone.
+    - **Worst DD-066 point:** Qwen3-4B at 512 tokens, mean KL 4.2e-3 vs 9.4e-4 for the floor.
+      The same point with int8 off is 1.1e-6.
+    - **Conclusion:** the int8 path's sensitivity to float ordering is a pre-existing property,
+      tracked separately. No tolerance was loosened.
+  - **Kernel tests:** `GqaAttention.GroupedMatchesPerHeadAndNaive` compares grouped, per-head
+    and naive double-precision attention at the existing 1e-4 tolerance. Coverage:
+    - both ISAs (AVX2 and generic) and f32/f16 KV;
+    - head dims 64/128/72 (72 takes the non-multiple-of-8 fallback);
+    - 1–9 heads per KV head (9 needs two passes);
+    - three rows from two sequences with scrambled block tables.
+
+    Grouped vs per-head max difference < 1e-5. 386/386 tests pass, none skipped or unbuilt.
+- **Post-DD-066 decode profile** (`results/dd066-profile-512*.csv`): Qwen2.5-1.5B, 512 context,
+  median of 2 runs, ms/step (share):
+
+  | op | M=1 | M=4 | M=8 | M=16 | M=32 |
+  |---|---|---|---|---|---|
+  | MLP up (gate+up) | 28.1 (35%) | 61.1 (38%) | 96.7 (40%) | 158.6 (42%) | 263.1 (42%) |
+  | MLP down | 21.8 (28%) | 40.1 (25%) | 51.6 (21%) | 81.6 (21%) | 135.9 (22%) |
+  | LM head | 11.4 (14%) | 17.0 (10%) | 33.2 (14%) | 50.0 (13%) | 80.0 (13%) |
+  | QKV | 7.4 (9%) | 14.0 (9%) | 18.1 (8%) | 26.4 (7%) | 38.8 (6%) |
+  | attention | 4.0 (5%) | 9.6 (6%) | 15.2 (6%) | 25.7 (7%) | 48.7 (8%) |
+  | attention out | 3.4 (4%) | 7.4 (5%) | 10.5 (4%) | 16.9 (4%) | 26.8 (4%) |
+  | norm + RoPE + act + KV store | 3.2 (4%) | 13.0 (8%) | 16.1 (7%) | 21.1 (6%) | 31.9 (5%) |
+  | step p50 / aggregate tok/s | 80.8 / 11.5 | 150.9 / 26.1 | 238.2 / 33.3 | 378.4 / 42.1 | 609.0 / 52.1 |
+
+  - **Share of each step:** matmuls are ~90%. In the serving path (`dynalm benchmark`, c = 1–16),
+    sampling is 0.3–0.7% of wall time, and planning + emission + prefix cache are < 0.1%.
+  - **Thread pool:** tail wait is 7–14% of region time, and CPU utilization is 0.76–0.86.
+- **Alternatives:** none needed. The per-head path stays available as the reference.

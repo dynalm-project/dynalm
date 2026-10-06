@@ -51,9 +51,13 @@ struct KernelPlan {
   AttentionStrategy attention_full = AttentionStrategy::kAuto;
   AttentionStrategy attention_window = AttentionStrategy::kAuto;
   int32_t attention_chunk = 256;  // split-K chunk length in tokens
+  // Query heads sharing a KV head are scored and accumulated together, each
+  // K/V vector loaded once for the group (DD-066). false: one head at a time
+  // (the pre-DD-066 path, kept for A/B measurement and as a reference).
+  bool grouped_attention = true;
 
   // Defaults, with the tuning overrides DYNALM_MATMUL_EXPAND_MIN,
-  // DYNALM_GEMM_KC and DYNALM_INT8_DECODE_ROWS applied (read once per process).
+  // DYNALM_GEMM_KC, DYNALM_INT8_DECODE_ROWS and DYNALM_ATTN_GROUPED applied (read once per process).
   static const KernelPlan& defaults();
 };
 

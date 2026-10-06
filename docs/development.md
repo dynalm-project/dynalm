@@ -208,3 +208,4 @@ Tuning knobs for experiments (not for production): `DYNALM_GEMM_KC` (GEMM K-slic
 A sweep on the development laptop found the defaults best (DD-063).
 Configure with `-DDYNALM_LTO=ON` for link-time optimization. It is off by default because it showed no measured gain.
 `DYNALM_PREFAULT=0` skips mapping weight pages at load (DD-064). Use it to measure cold first requests.
+`DYNALM_ATTN_GROUPED=0` selects per-head attention, the pre-DD-066 reference path.

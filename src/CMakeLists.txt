@@ -69,7 +69,7 @@ target_include_directories(engine_core PUBLIC
   ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_link_libraries(engine_core PUBLIC engine_options)
 if(WIN32)
-  target_link_libraries(engine_core PRIVATE powrprof)  # CallNtPowerInformation (CPU frequency)
+  target_link_libraries(engine_core PRIVATE pdh)  # effective CPU frequency (DD-066)
 endif()
 target_compile_definitions(engine_core PUBLIC
   ENGINE_HAS_AVX2=$<BOOL:${ENABLE_AVX2}>
