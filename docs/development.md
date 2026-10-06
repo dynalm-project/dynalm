@@ -207,3 +207,4 @@ Tuning knobs for experiments (not for production): `DYNALM_GEMM_KC` (GEMM K-slic
 `DYNALM_INT8_DECODE_ROWS` sets the largest row count that uses int8 activations (DD-053).
 A sweep on the development laptop found the defaults best (DD-063).
 Configure with `-DDYNALM_LTO=ON` for link-time optimization. It is off by default because it showed no measured gain.
+`DYNALM_PREFAULT=0` skips mapping weight pages at load (DD-064). Use it to measure cold first requests.

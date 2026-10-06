@@ -1769,3 +1769,46 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
   CPU model. Worth building once a second machine shows different optima.
 - **Tradeoffs:** LTO roughly doubles link time and memory, for no measured benefit, which is why
   it is off by default.
+
+## DD-064: Pre-fault weight pages at load (cold-start TTFT)
+
+- **Decision:** `Engine::create` touches every weight page once (one read per 4 KiB) from all pool
+  workers, right after the pool starts. It is skipped when the weights exceed available memory,
+  or with `DYNALM_PREFAULT=0`. `TensorRegistry::for_each` provides the ranges, so only tensors
+  the engine uses are touched.
+- **Reason:**
+  - **The cost:** weights are memory-mapped. The first forward pass took one page fault per page,
+    about 600k for Qwen3-4B Q4_K_M, serially inside the kernels. This happened even when the file
+    was already in the OS cache. On a cold file, `FILE_FLAG_RANDOM_ACCESS` also turns off
+    read-ahead, so pages came from disk one by one.
+  - **How it showed:** the first request's TTFT. `dynalm run` reported 0.8–0.9 s for 9–17 prompt
+    tokens on Qwen3-4B, and 2.4 s on a cold Gemma-3-270M.
+  - **How it was found:** the benchmark warms up before measuring, so it never saw this cost. The
+    new `[engine] prefill … ms` field of `run` showed TTFT = prefill forward time, which ruled
+    out the streamer.
+  - **Existing helper:** `MappedFile::prefetch` existed but had no caller. It only stages pages
+    in the OS cache; it does not map them.
+- **Evidence:** `dynalm run -p "Hi /no_think" -n 4`, three alternating runs per setting, times
+  in ms.
+
+  | | load | TTFT | load + TTFT |
+  |---|---|---|---|
+  | Qwen3-4B Q4_K_M, before | 89–123 | 874–891 | ~980 |
+  | Qwen3-4B Q4_K_M, after | 382–414 | 477–508 | ~880 |
+  | Gemma-3-270M F16 (warm cache), before | 66–73 | 127–133 | ~195 |
+  | Gemma-3-270M F16 (warm cache), after | 126–135 | 36–41 | ~166 |
+
+  - **One-shot `run`:** time to first token improves 10–15% end to end.
+  - **`serve` and `benchmark`:** loading happens once at startup, so each process's first
+    request gets the full TTFT drop, 45% on Qwen3-4B and ~70% on Gemma.
+  - **Not measured:** a cold-cache start with pre-faulting. Evicting the OS file cache needs
+    tools that are not available here.
+- **Alternatives:**
+  - `PrefetchVirtualMemory` / `MADV_WILLNEED` alone: the pages still fault on first touch.
+  - `MAP_POPULATE`: Linux only, and serial.
+  - Large pages: need a privilege on Windows.
+  - Reading weights into private memory: doubles memory when the file is cached.
+- **Tradeoffs:**
+  - Load takes longer: +300 ms for a 2.4 GB model.
+  - The weights count toward the working set from the start. They would after the first request
+    anyway.

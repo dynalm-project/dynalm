@@ -14,6 +14,7 @@
 #include <string_view>
 #include <vector>
 
+#include "common/function_ref.h"
 #include "common/status.h"
 #include "tensor/tensor.h"
 
@@ -89,6 +90,7 @@ class TensorRegistry {
 
   size_t size() const { return count_; }
   int64_t total_bytes() const;
+  void for_each(FunctionRef<void(const Tensor&)> fn) const;
 
  private:
   static constexpr size_t kRoles = static_cast<size_t>(TensorRole::kCount);

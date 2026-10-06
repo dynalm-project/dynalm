@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Faster first token (DD-064)
+- Weight pages are mapped in parallel at load instead of faulting in during the first request:
+  Qwen3-4B first-request TTFT 874–891 → 477–508 ms, Gemma-3-270M 127–133 → 36–41 ms
+  (`DYNALM_PREFAULT=0` disables it).
+- `dynalm run` prints prefill forward time next to the decode step time.
+
 ### Performance program P14 (DD-063)
 - **`-DDYNALM_LTO=ON`** build option for link-time optimization (off by default: no measured gain on
   this CPU). A sweep of the kernel-plan settings found the defaults best; no tuning cache added.

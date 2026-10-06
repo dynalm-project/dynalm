@@ -363,7 +363,9 @@ int cmd_run(std::span<const std::string_view> args) {
   // Engine-side view of the same run: mean forward time of a decode step.
   for (int i = 0; i < 100 && e.stats().scheduler.running != 0; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(2));
   if (const SchedulerStats ss = e.stats().scheduler; ss.steps_decode_only > 0) {
-    std::fprintf(stderr, "[engine] decode step %.1f ms (forward, %llu steps)\n",
+    std::fprintf(stderr, "[engine] prefill %.1f ms (forward, %llu steps) | decode step %.1f ms (forward, %llu steps)\n",
+                 ss.forward_prefill_only_ms + ss.forward_mixed_ms,
+                 static_cast<unsigned long long>(ss.steps_prefill_only + ss.steps_mixed),
                  ss.forward_decode_only_ms / static_cast<double>(ss.steps_decode_only),
                  static_cast<unsigned long long>(ss.steps_decode_only));
   }

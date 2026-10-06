@@ -1,6 +1,8 @@
 #include "runtime/engine.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <cstring>
 
 #include "common/timer.h"
 #include "logging/log.h"
@@ -90,6 +92,41 @@ int64_t auto_kv_tokens(const ModelConfig& c, DType kv_dtype, int64_t weight_byte
   return std::max(kBlock, tokens / kBlock * kBlock);
 }
 
+namespace {
+
+// Maps every weight page into the process before the first request. Weights
+// are memory-mapped, so otherwise the first forward pass takes one page fault
+// per 4 KiB page (~600k for a 2.4 GB model), serially inside the kernels, even
+// when the file is already in the OS cache; a cold file is also read page by
+// page. Touching the pages from all workers at load turns that into parallel,
+// one-time work. Skipped when the weights do not fit in available memory
+// (touching would only evict other pages) or with DYNALM_PREFAULT=0.
+void prefault_weights(const TensorRegistry& weights, int64_t weight_bytes, ThreadPool& pool) {
+  if (const char* v = std::getenv("DYNALM_PREFAULT"); v && std::strcmp(v, "0") == 0) return;
+  if (weight_bytes > memory_info().available_bytes) return;
+  struct Range {
+    const volatile unsigned char* p;
+    size_t n;
+  };
+  constexpr size_t kChunk = size_t{2} << 20;
+  std::vector<Range> chunks;
+  weights.for_each([&](const Tensor& t) {
+    const auto* p = static_cast<const volatile unsigned char*>(t.data());
+    const auto n = static_cast<size_t>(t.view().span_bytes());
+    for (size_t off = 0; off < n; off += kChunk) chunks.push_back({p + off, std::min(kChunk, n - off)});
+  });
+  pool.parallel_for(chunks.size(), 1, [&](size_t begin, size_t end) {
+    unsigned sink = 0;
+    for (size_t i = begin; i < end; ++i) {
+      for (size_t off = 0; off < chunks[i].n; off += 4096) sink += chunks[i].p[off];
+      sink += chunks[i].p[chunks[i].n - 1];
+    }
+    static_cast<void>(sink);
+  });
+}
+
+}  // namespace
+
 Result<std::unique_ptr<Engine>> Engine::create(EngineOptions opts) {
   request_full_speed_process();  // DD-052
   std::unique_ptr<Engine> e(new Engine());
@@ -97,6 +134,7 @@ Result<std::unique_ptr<Engine>> Engine::create(EngineOptions opts) {
   const ModelConfig& c = e->model_->config;
   const int threads = opts.threads > 0 ? opts.threads : cpu_info().physical_cores;
   e->pool_ = std::make_unique<ThreadPool>(threads);
+  prefault_weights(e->model_->weights, e->model_->weight_bytes, *e->pool_);
   ENGINE_ASSIGN_OR_RETURN(e->backend_, create_backend(opts.backend, *e->pool_));
   const int64_t kv_tokens = opts.kv_tokens > 0 ? opts.kv_tokens
                                                : auto_kv_tokens(c, opts.kv_dtype, e->model_->weight_bytes,

@@ -74,6 +74,17 @@ Result<Tensor> TensorRegistry::get(TensorRole role, int layer) const {
   return NotFound("missing tensor: " + std::string(tensor_role_name(role)) + where);
 }
 
+void TensorRegistry::for_each(FunctionRef<void(const Tensor&)> fn) const {
+  for (const auto& s : global_) {
+    if (s) fn(*s);
+  }
+  for (const auto& l : layers_) {
+    for (const auto& s : l) {
+      if (s) fn(*s);
+    }
+  }
+}
+
 int64_t TensorRegistry::total_bytes() const {
   int64_t total = 0;
   auto add_slots = [&](const Slots& slots) {
