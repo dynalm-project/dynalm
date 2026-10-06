@@ -26,11 +26,11 @@
 #include "runtime/generator.h"
 #include "runtime/speculative.h"
 #include "scheduler/scheduler.h"
+#include "common/core.h"
 
 #if defined(__linux__)
 #include <sys/mman.h>
 #include <unistd.h>
-#include "common/core.h"
 #endif
 
 namespace dynalm {

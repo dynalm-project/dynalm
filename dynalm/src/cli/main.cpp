@@ -11,6 +11,7 @@
 #include "logging/log.h"
 #include "dynacore/hardware/cpu_info.h"
 #include "dynacore/hardware/isa.h"
+#include "common/core.h"
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -23,7 +24,6 @@
 #define NOGDI
 #endif
 #include <windows.h>
-#include "common/core.h"
 #endif
 
 namespace {

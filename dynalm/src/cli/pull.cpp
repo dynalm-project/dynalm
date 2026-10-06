@@ -24,13 +24,13 @@
 #include "loader/gguf/gguf.h"
 #include "loader/model_source.h"
 #include "model/architecture.h"
+#include "common/core.h"
 
 #if defined(_WIN32)
 #include <process.h>
 #else
 #include <spawn.h>
 #include <sys/wait.h>
-#include "common/core.h"
 extern char** environ;
 #endif
 

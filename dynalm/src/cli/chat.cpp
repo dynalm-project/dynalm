@@ -15,6 +15,7 @@
 
 #include "dynacore/base/timer.h"
 #include "runtime/think_filter.h"
+#include "common/core.h"
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -27,7 +28,6 @@
 #define NOGDI
 #endif
 #include <windows.h>
-#include "common/core.h"
 #endif
 
 namespace dynalm::cli {

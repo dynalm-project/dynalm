@@ -23,9 +23,9 @@
 #include "loader/hf/hf_model.h"
 #include "loader/model_source.h"
 #include "model/architecture.h"
+#include "common/core.h"
 #if ENGINE_HAS_SERVER
 #include "server/server.h"
-#include "common/core.h"
 #endif
 
 namespace dynalm::cli {

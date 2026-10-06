@@ -1976,3 +1976,50 @@ Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
 - **Gate for the implementation (R0):** all tests pass, and aggregate output tok/s on
   Qwen2.5-0.5B is within noise (±2%) of the pre-split binary in an interleaved A/B.
 - **Full design:** [platform-design.md](platform-design.md).
+
+## DD-069: R0 done: DynaCore extracted with no measurable throughput change
+
+- **Decision:** the split designed in DD-068 is implemented. Details that differ from, or add
+  to, the design:
+  - **Names.** The op interface is `dynacore::Device` (`device/device.h`), with
+    `CpuDevice`, `DeviceKind` and `create_device`. The memory-location struct that used to be
+    called `Device` is now `DeviceLoc`. The design called the header `ops.h`; the parameter
+    types live in `device/ops.h`.
+  - **Layout.** Public headers are `dynacore/include/dynacore/<module>/`, where `<module>` is
+    base, tensor, memory, hardware, quantization, execution, kernel, device, attention or cpu.
+    Sources are in `dynacore/src/` and `dynacore/cpu/{generic,avx2,neon}`. DynaLM keeps its
+    module directories under `dynalm/src/` and includes them as before (`"scheduler/..."`).
+    It has no separate public include directory yet, because nothing outside the repository
+    links it.
+  - **Namespaces.** `dynacore` and `dynalm`. `dynalm/src/common/core.h` holds the single
+    `using namespace ::dynacore` inside `namespace dynalm`, so DynaLM code was not rewritten.
+  - **Planner (V4).** DynaCore's `plan_kernels(StepShape, HardwareProfile, base)` owns the
+    attention strategy and the split-K chunking. DynaLM's `BatchPlanner` keeps phase and row
+    accounting.
+  - **Moves not in the design.** `MappedFile` moved to DynaCore memory, since generic mmap is
+    not format knowledge. The GPTQ/AWQ repacker moved to `dynalm/src/loader`.
+  - **Tuning environment variables.** Renamed `DYNALM_*` to `DYNACORE_*`: `GEMM_KC`,
+    `MATMUL_EXPAND_MIN`, `INT8_DECODE_ROWS`, `MATMUL_CHUNKS`, `ATTN_GROUPED`, `PIN_THREADS`.
+    DynaCore reads them, so it must not carry the product name. They are experiment knobs,
+    documented as not for production, so no compatibility aliases were kept.
+  - **Enforcement.** The `boundary.dynacore` ctest and the CI job `boundary`
+    (`tests/boundary/check_boundary.py` plus `cmake --preset core-only`).
+  - **Paths.** The executable moved to `build/<preset>/bin/dynalm`. Test fixtures moved to
+    `dynalm/tests/data`, and the quant fixtures to `dynacore/tests/data/quant`.
+- **Evidence:** 387/387 tests pass (386 before, plus the boundary test). Core-only: 69/69.
+  - **Setup.** Throughput gate on Qwen2.5-0.5B Q4_K_M: the pre-split binary (commit 107745d)
+    against the post-split binary, using `bench_batch_decode` at context 512 with
+    10 threads, f16 KV and 32 timed steps. There were 4 repetitions, process-level and
+    interleaved, with the order flipped each repetition. Data: `results/r0-split-ab.csv`.
+
+    | concurrent sequences | before (median agg tok/s) | after | difference | spread of single runs |
+    |---|---|---|---|---|
+    | 1  | 26.5  | 28.9  | +8.9% | 23.1–31.6 |
+    | 4  | 78.4  | 77.8  | −0.8% | 67.2–81.4 |
+    | 16 | 126.1 | 128.2 | +1.7% | 116.0–134.1 |
+
+  - **Classification: NEUTRAL.** Every difference lies inside the run-to-run spread on this
+    thermally limited laptop CPU. The compiled kernels are identical (the move changed no
+    function bodies), so nothing points to a real change. No speed-up is claimed. Resolving a
+    ±2% gate would need many more repetitions than the noise allows here. The medians show
+    no regression.
