@@ -20,8 +20,9 @@
 #include "chat_template/chat_template.h"
 #include "dynacore/base/status.h"
 #include "runtime/engine.h"
+#include "common/core.h"
 
-namespace engine::api {
+namespace dynalm::api {
 
 struct CompletionRequest {
   bool chat = true;
@@ -64,4 +65,4 @@ std::string error_json(std::string_view message, std::string_view type, std::str
 
 std::string models_json(const std::string& model_id, int64_t created);
 
-}  // namespace engine::api
+}  // namespace dynalm::api

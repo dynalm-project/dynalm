@@ -14,7 +14,7 @@
 #include <cstdint>
 #include <string_view>
 
-namespace engine {
+namespace dynacore {
 
 enum class DType : uint8_t {
   kF32 = 0,
@@ -61,4 +61,4 @@ int64_t dtype_row_bytes(DType t, int64_t n);
 // Parses a name as printed by dtype_name ("f32", "q4_K", ...).
 bool parse_dtype(std::string_view s, DType& out);
 
-}  // namespace engine
+}  // namespace dynacore

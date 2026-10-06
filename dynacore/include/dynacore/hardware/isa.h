@@ -11,7 +11,7 @@
 
 #include "dynacore/hardware/cpu_info.h"
 
-namespace engine {
+namespace dynacore {
 
 enum class CpuIsa : int {
   kGeneric = 0,  // portable scalar C++ (auto-vectorized to SSE2 on x86-64)
@@ -38,4 +38,4 @@ bool parse_isa(std::string_view s, CpuIsa& out);
 
 std::vector<CpuIsa> usable_isas(const CpuFeatures& f);
 
-}  // namespace engine
+}  // namespace dynacore

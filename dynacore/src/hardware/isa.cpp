@@ -2,7 +2,7 @@
 
 #include "dynacore/base/platform.h"
 
-namespace engine {
+namespace dynacore {
 
 std::string_view isa_name(CpuIsa isa) {
   switch (isa) {
@@ -65,4 +65,4 @@ bool parse_isa(std::string_view s, CpuIsa& out) {
   return false;
 }
 
-}  // namespace engine
+}  // namespace dynacore

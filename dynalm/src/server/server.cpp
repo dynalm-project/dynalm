@@ -15,8 +15,9 @@
 #include "common/version.h"
 #include "logging/log.h"
 #include "metrics/metrics.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 int64_t unix_now() {
@@ -385,4 +386,4 @@ void Server::stop() {
   if (impl_->listener.joinable()) impl_->listener.join();
 }
 
-}  // namespace engine
+}  // namespace dynalm

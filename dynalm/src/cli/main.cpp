@@ -23,6 +23,7 @@
 #define NOGDI
 #endif
 #include <windows.h>
+#include "common/core.h"
 #endif
 
 namespace {
@@ -45,7 +46,7 @@ void use_utf8_console() {
 // reaches the tokenizer intact.
 #endif
 
-using engine::CpuIsa;
+using dynalm::CpuIsa;
 
 constexpr double kGiB = 1024.0 * 1024.0 * 1024.0;
 
@@ -76,7 +77,7 @@ int cmd_version() {
   return 0;
 }
 
-std::string feature_list(const engine::CpuFeatures& f) {
+std::string feature_list(const dynalm::CpuFeatures& f) {
   std::string s;
   auto add = [&](bool on, const char* name) {
     if (!on) return;
@@ -104,8 +105,8 @@ std::string feature_list(const engine::CpuFeatures& f) {
 }
 
 int cmd_info() {
-  const engine::CpuInfo& cpu = engine::cpu_info();
-  const engine::MemoryInfo mem = engine::memory_info();
+  const dynalm::CpuInfo& cpu = dynalm::cpu_info();
+  const dynalm::MemoryInfo mem = dynalm::memory_info();
 
   std::printf("CPU:            %s (%s)\n", cpu.brand.c_str(), cpu.vendor.c_str());
   std::printf("Cores:          %d physical, %d logical", cpu.physical_cores, cpu.logical_cores);
@@ -121,13 +122,13 @@ int cmd_info() {
               mem.available_bytes / kGiB);
 
   std::string usable;
-  for (CpuIsa isa : engine::usable_isas(cpu.features)) {
+  for (CpuIsa isa : dynalm::usable_isas(cpu.features)) {
     if (!usable.empty()) usable += ", ";
-    usable += engine::isa_name(isa);
+    usable += dynalm::isa_name(isa);
   }
   std::printf("Usable kernels: %s\n", usable.c_str());
-  std::printf("Backend:        CPU/%s\n",
-              std::string(engine::isa_name(engine::select_best_isa(cpu.features))).c_str());
+  std::printf("Device:        CPU/%s\n",
+              std::string(dynalm::isa_name(dynalm::select_best_isa(cpu.features))).c_str());
   return 0;
 }
 
@@ -143,13 +144,13 @@ int main(int argc, char** argv) {
   size_t i = 0;
   while (i < args.size() && args[i].starts_with("--")) {
     if (args[i] == "--log-level" && i + 1 < args.size()) {
-      engine::log::Level lvl;
-      if (!engine::log::parse_level(args[i + 1], lvl)) {
+      dynalm::log::Level lvl;
+      if (!dynalm::log::parse_level(args[i + 1], lvl)) {
         std::fprintf(stderr, "dynalm: invalid log level '%.*s'\n",
                      static_cast<int>(args[i + 1].size()), args[i + 1].data());
         return 1;
       }
-      engine::log::set_level(lvl);
+      dynalm::log::set_level(lvl);
       i += 2;
     } else if (args[i] == "--help") {
       print_usage();
@@ -169,23 +170,23 @@ int main(int argc, char** argv) {
   const std::string_view cmd = args[i];
   if (cmd == "version") return cmd_version();
   if (cmd == "info") return cmd_info();
-  if (cmd == "inspect") return engine::cli::cmd_inspect(std::span(args).subspan(i + 1));
-  if (cmd == "run") return engine::cli::cmd_run(std::span(args).subspan(i + 1));
-  if (cmd == "chat") return engine::cli::cmd_run(std::span(args).subspan(i + 1));  // run without -p
+  if (cmd == "inspect") return dynalm::cli::cmd_inspect(std::span(args).subspan(i + 1));
+  if (cmd == "run") return dynalm::cli::cmd_run(std::span(args).subspan(i + 1));
+  if (cmd == "chat") return dynalm::cli::cmd_run(std::span(args).subspan(i + 1));  // run without -p
 #if ENGINE_HAS_SERVER
-  if (cmd == "serve") return engine::cli::cmd_serve(std::span(args).subspan(i + 1));
+  if (cmd == "serve") return dynalm::cli::cmd_serve(std::span(args).subspan(i + 1));
 #else
   if (cmd == "serve") {
     std::fprintf(stderr, "dynalm: built without the server (ENABLE_SERVER=OFF)\n");
     return 2;
   }
 #endif
-  if (cmd == "benchmark") return engine::cli::cmd_benchmark(std::span(args).subspan(i + 1));
-  if (cmd == "pull") return engine::cli::cmd_pull(std::span(args).subspan(i + 1));
-  if (cmd == "rm" || cmd == "delete") return engine::cli::cmd_rm(std::span(args).subspan(i + 1));
-  if (cmd == "list") return engine::cli::cmd_list(std::span(args).subspan(i + 1));
+  if (cmd == "benchmark") return dynalm::cli::cmd_benchmark(std::span(args).subspan(i + 1));
+  if (cmd == "pull") return dynalm::cli::cmd_pull(std::span(args).subspan(i + 1));
+  if (cmd == "rm" || cmd == "delete") return dynalm::cli::cmd_rm(std::span(args).subspan(i + 1));
+  if (cmd == "list") return dynalm::cli::cmd_list(std::span(args).subspan(i + 1));
   // One model per server process (DD-039): unloading it means stopping it.
-  if (cmd == "stop" || cmd == "unload") return engine::cli::cmd_stop(std::span(args).subspan(i + 1));
+  if (cmd == "stop" || cmd == "unload") return dynalm::cli::cmd_stop(std::span(args).subspan(i + 1));
   if (cmd == "help") {
     print_usage();
     return 0;

@@ -10,7 +10,7 @@
 #include <random>
 #include <sstream>
 
-#include "dynacore/cpu/cpu_backend.h"
+#include "dynacore/cpu/cpu_device.h"
 #include "dynacore/hardware/cpu_info.h"
 #include "dynacore/hardware/isa.h"
 #include "dynacore/tensor/fp16.h"
@@ -22,8 +22,9 @@
 #include "dynacore/execution/thread_pool.h"
 #include "sampling/sampler.h"
 #include "test_models.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 // ---------------------------------------------------------------------------
@@ -66,7 +67,7 @@ TEST(ThreadPool, SingleThreadRunsInline) {
 class CpuOps : public ::testing::Test {
  protected:
   ThreadPool pool{3};
-  CpuBackend be{pool, CpuIsa::kGeneric};
+  CpuDevice be{pool, CpuIsa::kGeneric};
   std::mt19937 rng{7};
 
   Tensor rand(DType t, TensorShape s) {
@@ -292,7 +293,7 @@ TEST(Sampler, GreedyPicksFirstMax) {
 
 TEST(KvBlockPool, BlockAccountingAndExhaustion) {
   ThreadPool pool(1);
-  CpuBackend be(pool, CpuIsa::kGeneric);
+  CpuDevice be(pool, CpuIsa::kGeneric);
   KvGeometry g{1, 1, 4, 4, 4, 3, DType::kF32};
   auto cache = KvBlockPool::create(g, be);
   ASSERT_TRUE(cache.ok());
@@ -350,20 +351,20 @@ RefData load_ref(const std::string& path) {
 struct RealModel {
   std::unique_ptr<LoadedModel> model;
   std::unique_ptr<ThreadPool> pool;
-  std::unique_ptr<CpuBackend> backend;
+  std::unique_ptr<CpuDevice> backend;
   std::unique_ptr<KvBlockPool> cache;
   std::unique_ptr<Transformer> transformer;
 };
 
-std::optional<RealModel> open_real(DType kv, int32_t batch, std::string path = engine::testing::smollm_model()) {
-  if (!engine::testing::exists(path)) return std::nullopt;
+std::optional<RealModel> open_real(DType kv, int32_t batch, std::string path = dynalm::testing::smollm_model()) {
+  if (!dynalm::testing::exists(path)) return std::nullopt;
   RealModel r;
   auto m = load_model(path);
   EXPECT_TRUE(m.ok()) << m.status().to_string();
   if (!m.ok()) return std::nullopt;
   r.model = std::move(*m);
   r.pool = std::make_unique<ThreadPool>(4);
-  r.backend = std::make_unique<CpuBackend>(*r.pool, CpuIsa::kGeneric);
+  r.backend = std::make_unique<CpuDevice>(*r.pool, CpuIsa::kGeneric);
   const ModelConfig& c = r.model->config;
   KvGeometry g{c.num_layers, c.num_kv_heads, c.head_dim, c.head_dim_v, 16, 16, kv};
   auto cache = KvBlockPool::create(g, *r.backend);
@@ -448,7 +449,7 @@ TEST(RuntimeGolden, ChunkedPrefillEqualsSinglePass) {
 TEST(RuntimeGolden, SmolLm2Q8_0MatchesReference) {
   const RefData ref = load_ref(std::string(ENGINE_TEST_DATA_DIR) + "/ref_smollm2_q8_0.txt");
   const RefData f16 = load_ref(std::string(ENGINE_TEST_DATA_DIR) + "/ref_smollm2.txt");
-  auto rm = open_real(DType::kF32, 64, engine::testing::smollm_q8_model());
+  auto rm = open_real(DType::kF32, 64, dynalm::testing::smollm_q8_model());
   if (!rm) GTEST_SKIP() << "Q8_0 test model not present";
   ASSERT_EQ(rm->model->weights.get(TensorRole::kAttnQ, 0)->dtype(), DType::kQ8_0);
   KvBlockTable seq(*rm->cache);
@@ -489,17 +490,17 @@ TEST(RuntimeGolden, RejectsInvalidInput) {
   EXPECT_FALSE(rm->transformer->forward(ok, far, *rm->cache, seq.block_table(), logits).ok());
 }
 
-TEST(CpuBackend, MatmulManyMatchesIndividualMatmuls) {
+TEST(CpuDevice, MatmulManyMatchesIndividualMatmuls) {
   // MoE batches: several independent (x, w, y) jobs with 1-3 rows run in one
   // parallel region (fused dot path); larger jobs fall back to matmul().
   ThreadPool pool(4);
-  CpuBackend be(pool, select_best_isa(cpu_info().features));
+  CpuDevice be(pool, select_best_isa(cpu_info().features));
   std::mt19937 rng(25);
   std::uniform_real_distribution<float> u(-1.0f, 1.0f);
   constexpr int64_t kK = 64;
   for (const std::vector<int64_t>& rows : {std::vector<int64_t>{1, 2, 3, 1}, std::vector<int64_t>{1, 5, 2}}) {
     std::vector<Tensor> xs, ws, ys, refs;
-    std::vector<Backend::MatmulJob> jobs;
+    std::vector<Device::MatmulJob> jobs;
     for (size_t j = 0; j < rows.size(); ++j) {
       const int64_t n = 17 + 13 * static_cast<int64_t>(j);  // not a multiple of the 16-row chunk
       Tensor x = *Tensor::empty(DType::kF32, {rows[j], kK});
@@ -524,4 +525,4 @@ TEST(CpuBackend, MatmulManyMatchesIndividualMatmuls) {
 }
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynalm

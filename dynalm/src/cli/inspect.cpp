@@ -16,8 +16,9 @@
 #include "model_ir/model_config.h"
 #include "dynacore/hardware/cpu_info.h"
 #include "dynacore/hardware/isa.h"
+#include "common/core.h"
 
-namespace engine::cli {
+namespace dynalm::cli {
 namespace {
 
 constexpr double kMiB = 1024.0 * 1024.0;
@@ -170,7 +171,7 @@ void print_model(const ModelConfig& c, int64_t weight_bytes) {
     std::printf("  Total:         %8.1f MiB\n", est.total() / kMiB);
     std::printf("\nSupported:     %s\n",
                 find_architecture(c.architecture) ? "YES" : "NO (no adapter for this architecture)");
-    std::printf("Backend:       CPU/%s\n", std::string(isa_name(select_best_isa(cpu_info().features))).c_str());
+    std::printf("Device:       CPU/%s\n", std::string(isa_name(select_best_isa(cpu_info().features))).c_str());
   }
 }
 
@@ -234,4 +235,4 @@ int inspect_hf(const std::string& path, bool show_metadata, bool show_tensors) {
   return 0;
 }
 
-}  // namespace engine::cli
+}  // namespace dynalm::cli

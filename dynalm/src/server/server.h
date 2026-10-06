@@ -23,8 +23,9 @@
 
 #include "dynacore/base/status.h"
 #include "runtime/engine.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 struct ServerOptions {
   std::string host = "127.0.0.1";
@@ -70,4 +71,4 @@ class Server {
   std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace engine
+}  // namespace dynalm

@@ -7,15 +7,16 @@
 #include <cstdlib>
 #include <numeric>
 
-#include "dynacore/cpu/cpu_backend.h"
+#include "dynacore/cpu/cpu_device.h"
 #include "loader/model_loader.h"
 #include "model/transformer.h"
 #include "runtime/sequence.h"
+#include "common/core.h"
 
 namespace {
 
-void print(const char* title, const engine::ForwardProfile& p) {
-  using namespace engine;
+void print(const char* title, const dynalm::ForwardProfile& p) {
+  using namespace dynalm;
   const double total = static_cast<double>(p.total_ns());
   std::printf("%s: %llu calls, %llu rows, %.1f ms total, %.3f ms/row\n", title,
               static_cast<unsigned long long>(p.calls), static_cast<unsigned long long>(p.rows), total * 1e-6,
@@ -30,7 +31,7 @@ void print(const char* title, const engine::ForwardProfile& p) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  using namespace engine;
+  using namespace dynalm;
   if (argc < 2) {
     std::fprintf(stderr, "usage: bench_profile <model.gguf> [threads]\n");
     return 1;
@@ -40,7 +41,7 @@ int main(int argc, char** argv) {
   if (!m.ok()) return std::fprintf(stderr, "%s\n", m.status().to_string().c_str()), 1;
   const ModelConfig& c = (*m)->config;
   ThreadPool pool(threads);
-  CpuBackend be(pool, select_best_isa(cpu_info().features));
+  CpuDevice be(pool, select_best_isa(cpu_info().features));
   auto kv = KvBlockPool::create(kv_geometry_for(c, DType::kF16, 16, 1024), be);
   auto tf = Transformer::create(c, (*m)->weights, be, 256);
   if (!kv.ok() || !tf.ok()) return 1;

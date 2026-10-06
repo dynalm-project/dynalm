@@ -13,7 +13,7 @@
 #include "dynacore/quantization/dequant.h"
 #include "dynacore/quantization/quant_formats.h"
 
-namespace engine {
+namespace dynacore {
 namespace {
 
 using namespace quant;
@@ -378,4 +378,4 @@ CpuKernels make_cpu_kernels(CpuIsa isa) {
   return k;
 }
 
-}  // namespace engine
+}  // namespace dynacore

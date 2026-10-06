@@ -1,4 +1,4 @@
-// Phase 18: CpuBackend::matmul throughput vs thread count, prefill-shaped
+// Phase 18: CpuDevice::matmul throughput vs thread count, prefill-shaped
 // (m=256 activation rows) and decode-shaped (m=1), Q8_0 and f32 weights.
 
 #include <cstdio>
@@ -6,14 +6,14 @@
 #include <random>
 #include <vector>
 
-#include "dynacore/cpu/cpu_backend.h"
+#include "dynacore/cpu/cpu_device.h"
 #include "bench_harness.h"
 #include "dynacore/tensor/fp16.h"
 #include "dynacore/hardware/cpu_info.h"
 #include "dynacore/quantization/quant_formats.h"
 
 int main() {
-  using namespace engine;
+  using namespace dynacore;
   std::printf("cpu: %s\n\n", cpu_info().brand.c_str());
   // Shapes: (k=896, n=4864) like Qwen2.5-0.5B gate/up; (k=4864, n=896) like down.
   const int64_t kK = std::getenv("BENCH_DOWN") ? 4864 : 896, kN = std::getenv("BENCH_DOWN") ? 896 : 4864;
@@ -36,7 +36,7 @@ int main() {
       for (int64_t i = 0; i < m * kK; ++i) x->data_as<float>()[i] = static_cast<float>(rng() % 2000) / 1000.0f - 1.0f;
       for (int threads : {10}) {
         ThreadPool pool(threads);
-        CpuBackend be(pool, select_best_isa(cpu_info().features));
+        CpuDevice be(pool, select_best_isa(cpu_info().features));
         const auto s = bench::run([&] { be.matmul(*x, *w, nullptr, *y); },
                                   {.warmup_samples = 2, .samples = m == 1 ? 50 : 10, .batch = 1});
         const double flops = 2.0 * static_cast<double>(m) * kN * kK;

@@ -1,6 +1,6 @@
 #include "dynacore/base/status.h"
 
-namespace engine {
+namespace dynacore {
 
 std::string_view status_code_name(StatusCode code) {
   switch (code) {
@@ -30,5 +30,5 @@ std::string Status::to_string() const {
   return s;
 }
 
-}  // namespace engine
+}  // namespace dynacore
 

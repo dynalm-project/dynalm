@@ -3,10 +3,11 @@
 #include <algorithm>
 #include <iterator>
 
-namespace engine::unicode {
+namespace dynalm::unicode {
 namespace {
 
 #include "tokenizer/unicode_tables.inc"
+#include "common/core.h"
 
 template <size_t N>
 bool in_ranges(const CodepointRange (&ranges)[N], uint32_t cp) {
@@ -85,4 +86,4 @@ bool is_whitespace(uint32_t cp) {
   return in_ranges(kWhitespaceRanges, cp);
 }
 
-}  // namespace engine::unicode
+}  // namespace dynalm::unicode

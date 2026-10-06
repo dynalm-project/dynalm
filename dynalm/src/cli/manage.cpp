@@ -25,9 +25,10 @@
 #include "model/architecture.h"
 #if ENGINE_HAS_SERVER
 #include "server/server.h"
+#include "common/core.h"
 #endif
 
-namespace engine::cli {
+namespace dynalm::cli {
 
 int cmd_list(std::span<const std::string_view> args) {
   namespace fs = std::filesystem;
@@ -216,4 +217,4 @@ int cmd_stop(std::span<const std::string_view> args) {
 #endif
 }
 
-}  // namespace engine::cli
+}  // namespace dynalm::cli

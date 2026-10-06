@@ -8,11 +8,12 @@
 #include "dynacore/tensor/fp16.h"
 #include "gguf_builder.h"
 #include "test_models.h"
+#include "common/core.h"
 
-namespace engine::gguf {
+namespace dynalm::gguf {
 namespace {
 
-using engine::testing::GgufBuilder;
+using dynalm::testing::GgufBuilder;
 
 std::vector<uint8_t> f32_bytes(const std::vector<float>& v) {
   std::vector<uint8_t> out(v.size() * 4);
@@ -203,8 +204,8 @@ TEST_F(GgufTest, RejectsTensorPastEof) {
 
 // Optional: parse a real model when ENGINE_TEST_MODEL points at a GGUF file.
 TEST_F(GgufTest, RealModelIfAvailable) {
-  const std::string path = engine::testing::smollm_model();
-  if (!engine::testing::exists(path)) GTEST_SKIP() << "test model not present";
+  const std::string path = dynalm::testing::smollm_model();
+  if (!dynalm::testing::exists(path)) GTEST_SKIP() << "test model not present";
   auto g = GgufFile::open(path);
   ASSERT_TRUE(g.ok()) << g.status().to_string();
   EXPECT_TRUE((*g)->get_string("general.architecture").ok());
@@ -218,4 +219,4 @@ TEST_F(GgufTest, RealModelIfAvailable) {
 }
 
 }  // namespace
-}  // namespace engine::gguf
+}  // namespace dynalm::gguf

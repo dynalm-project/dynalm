@@ -6,8 +6,9 @@
 #include <memory>
 
 #include "dynacore/base/timer.h"
+#include "common/core.h"
 
-namespace engine::bench {
+namespace dynalm::bench {
 
 double measure_read_bandwidth_gbs(ThreadPool& pool, size_t buffer_bytes) {
   const size_t n = buffer_bytes / sizeof(uint64_t);
@@ -164,4 +165,4 @@ Classification classify(const ClassifierInputs& in) {
   return c;
 }
 
-}  // namespace engine::bench
+}  // namespace dynalm::bench

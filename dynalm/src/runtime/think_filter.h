@@ -7,8 +7,9 @@
 
 #include <string>
 #include <string_view>
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 class ThinkFilter {
  public:
@@ -58,4 +59,4 @@ class ThinkFilter {
   std::string held_;
 };
 
-}  // namespace engine
+}  // namespace dynalm

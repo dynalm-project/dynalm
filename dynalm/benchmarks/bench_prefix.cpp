@@ -11,14 +11,15 @@
 #include <cstdlib>
 #include <map>
 
-#include "dynacore/cpu/cpu_backend.h"
+#include "dynacore/cpu/cpu_device.h"
 #include "bench_harness.h"
 #include "loader/model_loader.h"
 #include "runtime/sequence.h"
 #include "scheduler/scheduler.h"
+#include "common/core.h"
 
 int main(int argc, char** argv) {
-  using namespace engine;
+  using namespace dynalm;
   if (argc < 2) {
     std::fprintf(stderr, "usage: bench_prefix <model.gguf> [threads]\n");
     return 1;
@@ -28,7 +29,7 @@ int main(int argc, char** argv) {
   if (!m.ok()) return std::fprintf(stderr, "%s\n", m.status().to_string().c_str()), 1;
   const ModelConfig& c = (*m)->config;
   ThreadPool pool(threads);
-  CpuBackend be(pool, select_best_isa(cpu_info().features));
+  CpuDevice be(pool, select_best_isa(cpu_info().features));
   constexpr int kSystem = 500, kUnique = 16, kGen = 16, kReqs = 15;
   auto kv = KvBlockPool::create(kv_geometry_for(c, DType::kF16, 16, 8192 + (kReqs + 2) * (kSystem + kUnique + kGen + 16)),
                                 be);

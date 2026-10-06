@@ -6,8 +6,9 @@
 #include <string>
 
 #include "tokenizer/unicode.h"
+#include "common/core.h"
 
-namespace engine::json {
+namespace dynalm::json {
 
 const Value* Value::find(std::string_view key) const {
   if (!is_object()) return nullptr;
@@ -309,4 +310,4 @@ std::string dump(const Value& v) {
   return s;
 }
 
-}  // namespace engine::json
+}  // namespace dynalm::json

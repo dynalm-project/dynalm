@@ -11,8 +11,9 @@
 
 #include "loader/gguf/gguf.h"
 #include "loader/model_source.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 std::string data(const std::string& f) { return std::string(ENGINE_TEST_DATA_DIR) + "/" + f; }
@@ -122,4 +123,4 @@ TEST(ModelSource, SupportVerdictNamesTheBlocker) {
 }
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynalm

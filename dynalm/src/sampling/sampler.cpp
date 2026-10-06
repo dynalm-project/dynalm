@@ -8,8 +8,9 @@
 #include <string>
 
 #include "dynacore/base/fast_exp.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 // exp_nonpos (common/fast_exp.h) is our own, not libm's, so a seed gives the
 // same tokens on every platform.
@@ -254,4 +255,4 @@ TokenId Sampler::sample_speculative(std::span<float> logits, std::span<const Tok
   return draw(n, total * (1.0 - p_draft), draft);
 }
 
-}  // namespace engine
+}  // namespace dynalm

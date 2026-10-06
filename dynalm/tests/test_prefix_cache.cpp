@@ -5,12 +5,13 @@
 #include <map>
 #include <random>
 
-#include "dynacore/cpu/cpu_backend.h"
+#include "dynacore/cpu/cpu_device.h"
 #include "loader/model_loader.h"
 #include "runtime/generator.h"
 #include "scheduler/scheduler.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 // --- PrefixCache unit tests (block size 4) ---
@@ -37,7 +38,7 @@ class PrefixCacheUnit : public ::testing::TestWithParam<PrefixCacheKind> {
     return t;
   }
   ThreadPool tp{1};
-  CpuBackend be{tp, CpuIsa::kGeneric};
+  CpuDevice be{tp, CpuIsa::kGeneric};
   std::unique_ptr<KvBlockPool> pool;
 };
 
@@ -136,7 +137,7 @@ INSTANTIATE_TEST_SUITE_P(Kinds, PrefixCacheUnit, ::testing::Values(PrefixCacheKi
 // copy's first r rows equal the cached block's.
 TEST(RadixPrefixCache, PartialBlockIsPrivateCopy) {
   ThreadPool tp(1);
-  CpuBackend be(tp, CpuIsa::kGeneric);
+  CpuDevice be(tp, CpuIsa::kGeneric);
   auto pool = KvBlockPool::create(KvGeometry{1, 1, 4, 4, 4, 8, DType::kF32}, be);
   ASSERT_TRUE(pool.ok());
   auto cache = make_radix_prefix_cache(**pool);
@@ -190,7 +191,7 @@ class PrefixScheduling : public ::testing::TestWithParam<PrefixCacheKind> {
     return out;
   }
   ThreadPool tp{3};
-  CpuBackend be{tp, CpuIsa::kGeneric};
+  CpuDevice be{tp, CpuIsa::kGeneric};
   std::unique_ptr<LoadedModel> model;
   std::unique_ptr<KvBlockPool> pool;
   std::unique_ptr<Transformer> tf;
@@ -274,4 +275,4 @@ INSTANTIATE_TEST_SUITE_P(Kinds, PrefixScheduling, ::testing::Values(PrefixCacheK
                          kind_name);
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynalm

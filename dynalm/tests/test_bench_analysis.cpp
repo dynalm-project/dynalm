@@ -10,8 +10,9 @@
 #include "bench/loadgen.h"
 #include "dynacore/hardware/perf_counters.h"
 #include "dynacore/execution/thread_pool.h"
+#include "common/core.h"
 
-namespace engine::bench {
+namespace dynalm::bench {
 namespace {
 
 std::string data(const std::string& f) { return std::string(ENGINE_TEST_DATA_DIR) + "/" + f; }
@@ -208,4 +209,4 @@ TEST(Diagnostics, RunPointAccountsForEveryStep) {
 }
 
 }  // namespace
-}  // namespace engine::bench
+}  // namespace dynalm::bench

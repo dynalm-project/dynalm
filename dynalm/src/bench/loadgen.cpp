@@ -11,8 +11,9 @@
 #include "dynacore/hardware/cpu_info.h"
 #include "dynacore/hardware/process_stats.h"
 #include "dynacore/tensor/dtype.h"
+#include "common/core.h"
 
-namespace engine::bench {
+namespace dynalm::bench {
 
 Percentiles percentiles(std::vector<double> v) {
   Percentiles p;
@@ -410,4 +411,4 @@ std::string to_json(const PointResult& r, const std::string& model, const std::s
   return json::dump(o);
 }
 
-}  // namespace engine::bench
+}  // namespace dynalm::bench

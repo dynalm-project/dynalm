@@ -2,7 +2,7 @@
 
 #include <array>
 
-namespace engine {
+namespace dynacore {
 namespace {
 
 constexpr int kQK = 32;     // legacy quant block size
@@ -62,4 +62,4 @@ bool parse_dtype(std::string_view s, DType& out) {
   return false;
 }
 
-}  // namespace engine
+}  // namespace dynacore

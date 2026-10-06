@@ -9,8 +9,9 @@
 #include <sstream>
 
 #include "dynacore/quantization/dequant.h"
+#include "common/core.h"
 
-namespace engine::hf {
+namespace dynalm::hf {
 namespace fs = std::filesystem;
 namespace {
 
@@ -441,4 +442,4 @@ Status apply_conventions(const json::Value& cfg, const ModelConfig& c, TensorReg
   return Status::Ok();
 }
 
-}  // namespace engine::hf
+}  // namespace dynalm::hf

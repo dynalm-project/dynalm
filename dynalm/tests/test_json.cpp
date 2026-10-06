@@ -3,8 +3,9 @@
 #include <gtest/gtest.h>
 
 #include <random>
+#include "common/core.h"
 
-namespace engine::json {
+namespace dynalm::json {
 namespace {
 
 TEST(Json, ParsesAllTypes) {
@@ -84,4 +85,4 @@ TEST(Json, FuzzNeverCrashes) {
 }
 
 }  // namespace
-}  // namespace engine::json
+}  // namespace dynalm::json

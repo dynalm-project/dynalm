@@ -1,4 +1,4 @@
-#include "dynacore/cpu/cpu_backend.h"
+#include "dynacore/cpu/cpu_device.h"
 
 #include <algorithm>
 #include <cassert>
@@ -10,7 +10,7 @@
 #include "dynacore/base/fast_exp.h"
 #include "dynacore/tensor/fp16.h"
 
-namespace engine {
+namespace dynacore {
 namespace {
 
 // Pointer to row r of a 2-D view (strides are bytes).
@@ -46,18 +46,18 @@ inline float apply_act(Activation a, float x) {
 
 }  // namespace
 
-CpuBackend::CpuBackend(ThreadPool& pool, CpuIsa isa)
+CpuDevice::CpuDevice(ThreadPool& pool, CpuIsa isa)
     : pool_(pool), k_(make_cpu_kernels(isa)), name_("CPU/" + std::string(isa_name(k_.isa))) {
   int8_accelerated_ = k_.isa == CpuIsa::kAvx2;  // NEON integer kernels: not written yet
 }
 
-Result<std::shared_ptr<Storage>> CpuBackend::allocate(size_t bytes) { return Storage::allocate_host(bytes); }
+Result<std::shared_ptr<Storage>> CpuDevice::allocate(size_t bytes) { return Storage::allocate_host(bytes); }
 
-void CpuBackend::copy(void* dst, const void* src, size_t bytes) { std::memcpy(dst, src, bytes); }
+void CpuDevice::copy(void* dst, const void* src, size_t bytes) { std::memcpy(dst, src, bytes); }
 
-bool CpuBackend::supports_weight_type(DType type) const { return k_.vec_dot_for(type) != nullptr; }
+bool CpuDevice::supports_weight_type(DType type) const { return k_.vec_dot_for(type) != nullptr; }
 
-void CpuBackend::embedding(const TensorView& table, std::span<const int32_t> ids, const TensorView& out) {
+void CpuDevice::embedding(const TensorView& table, std::span<const int32_t> ids, const TensorView& out) {
   const int64_t dim = cols(table);
   const int64_t row_bytes = dtype_row_bytes(table.dtype(), dim);
   const auto* base = static_cast<const std::byte*>(table.data());
@@ -66,7 +66,7 @@ void CpuBackend::embedding(const TensorView& table, std::span<const int32_t> ids
   }
 }
 
-void CpuBackend::download(const TensorView& src, std::span<float> dst) {
+void CpuDevice::download(const TensorView& src, std::span<float> dst) {
   const int64_t r = rows(src), c = cols(src);
   assert(dst.size() >= static_cast<size_t>(r * c));
   for (int64_t i = 0; i < r; ++i) {
@@ -74,18 +74,18 @@ void CpuBackend::download(const TensorView& src, std::span<float> dst) {
   }
 }
 
-void CpuBackend::fill(const TensorView& x, float value) {
+void CpuDevice::fill(const TensorView& x, float value) {
   for (int64_t i = 0; i < rows(x); ++i) std::fill_n(row_ptr<float>(x, i), cols(x), value);
 }
 
-void CpuBackend::gather_rows(const TensorView& src, std::span<const int32_t> idx, const TensorView& dst) {
+void CpuDevice::gather_rows(const TensorView& src, std::span<const int32_t> idx, const TensorView& dst) {
   const auto bytes = static_cast<size_t>(cols(src)) * sizeof(float);
   for (size_t i = 0; i < idx.size(); ++i) {
     std::memcpy(row_ptr<float>(dst, static_cast<int64_t>(i)), row_ptr<const float>(src, idx[i]), bytes);
   }
 }
 
-void CpuBackend::scatter_add_rows(const TensorView& src, std::span<const int32_t> idx, std::span<const float> weights,
+void CpuDevice::scatter_add_rows(const TensorView& src, std::span<const int32_t> idx, std::span<const float> weights,
                                   const TensorView& dst) {
   const int64_t c = cols(src);
   for (size_t i = 0; i < idx.size(); ++i) {
@@ -96,7 +96,7 @@ void CpuBackend::scatter_add_rows(const TensorView& src, std::span<const int32_t
   }
 }
 
-void CpuBackend::matmul_many(std::span<const MatmulJob> jobs) {
+void CpuDevice::matmul_many(std::span<const MatmulJob> jobs) {
   // Grouped execution (P11, DD-060): every job's output rows are cut into
   // chunks of 16 and all chunks of all jobs run in ONE parallel region; each
   // chunk uses its job's own path (int8 rows kernel for <= int8 max rows,
@@ -201,7 +201,7 @@ void CpuBackend::matmul_many(std::span<const MatmulJob> jobs) {
   });
 }
 
-void CpuBackend::matmul(const TensorView& x, const TensorView& w, const TensorView* bias, const TensorView& y) {
+void CpuDevice::matmul(const TensorView& x, const TensorView& w, const TensorView* bias, const TensorView& y) {
   const int64_t m = rows(x), k = cols(x), n = rows(w);
   assert(cols(w) == k && cols(y) == n && rows(y) == m);
   const DType wt = w.dtype();
@@ -306,7 +306,7 @@ void CpuBackend::matmul(const TensorView& x, const TensorView& w, const TensorVi
   });
 }
 
-void CpuBackend::rms_norm(const TensorView& x, const TensorView& weight, float eps, const TensorView& y) {
+void CpuDevice::rms_norm(const TensorView& x, const TensorView& weight, float eps, const TensorView& y) {
   const int64_t m = rows(x), d = cols(x);
   const float* wv = weight.data_as<const float>();
   pool_.parallel_for(static_cast<size_t>(m), 1, [&](size_t begin, size_t end) {
@@ -321,7 +321,7 @@ void CpuBackend::rms_norm(const TensorView& x, const TensorView& weight, float e
   });
 }
 
-void CpuBackend::layer_norm(const TensorView& x, const TensorView& weight, const TensorView* bias, float eps,
+void CpuDevice::layer_norm(const TensorView& x, const TensorView& weight, const TensorView* bias, float eps,
                             const TensorView& y) {
   const int64_t m = rows(x), d = cols(x);
   const float* wv = weight.data_as<const float>();
@@ -342,7 +342,7 @@ void CpuBackend::layer_norm(const TensorView& x, const TensorView& weight, const
   });
 }
 
-void CpuBackend::rope(const TensorView& x, int32_t num_heads, int32_t head_dim, std::span<const int32_t> positions,
+void CpuDevice::rope(const TensorView& x, int32_t num_heads, int32_t head_dim, std::span<const int32_t> positions,
                       const RopeConfig& rope, const float* freq_factors) {
   if (rope.style == RopeStyle::kNone) return;
   const int32_t rot = rope.dim;
@@ -378,7 +378,7 @@ void CpuBackend::rope(const TensorView& x, int32_t num_heads, int32_t head_dim, 
   });
 }
 
-void CpuBackend::kv_store(const TensorView& k, const TensorView& v, std::span<const int32_t> positions,
+void CpuDevice::kv_store(const TensorView& k, const TensorView& v, std::span<const int32_t> positions,
                           std::span<const int32_t> row_seq, std::span<const KvLayerView> kv_views) {
   for (size_t r = 0; r < positions.size(); ++r) {
     const KvLayerView& kv = kv_views[static_cast<size_t>(row_seq[r])];
@@ -414,7 +414,7 @@ void CpuBackend::kv_store(const TensorView& k, const TensorView& v, std::span<co
 // Covers heads h0 .. h0 + count - 1 of the group (a sub-group when there are
 // fewer (row, KV head) units than threads). acc: count * head_dim_v floats
 // (head gi at acc + gi * hdv); mx/sum: count entries.
-void CpuBackend::attend_group(const AttentionParams& p, size_t r, int32_t kvh, int32_t group, int32_t h0,
+void CpuDevice::attend_group(const AttentionParams& p, size_t r, int32_t kvh, int32_t group, int32_t h0,
                               int32_t count, int64_t t0, int64_t t1, float* acc, float* mx_out, double* sum_out) {
   const KvGeometry& g = *p.kv.front().geom;
   const int32_t hd = g.head_dim, hdv = g.head_dim_v;
@@ -504,7 +504,7 @@ void CpuBackend::attend_group(const AttentionParams& p, size_t r, int32_t kvh, i
   }
 }
 
-void CpuBackend::attention(const AttentionParams& p) {
+void CpuDevice::attention(const AttentionParams& p) {
   const KvGeometry& g = *p.kv.front().geom;  // all sequences share the pool geometry
   const int32_t hdv = g.head_dim_v;
   const int32_t nkv = g.num_kv_heads;
@@ -632,7 +632,7 @@ void CpuBackend::attention(const AttentionParams& p) {
   });
 }
 
-void CpuBackend::act_mul(Activation act, const TensorView& gate, const TensorView& up, const TensorView& out) {
+void CpuDevice::act_mul(Activation act, const TensorView& gate, const TensorView& up, const TensorView& out) {
   const int64_t m = rows(gate), d = cols(gate);
   pool_.parallel_for(static_cast<size_t>(m), 1, [&](size_t begin, size_t end) {
     for (size_t r = begin; r < end; ++r) {
@@ -644,7 +644,7 @@ void CpuBackend::act_mul(Activation act, const TensorView& gate, const TensorVie
   });
 }
 
-void CpuBackend::activation(Activation act, const TensorView& x, const TensorView& out) {
+void CpuDevice::activation(Activation act, const TensorView& x, const TensorView& out) {
   const int64_t m = rows(x), d = cols(x);
   for (int64_t r = 0; r < m; ++r) {
     const float* xr = row_ptr<const float>(x, r);
@@ -653,7 +653,7 @@ void CpuBackend::activation(Activation act, const TensorView& x, const TensorVie
   }
 }
 
-void CpuBackend::add(const TensorView& a, const TensorView& b, const TensorView& y) {
+void CpuDevice::add(const TensorView& a, const TensorView& b, const TensorView& y) {
   const int64_t m = rows(a), d = cols(a);
   for (int64_t r = 0; r < m; ++r) {
     const float* ar = row_ptr<const float>(a, r);
@@ -663,7 +663,7 @@ void CpuBackend::add(const TensorView& a, const TensorView& b, const TensorView&
   }
 }
 
-void CpuBackend::scale(const TensorView& x, float s) {
+void CpuDevice::scale(const TensorView& x, float s) {
   const int64_t m = rows(x), d = cols(x);
   for (int64_t r = 0; r < m; ++r) {
     float* xr = row_ptr<float>(x, r);
@@ -671,7 +671,7 @@ void CpuBackend::scale(const TensorView& x, float s) {
   }
 }
 
-void CpuBackend::softcap(const TensorView& x, float cap) {
+void CpuDevice::softcap(const TensorView& x, float cap) {
   const int64_t m = rows(x), d = cols(x);
   for (int64_t r = 0; r < m; ++r) {
     float* xr = row_ptr<float>(x, r);
@@ -679,4 +679,4 @@ void CpuBackend::softcap(const TensorView& x, float cap) {
   }
 }
 
-}  // namespace engine
+}  // namespace dynacore

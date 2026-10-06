@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace engine {
+namespace dynacore {
 
 Result<std::shared_ptr<Storage>> Storage::allocate_host(size_t size, size_t alignment) {
   if (size == 0) return InvalidArgument("Storage::allocate_host: size 0");
@@ -18,7 +18,7 @@ Result<std::shared_ptr<Storage>> Storage::allocate_host(size_t size, size_t alig
   return s;
 }
 
-std::shared_ptr<Storage> Storage::borrow(void* data, size_t size, Device device,
+std::shared_ptr<Storage> Storage::borrow(void* data, size_t size, DeviceLoc device,
                                          std::shared_ptr<const void> keep_alive) {
   std::shared_ptr<Storage> s(new Storage());
   s->data_ = data;
@@ -32,4 +32,4 @@ Storage::~Storage() {
   if (owned_) host_free(data_, size_);
 }
 
-}  // namespace engine
+}  // namespace dynacore

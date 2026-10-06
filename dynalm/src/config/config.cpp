@@ -5,8 +5,9 @@
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 std::string_view trim(std::string_view s) {
@@ -114,4 +115,4 @@ Result<std::vector<std::string>> merge_config(std::span<const std::string_view> 
   return merged;
 }
 
-}  // namespace engine
+}  // namespace dynalm

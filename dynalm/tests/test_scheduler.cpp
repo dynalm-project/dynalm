@@ -10,12 +10,13 @@
 #include <chrono>
 #include <thread>
 
-#include "dynacore/cpu/cpu_backend.h"
+#include "dynacore/cpu/cpu_device.h"
 #include "loader/model_loader.h"
 #include "runtime/engine.h"
 #include "runtime/generator.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 std::string data(const std::string& f) { return std::string(ENGINE_TEST_DATA_DIR) + "/" + f; }
@@ -81,7 +82,7 @@ class SchedulerTest : public ::testing::Test {
   }
 
   ThreadPool tp{3};
-  CpuBackend be{tp, CpuIsa::kGeneric};
+  CpuDevice be{tp, CpuIsa::kGeneric};
   std::unique_ptr<LoadedModel> model;
   std::unique_ptr<KvBlockPool> pool;
   std::unique_ptr<Transformer> tf;
@@ -393,4 +394,4 @@ TEST(SchedulerPolicyTest, ParseAndSameOutputUnderEveryPolicy) {
 }
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynalm

@@ -10,14 +10,15 @@
 #include <cstdlib>
 #include <numeric>
 
-#include "dynacore/cpu/cpu_backend.h"
+#include "dynacore/cpu/cpu_device.h"
 #include "bench_harness.h"
 #include "loader/model_loader.h"
 #include "model/transformer.h"
 #include "runtime/sequence.h"
+#include "common/core.h"
 
 int main(int argc, char** argv) {
-  using namespace engine;
+  using namespace dynalm;
   if (argc < 2) {
     std::fprintf(stderr, "usage: bench_decode_context <model.gguf> [threads] [block_size]\n");
     return 1;
@@ -29,7 +30,7 @@ int main(int argc, char** argv) {
   const ModelConfig& c = (*m)->config;
 
   ThreadPool pool(threads);
-  CpuBackend be(pool, select_best_isa(cpu_info().features));
+  CpuDevice be(pool, select_best_isa(cpu_info().features));
   constexpr int kMaxCtx = 4096 + 64;
   auto cache = KvBlockPool::create(kv_geometry_for(c, DType::kF16, block_size, kMaxCtx), be);
   auto t = Transformer::create(c, (*m)->weights, be, 256);

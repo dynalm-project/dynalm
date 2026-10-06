@@ -1,6 +1,7 @@
 #include "chat_template/chat_template.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 bool contains(std::string_view s, std::string_view needle) { return s.find(needle) != std::string_view::npos; }
@@ -197,4 +198,4 @@ Result<std::string> ChatTemplate::apply(std::span<const ChatMessage> msgs, bool 
   return out;
 }
 
-}  // namespace engine
+}  // namespace dynalm

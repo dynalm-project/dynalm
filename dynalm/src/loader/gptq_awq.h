@@ -30,8 +30,9 @@
 
 #include "dynacore/base/status.h"
 #include "dynacore/tensor/tensor.h"
+#include "common/core.h"
 
-namespace engine::quant {
+namespace dynalm::quant {
 
 enum class PackedMethod : uint8_t { kGptq, kAwq };
 
@@ -76,4 +77,4 @@ RepackTarget choose_target(const PackedScheme& s, const PackedLinear& w);
 // Converts to an engine tensor [out, in] in `choose_target`'s format.
 Result<Tensor> repack(const PackedScheme& s, const PackedLinear& w, RepackTarget* target = nullptr);
 
-}  // namespace engine::quant
+}  // namespace dynalm::quant

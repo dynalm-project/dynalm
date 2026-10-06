@@ -21,8 +21,9 @@
 #include <unordered_map>
 
 #include "prefix_cache/prefix_cache.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 uint64_t block_key(std::span<const TokenId> tokens) {
@@ -193,4 +194,4 @@ std::unique_ptr<PrefixCache> make_radix_prefix_cache(KvBlockPool& pool, int32_t 
   return std::make_unique<RadixPrefixCache>(pool, max_blocks);
 }
 
-}  // namespace engine
+}  // namespace dynalm

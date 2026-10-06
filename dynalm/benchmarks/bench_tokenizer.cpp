@@ -8,9 +8,10 @@
 #include "loader/gguf/gguf.h"
 #include "loader/gguf/gguf_tokenizer.h"
 #include "tokenizer/tokenizer.h"
+#include "common/core.h"
 
 int main(int argc, char** argv) {
-  using namespace engine;
+  using namespace dynalm;
   if (argc < 2) {
     std::fprintf(stderr, "usage: bench_tokenizer <model.gguf>\n");
     return 1;

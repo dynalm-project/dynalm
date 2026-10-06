@@ -2,9 +2,10 @@
 
 #include <gtest/gtest.h>
 
-#include "dynacore/cpu/cpu_backend.h"
+#include "dynacore/cpu/cpu_device.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 TokenizerData tiny_vocab() {
@@ -28,7 +29,7 @@ class SequenceTest : public ::testing::Test {
     tok_ = std::move(*tok);
   }
   ThreadPool pool{1};
-  CpuBackend backend{pool, CpuIsa::kGeneric};
+  CpuDevice backend{pool, CpuIsa::kGeneric};
   std::unique_ptr<KvBlockPool> cache_;
   std::unique_ptr<Tokenizer> tok_;
 };
@@ -117,4 +118,4 @@ TEST(KvSizing, GeometryAndBudget) {
 }
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynalm

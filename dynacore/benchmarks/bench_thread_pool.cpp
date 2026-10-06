@@ -19,7 +19,7 @@
 #include "dynacore/execution/thread_pool.h"
 
 int main(int argc, char** argv) {
-  using namespace engine;
+  using namespace dynacore;
   const int threads = argc > 1 ? std::atoi(argv[1]) : cpu_info().physical_cores;
   request_full_speed_process();
   request_full_speed_thread();

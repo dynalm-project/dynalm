@@ -20,14 +20,15 @@
 #include <string>
 #include <vector>
 
-#include "dynacore/cpu/cpu_backend.h"
+#include "dynacore/cpu/cpu_device.h"
 #include "bench_harness.h"
 #include "loader/model_loader.h"
 #include "dynacore/hardware/cpu_info.h"
 #include "dynacore/hardware/isa.h"
+#include "common/core.h"
 
 int main(int argc, char** argv) {
-  using namespace engine;
+  using namespace dynalm;
   if (argc < 2) {
     std::fprintf(stderr, "usage: bench_decode_matmul <model.gguf> [threads]\n");
     return 1;
@@ -68,7 +69,7 @@ int main(int argc, char** argv) {
   add("lm_head", reg.has(TensorRole::kOutput) ? TensorRole::kOutput : TensorRole::kTokenEmbedding, -1);
 
   ThreadPool pool(threads);
-  CpuBackend be(pool, select_best_isa(cpu_info().features));
+  CpuDevice be(pool, select_best_isa(cpu_info().features));
   std::printf("cpu: %s, %d threads, %s\nmodel: %s\n\n", cpu_info().brand.c_str(), threads,
               std::string(be.name()).c_str(), argv[1]);
   std::printf("%-9s %-6s %-14s %3s | %9s %7s | %9s %7s | %9s %7s | %s\n", "tensor", "type", "shape", "M", "fused ms",

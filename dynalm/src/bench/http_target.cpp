@@ -7,8 +7,9 @@
 #include "bench/loadgen.h"
 #include "dynacore/base/timer.h"
 #include "httplib.h"
+#include "common/core.h"
 
-namespace engine::bench {
+namespace dynalm::bench {
 namespace {
 
 class HttpTarget final : public Target {
@@ -120,4 +121,4 @@ Result<std::unique_ptr<Target>> make_http_target(const std::string& url, const s
   return std::unique_ptr<Target>(std::make_unique<HttpTarget>(host, port, model));
 }
 
-}  // namespace engine::bench
+}  // namespace dynalm::bench

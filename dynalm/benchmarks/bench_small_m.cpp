@@ -10,8 +10,9 @@
 #include "dynacore/cpu/cpu_kernels.h"
 #include "loader/model_loader.h"
 #include "dynacore/tensor/dtype.h"
+#include "common/core.h"
 
-using namespace engine;
+using namespace dynalm;
 
 int main(int argc, char** argv) {
   if (argc < 2) {

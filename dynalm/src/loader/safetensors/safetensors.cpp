@@ -5,8 +5,9 @@
 #include <cstring>
 
 #include "api/json.h"
+#include "common/core.h"
 
-namespace engine::safetensors {
+namespace dynalm::safetensors {
 namespace {
 
 constexpr uint64_t kMaxHeaderBytes = 100ull << 20;  // the reference implementation's limit
@@ -153,8 +154,8 @@ Result<Tensor> SafeTensorsFile::load_tensor(const TensorInfo& info) const {
     return t;
   }
   void* p = const_cast<std::byte*>(src);
-  auto storage = Storage::borrow(p, static_cast<size_t>(info.nbytes), Device{}, file_);
+  auto storage = Storage::borrow(p, static_cast<size_t>(info.nbytes), DeviceLoc{}, file_);
   return Tensor::from_storage(std::move(storage), TensorView(p, layout));
 }
 
-}  // namespace engine::safetensors
+}  // namespace dynalm::safetensors

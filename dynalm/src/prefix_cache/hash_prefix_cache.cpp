@@ -3,8 +3,9 @@
 #include <algorithm>
 #include <list>
 #include <unordered_map>
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 // SplitMix64 finalizer: strong 64-bit mixing for chaining token ids.
@@ -157,4 +158,4 @@ std::unique_ptr<PrefixCache> make_hash_prefix_cache(KvBlockPool& pool, int32_t m
   return std::make_unique<HashPrefixCache>(pool, max_blocks);
 }
 
-}  // namespace engine
+}  // namespace dynalm

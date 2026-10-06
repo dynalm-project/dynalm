@@ -5,9 +5,10 @@
 
 #include "bench_harness.h"
 #include "loader/gguf/gguf.h"
+#include "common/core.h"
 
 int main(int argc, char** argv) {
-  using namespace engine;
+  using namespace dynalm;
   if (argc < 2) {
     std::fprintf(stderr, "usage: bench_loader <model.gguf>\n");
     return 1;

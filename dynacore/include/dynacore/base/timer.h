@@ -3,7 +3,7 @@
 #include <chrono>
 #include <cstdint>
 
-namespace engine {
+namespace dynacore {
 
 // Monotonic nanoseconds. All latency metrics (TTFT, ITL, queue time) use this.
 inline int64_t now_ns() {
@@ -23,4 +23,4 @@ class Stopwatch {
   int64_t start_;
 };
 
-}  // namespace engine
+}  // namespace dynacore

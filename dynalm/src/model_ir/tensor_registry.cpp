@@ -1,8 +1,9 @@
 #include "model_ir/tensor_registry.h"
 
 #include <utility>
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 std::string_view tensor_role_name(TensorRole r) {
   static constexpr std::string_view kNames[] = {
@@ -97,4 +98,4 @@ int64_t TensorRegistry::total_bytes() const {
   return total;
 }
 
-}  // namespace engine
+}  // namespace dynalm

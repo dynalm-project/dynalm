@@ -8,8 +8,9 @@
 
 #include "tokenizer/pretokenizer.h"
 #include "tokenizer/unicode.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 // ===========================================================================
 // Common
@@ -445,4 +446,4 @@ void Utf8Buffer::flush(std::string& out) {
   pending_.clear();
 }
 
-}  // namespace engine
+}  // namespace dynalm

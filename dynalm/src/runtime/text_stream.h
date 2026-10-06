@@ -15,8 +15,9 @@
 #include <vector>
 
 #include "tokenizer/tokenizer.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 class TextStreamer {
  public:
@@ -45,4 +46,4 @@ class TextStreamer {
   bool stopped_ = false;
 };
 
-}  // namespace engine
+}  // namespace dynalm

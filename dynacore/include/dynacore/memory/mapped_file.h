@@ -14,7 +14,7 @@
 
 #include "dynacore/base/status.h"
 
-namespace engine {
+namespace dynacore {
 
 class MappedFile {
  public:
@@ -46,4 +46,4 @@ class MappedFile {
 #endif
 };
 
-}  // namespace engine
+}  // namespace dynacore

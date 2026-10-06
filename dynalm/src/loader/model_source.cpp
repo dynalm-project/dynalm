@@ -5,8 +5,9 @@
 #include <vector>
 
 #include "model/architecture.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 bool starts_with(std::string_view s, std::string_view p) { return s.substr(0, p.size()) == p; }
@@ -153,4 +154,4 @@ std::string gguf_support_status(const gguf::GgufFile& f) {
   return s;
 }
 
-}  // namespace engine
+}  // namespace dynalm

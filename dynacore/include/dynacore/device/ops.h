@@ -8,7 +8,7 @@
 
 #include <cstdint>
 
-namespace engine {
+namespace dynacore {
 
 enum class NormType : uint8_t { kRmsNorm, kLayerNorm };
 enum class Activation : uint8_t { kSilu, kGelu, kGeluTanh };
@@ -35,4 +35,4 @@ struct RopeConfig {
   float llama3_high_freq_factor = 4.0f;
 };
 
-}  // namespace engine
+}  // namespace dynacore

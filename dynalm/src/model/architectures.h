@@ -5,8 +5,9 @@
 #include <span>
 
 #include "model/architecture.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 const ModelArchitecture& llama_architecture();
 const ModelArchitecture& qwen_architecture();
@@ -15,4 +16,4 @@ const ModelArchitecture& phi_architecture();
 
 std::span<const ModelArchitecture* const> registered_architectures();
 
-}  // namespace engine
+}  // namespace dynalm

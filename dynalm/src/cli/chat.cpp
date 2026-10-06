@@ -27,9 +27,10 @@
 #define NOGDI
 #endif
 #include <windows.h>
+#include "common/core.h"
 #endif
 
-namespace engine::cli {
+namespace dynalm::cli {
 namespace {
 
 std::atomic<bool> g_interrupt{false};
@@ -307,4 +308,4 @@ int run_chat_session(Engine& engine, ChatSettings st) {
   return 0;
 }
 
-}  // namespace engine::cli
+}  // namespace dynalm::cli

@@ -18,8 +18,8 @@
 #include <string>
 #include <vector>
 
-#include "dynacore/device/backend_registry.h"
-#include "dynacore/cpu/cpu_backend.h"
+#include "dynacore/device/device_registry.h"
+#include "dynacore/cpu/cpu_device.h"
 #include "loader/model_loader.h"
 #include "dynacore/hardware/cpu_info.h"
 #include "dynacore/hardware/isa.h"
@@ -30,33 +30,34 @@
 #if defined(__linux__)
 #include <sys/mman.h>
 #include <unistd.h>
+#include "common/core.h"
 #endif
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 TEST(BackendRegistry, CpuBuiltGpuKindsReportedClearly) {
   ThreadPool pool(1);
-  auto cpu = create_backend(BackendKind::kCpu, pool);
+  auto cpu = create_device(DeviceKind::kCpu, pool);
   ASSERT_TRUE(cpu.ok());
   EXPECT_TRUE((*cpu)->host_accessible());
   for (const char* name : {"cuda", "hip", "metal", "vulkan"}) {
-    auto kind = parse_backend_kind(name);
+    auto kind = parse_device_kind(name);
     ASSERT_TRUE(kind.ok());
-    auto b = create_backend(*kind, pool);
+    auto b = create_device(*kind, pool);
     ASSERT_FALSE(b.ok());
     EXPECT_EQ(b.status().code(), StatusCode::kUnsupported);
     EXPECT_NE(b.status().message().find(name), std::string::npos);
   }
-  EXPECT_FALSE(parse_backend_kind("tpu").ok());
-  EXPECT_EQ(available_backends(), std::vector<BackendKind>{BackendKind::kCpu});
+  EXPECT_FALSE(parse_device_kind("tpu").ok());
+  EXPECT_EQ(compiled_devices(), std::vector<DeviceKind>{DeviceKind::kCpu});
 }
 
 #if defined(__linux__)
 
 std::string data(const std::string& f) { return std::string(ENGINE_TEST_DATA_DIR) + "/" + f; }
 
-class GuardedBackend final : public Backend {
+class GuardedBackend final : public Device {
  public:
   explicit GuardedBackend(ThreadPool& pool) : cpu_(pool, select_best_isa(cpu_info().features)) {}
   ~GuardedBackend() override {
@@ -64,7 +65,7 @@ class GuardedBackend final : public Backend {
   }
 
   std::string_view name() const override { return "guarded"; }
-  Device device() const override { return {DeviceType::kSimulated, 0}; }
+  DeviceLoc device() const override { return {DeviceType::kSimulated, 0}; }
   bool host_accessible() const override { return false; }
   bool supports_weight_type(DType t) const override { return cpu_.supports_weight_type(t); }
   void synchronize() override {}
@@ -192,7 +193,7 @@ class GuardedBackend final : public Backend {
     GuardedBackend& b_;
   };
 
-  CpuBackend cpu_;
+  CpuDevice cpu_;
   std::mutex mu_;
   std::map<void*, size_t> regions_;
   uint64_t ops_ = 0;
@@ -213,7 +214,7 @@ struct Stack {
   std::unique_ptr<Transformer> tf;
 };
 
-Stack build(const LoadedModel& m, Backend& be, int32_t blocks = 32) {
+Stack build(const LoadedModel& m, Device& be, int32_t blocks = 32) {
   const ModelConfig& c = m.config;
   KvGeometry g{c.num_layers, c.num_kv_heads, c.head_dim, c.head_dim_v, 16, blocks, DType::kF16};
   auto kv = KvBlockPool::create(g, be);
@@ -228,7 +229,7 @@ TEST_P(DeviceArch, ForwardAndGenerationMatchCpu) {
   auto m = load_model(data("tiny_" + GetParam() + ".gguf"));
   ASSERT_TRUE(m.ok());
   ThreadPool pool(2);
-  CpuBackend cpu(pool, select_best_isa(cpu_info().features));
+  CpuDevice cpu(pool, select_best_isa(cpu_info().features));
   GuardedBackend dev(pool);
   Stack a = build(**m, cpu), b = build(**m, dev);
 
@@ -265,9 +266,9 @@ TEST(GuardedBackend, SchedulerPrefixCacheAndSpeculationStayOnDevice) {
   auto m = load_model(data("tiny_llama.gguf"));
   ASSERT_TRUE(m.ok());
   ThreadPool pool(2);
-  CpuBackend cpu(pool, select_best_isa(cpu_info().features));
+  CpuDevice cpu(pool, select_best_isa(cpu_info().features));
   GuardedBackend dev(pool);
-  auto run_scheduler = [&](Backend& be) {
+  auto run_scheduler = [&](Device& be) {
     Stack s = build(**m, be, 64);
     Scheduler sched(*s.tf, *s.kv, *(*m)->tokenizer, SchedulerConfig{});
     std::map<uint64_t, std::vector<TokenId>> out;
@@ -292,7 +293,7 @@ TEST(GuardedBackend, SchedulerPrefixCacheAndSpeculationStayOnDevice) {
   };
   EXPECT_EQ(run_scheduler(dev), run_scheduler(cpu));
 
-  auto run_spec = [&](Backend& be) {
+  auto run_spec = [&](Device& be) {
     Stack s = build(**m, be, 64);
     NgramDrafter ngram;
     SpeculativeGenerator g(*s.tf, *s.kv, *(*m)->tokenizer, ngram);
@@ -310,4 +311,4 @@ TEST(GuardedBackend, SchedulerPrefixCacheAndSpeculationStayOnDevice) {
 #endif  // __linux__
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynalm

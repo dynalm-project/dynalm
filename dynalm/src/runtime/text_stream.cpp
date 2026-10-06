@@ -1,8 +1,9 @@
 #include "runtime/text_stream.h"
 
 #include <algorithm>
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 TextStreamer::TextStreamer(const Tokenizer& tokenizer, std::vector<std::string> stop_strings)
     : tokenizer_(tokenizer), stops_(std::move(stop_strings)) {
@@ -61,4 +62,4 @@ std::string TextStreamer::finish() {
   return out;
 }
 
-}  // namespace engine
+}  // namespace dynalm

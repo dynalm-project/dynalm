@@ -6,7 +6,7 @@
 #include <malloc.h>
 #endif
 
-namespace engine {
+namespace dynacore {
 namespace {
 
 // Counters are touched per allocation, not per token; one cache line each
@@ -72,4 +72,4 @@ void set_host_alloc_limit_for_testing(int64_t max_single_alloc_bytes) {
   g_limit.store(max_single_alloc_bytes, std::memory_order_relaxed);
 }
 
-}  // namespace engine
+}  // namespace dynacore

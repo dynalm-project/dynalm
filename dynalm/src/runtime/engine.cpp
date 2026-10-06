@@ -10,8 +10,9 @@
 #include "dynacore/hardware/thread_qos.h"
 #include "runtime/sequence.h"
 #include "runtime/text_stream.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 std::string_view stream_finish_name(StreamFinish f) {
   switch (f) {
@@ -135,7 +136,7 @@ Result<std::unique_ptr<Engine>> Engine::create(EngineOptions opts) {
   const int threads = opts.threads > 0 ? opts.threads : cpu_info().physical_cores;
   e->pool_ = std::make_unique<ThreadPool>(threads);
   prefault_weights(e->model_->weights, e->model_->weight_bytes, *e->pool_);
-  ENGINE_ASSIGN_OR_RETURN(e->backend_, create_backend(opts.backend, *e->pool_));
+  ENGINE_ASSIGN_OR_RETURN(e->backend_, create_device(opts.backend, *e->pool_));
   const int64_t kv_tokens = opts.kv_tokens > 0 ? opts.kv_tokens
                                                : auto_kv_tokens(c, opts.kv_dtype, e->model_->weight_bytes,
                                                                 memory_info().available_bytes);
@@ -328,4 +329,4 @@ Result<std::shared_ptr<RequestStream>> Engine::generate_chat(std::span<const Cha
   return generate_text(text, /*parse_special=*/true, params);
 }
 
-}  // namespace engine
+}  // namespace dynalm

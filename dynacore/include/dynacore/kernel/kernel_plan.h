@@ -11,7 +11,7 @@
 #include <cstdint>
 #include <string_view>
 
-namespace engine {
+namespace dynacore {
 
 enum class AttentionStrategy : uint8_t {
   kAuto,    // decide per call with attention_should_split() (no plan given)
@@ -95,4 +95,4 @@ struct StepShape {
 // split-K chunking chosen for this shape on this hardware.
 KernelPlan plan_kernels(const StepShape& shape, const HardwareProfile& hw, const KernelPlan& base);
 
-}  // namespace engine
+}  // namespace dynacore

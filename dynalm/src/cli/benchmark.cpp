@@ -19,8 +19,9 @@
 #include "dynacore/hardware/perf_counters.h"
 #include "runtime/engine.h"
 #include "dynacore/execution/thread_pool.h"
+#include "common/core.h"
 
-namespace engine::cli {
+namespace dynalm::cli {
 namespace {
 
 void usage() {
@@ -209,4 +210,4 @@ int cmd_benchmark(std::span<const std::string_view> args) {
   return 0;
 }
 
-}  // namespace engine::cli
+}  // namespace dynalm::cli

@@ -11,8 +11,9 @@
 
 #include "dynacore/base/status.h"
 #include "loader/gguf/gguf.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 // Accepts
 //   https://huggingface.co/<owner>/<repo>/resolve/<rev>/<path>.gguf  (as is)
@@ -35,4 +36,4 @@ Result<std::string> peek_gguf_architecture(std::span<const std::byte> head);
 // "unsupported architecture 'qwen35'" or "unsupported tensor types: iq3_s, iq1_s".
 std::string gguf_support_status(const gguf::GgufFile& f);
 
-}  // namespace engine
+}  // namespace dynalm

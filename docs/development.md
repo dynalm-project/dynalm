@@ -102,15 +102,19 @@ HF `tokenizer.json`).
 ## Run
 
 ```sh
-build/msvc-release/src/dynalm info
-build/msvc-release/benchmarks/bench_foundation
+build/msvc-release/bin/dynalm info
+build/msvc-release/dynalm/benchmarks/bench_foundation
+build/msvc-release/dynacore/bench_kernels
 ```
 
 ## Conventions
 
-- `namespace engine`. Files are `snake_case`, types `PascalCase`, functions `snake_case`.
+- `namespace dynacore` under `dynacore/`, `namespace dynalm` under `dynalm/` (DD-068). Files are `snake_case`, types `PascalCase`, functions `snake_case`.
 - Errors: `Status` / `Result<T>`. No exceptions on hot paths.
-- SIMD intrinsics only in `src/backends/cpu/<isa>/*.cpp`.
+- SIMD intrinsics only in `dynacore/cpu/<isa>/*.cpp`.
+- Nothing under `dynacore/` may include a `dynalm/` header or name a model family, file
+  format, tokenizer, HTTP or scheduling concept: `tests/boundary/check_boundary.py` (ctest
+  `boundary.dynacore`, CI job `boundary`) rejects it.
 - No heap allocation per token. No logging per token above DEBUG.
 - Every phase ends with a green build, tests, benchmarks, updated docs, and a commit.
 

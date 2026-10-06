@@ -17,8 +17,9 @@
 #include "dynacore/base/function_ref.h"
 #include "dynacore/base/status.h"
 #include "dynacore/tensor/tensor.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 enum class TensorRole : uint8_t {
   // Global
@@ -105,4 +106,4 @@ class TensorRegistry {
   size_t count_ = 0;
 };
 
-}  // namespace engine
+}  // namespace dynalm

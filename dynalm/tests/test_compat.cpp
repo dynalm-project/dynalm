@@ -12,8 +12,9 @@
 
 #include "runtime/engine.h"
 #include "test_models.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 struct Generated {
@@ -176,4 +177,4 @@ INSTANTIATE_TEST_SUITE_P(AllArchitectures, Compat, ::testing::ValuesIn(cases()),
                          [](const ::testing::TestParamInfo<CompatCase>& i) { return i.param.name; });
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynalm

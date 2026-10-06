@@ -17,8 +17,9 @@
 #include <vector>
 
 #include "dynacore/base/status.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 enum class PreTokenizer { kGpt2, kLlama3, kQwen2, kStarCoder };
 
@@ -30,4 +31,4 @@ Result<PreTokenizer> pretokenizer_from_name(std::string_view name);
 // `text` lands in exactly one word, in order.
 void pretokenize(PreTokenizer kind, std::string_view text, std::vector<std::string_view>& out);
 
-}  // namespace engine
+}  // namespace dynalm

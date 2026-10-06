@@ -9,7 +9,7 @@
 
 #include "dynacore/tensor/fp16.h"
 
-namespace engine {
+namespace dynacore {
 namespace {
 
 TEST(DType, BlockGeometryMatchesGgml) {
@@ -125,4 +125,4 @@ TEST(Bf16, Conversions) {
 }
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynacore

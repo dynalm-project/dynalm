@@ -5,7 +5,7 @@
 #include <memory>
 #include <string>
 
-namespace engine {
+namespace dynacore {
 namespace {
 
 TEST(Status, DefaultIsOk) {
@@ -66,4 +66,4 @@ TEST(Result, Macros) {
 }
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynacore

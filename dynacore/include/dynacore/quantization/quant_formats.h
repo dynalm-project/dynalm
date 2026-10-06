@@ -10,7 +10,7 @@
 
 #include <cstdint>
 
-namespace engine::quant {
+namespace dynacore::quant {
 
 inline constexpr int kQK = 32;     // legacy block size
 inline constexpr int kQK_K = 256;  // k-quant super-block size
@@ -60,4 +60,4 @@ inline void get_scale_min_k4(int j, const uint8_t* q, uint8_t& d, uint8_t& m) {
   }
 }
 
-}  // namespace engine::quant
+}  // namespace dynacore::quant

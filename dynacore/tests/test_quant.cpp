@@ -11,7 +11,7 @@
 #include "dynacore/quantization/dequant.h"
 #include "dynacore/quantization/quant_formats.h"
 
-namespace engine {
+namespace dynacore {
 namespace {
 
 std::vector<char> read_file(const std::string& path) {
@@ -69,4 +69,4 @@ TEST(Dequant, Q8_0ByHand) {
 }
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynacore

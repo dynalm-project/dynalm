@@ -6,8 +6,9 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include "common/core.h"
 
-namespace engine::unicode {
+namespace dynalm::unicode {
 
 struct CodepointRange {
   uint32_t first, last;
@@ -28,4 +29,4 @@ bool is_whitespace(uint32_t cp);
 // `c` is not a valid lead byte.
 int utf8_sequence_length(unsigned char c);
 
-}  // namespace engine::unicode
+}  // namespace dynalm::unicode

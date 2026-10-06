@@ -15,7 +15,7 @@
 #include "dynacore/tensor/fp16.h"
 #include "dynacore/quantization/quant_formats.h"
 
-namespace engine {
+namespace dynacore {
 namespace {
 
 using namespace quant;
@@ -419,12 +419,12 @@ bool register_neon_kernels(CpuKernels& k) {
   return true;
 }
 
-}  // namespace engine
+}  // namespace dynacore
 
 #else
 
-namespace engine {
+namespace dynacore {
 bool register_neon_kernels(CpuKernels&) { return false; }
-}  // namespace engine
+}  // namespace dynacore
 
 #endif

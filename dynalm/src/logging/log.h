@@ -9,8 +9,9 @@
 #include <atomic>
 #include <format>
 #include <string_view>
+#include "common/core.h"
 
-namespace engine::log {
+namespace dynalm::log {
 
 enum class Level : int { kTrace = 0, kDebug, kInfo, kWarn, kError, kOff };
 
@@ -38,12 +39,12 @@ void logf(Level l, std::format_string<Args...> fmt, Args&&... args) {
   detail::write(l, std::format(fmt, std::forward<Args>(args)...));
 }
 
-}  // namespace engine::log
+}  // namespace dynalm::log
 
 #define ENGINE_LOG(level, ...)                                                   \
   do {                                                                           \
-    if (::engine::log::enabled(::engine::log::Level::k##level))                  \
-      ::engine::log::logf(::engine::log::Level::k##level, __VA_ARGS__);          \
+    if (::dynalm::log::enabled(::dynalm::log::Level::k##level))                  \
+      ::dynalm::log::logf(::dynalm::log::Level::k##level, __VA_ARGS__);          \
   } while (0)
 
 #define LOG_TRACE(...) ENGINE_LOG(Trace, __VA_ARGS__)

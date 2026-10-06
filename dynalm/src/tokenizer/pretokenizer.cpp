@@ -3,8 +3,9 @@
 #include <string>
 
 #include "tokenizer/unicode.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 using unicode::is_letter;
@@ -164,4 +165,4 @@ void pretokenize(PreTokenizer kind, std::string_view text, std::vector<std::stri
   }
 }
 
-}  // namespace engine
+}  // namespace dynalm

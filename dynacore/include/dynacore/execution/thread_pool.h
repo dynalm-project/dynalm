@@ -21,7 +21,7 @@
 #include "dynacore/base/function_ref.h"
 #include "dynacore/base/platform.h"
 
-namespace engine {
+namespace dynacore {
 
 // Parallel-region accounting (DD-050), collected only while enabled: tells
 // dispatch-bound (many tiny regions) from imbalance/synchronization-bound
@@ -88,4 +88,4 @@ class ThreadPool {
   alignas(kCacheLineSize) std::atomic<int> sleepers_{0};  // workers blocked on cv_
 };
 
-}  // namespace engine
+}  // namespace dynacore

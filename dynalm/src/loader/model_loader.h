@@ -18,8 +18,9 @@
 #include "model_ir/model_config.h"
 #include "model_ir/tensor_registry.h"
 #include "tokenizer/tokenizer.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 struct LoadedModel {
   std::string path;
@@ -36,4 +37,4 @@ struct LoadedModel {
 
 Result<std::unique_ptr<LoadedModel>> load_model(const std::string& path);
 
-}  // namespace engine
+}  // namespace dynalm

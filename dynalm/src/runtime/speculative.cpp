@@ -4,8 +4,9 @@
 #include <chrono>
 #include <numeric>
 #include <string>
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 // --- NgramDrafter ---------------------------------------------------------------
 
@@ -265,4 +266,4 @@ Status SpeculativeGenerator::generate(std::span<const TokenId> prompt, const Gen
   return Status::Ok();
 }
 
-}  // namespace engine
+}  // namespace dynalm

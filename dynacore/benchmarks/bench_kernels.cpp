@@ -12,7 +12,7 @@
 #include "dynacore/hardware/cpu_info.h"
 
 int main() {
-  using namespace engine;
+  using namespace dynacore;
   std::printf("cpu: %s\n\n", cpu_info().brand.c_str());
   CpuKernels generic;
   register_generic_kernels(generic);

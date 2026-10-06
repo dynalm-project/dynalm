@@ -37,8 +37,9 @@
 #include "runtime/generator.h"
 #include "sampling/sampler.h"
 #include "tokenizer/tokenizer.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 class Drafter {
  public:
@@ -164,4 +165,4 @@ class SpeculativeGenerator {
   Drafter& drafter_;
 };
 
-}  // namespace engine
+}  // namespace dynalm

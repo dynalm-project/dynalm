@@ -16,7 +16,7 @@
 #include <span>
 #include <vector>
 
-#include "dynacore/device/backend.h"
+#include "dynacore/device/device.h"
 #include "dynacore/base/status.h"
 #include "execution/batch_planner.h"
 #include "kv_cache/kv_cache.h"
@@ -24,8 +24,9 @@
 #include "model/seq_batch.h"
 #include "model_ir/tensor_registry.h"
 #include "tokenizer/tokenizer.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 // Optional per-op timing of forward passes (off by default; profiling adds
 // one timestamp per op).
@@ -49,7 +50,7 @@ struct ForwardProfile {
 class Transformer {
  public:
   static Result<std::unique_ptr<Transformer>> create(const ModelConfig& config, const TensorRegistry& weights,
-                                                     Backend& backend, int32_t max_batch_tokens);
+                                                     Device& backend, int32_t max_batch_tokens);
 
   const ModelConfig& config() const { return config_; }
   int32_t max_batch_tokens() const { return max_batch_; }
@@ -98,7 +99,7 @@ class Transformer {
   // Routed MoE MLP for rows of `xn`, accumulated into `out` (zeroed first).
   void moe_mlp(const Layer& L, const TensorView& xn, const TensorView& out, int64_t m);
 
-  Transformer(const ModelConfig& c, Backend& b) : config_(c), backend_(b) {}
+  Transformer(const ModelConfig& c, Device& b) : config_(c), backend_(b) {}
   Status init(const TensorRegistry& weights, int32_t max_batch);
   // fp32 copy of a small vector weight (norms, biases), owned by the model.
   Result<TensorView> f32_vector(const Tensor& t);
@@ -108,7 +109,7 @@ class Transformer {
   void norm(const TensorView& x, const TensorView& w, const TensorView& b, const TensorView& y);
 
   ModelConfig config_;
-  Backend& backend_;
+  Device& backend_;
   int32_t max_batch_ = 0;
   std::unique_ptr<BatchPlanner> planner_;
   KernelPlan kernels_;  // applied for the current forward pass
@@ -124,7 +125,7 @@ class Transformer {
   Tensor router_, moe_x_, moe_a_, moe_b_, moe_y_, sh_gate_;
   std::vector<std::vector<std::pair<int32_t, float>>> expert_rows_;  // per expert: (row, weight)
   std::vector<std::pair<float, int32_t>> route_scratch_;
-  std::vector<Backend::MatmulJob> up_jobs_, down_jobs_;
+  std::vector<Device::MatmulJob> up_jobs_, down_jobs_;
   std::vector<int32_t> gather_idx_;  // host-side row indices for gather/scatter ops
   std::vector<float> scatter_w_, router_host_;
   Tensor logits_dev_;                // device logits rows (non-host-accessible backends)
@@ -139,4 +140,4 @@ class Transformer {
   ForwardProfile profile_;
 };
 
-}  // namespace engine
+}  // namespace dynalm

@@ -1,8 +1,9 @@
 #include "api/openai.h"
 
 #include <cmath>
+#include "common/core.h"
 
-namespace engine::api {
+namespace dynalm::api {
 namespace {
 
 Status bad(const std::string& msg) { return InvalidArgument(msg); }
@@ -277,4 +278,4 @@ std::string models_json(const std::string& model_id, int64_t created) {
   return json::dump(o);
 }
 
-}  // namespace engine::api
+}  // namespace dynalm::api

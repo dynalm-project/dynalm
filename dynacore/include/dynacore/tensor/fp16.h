@@ -13,7 +13,7 @@
 #include <bit>
 #include <cstdint>
 
-namespace engine {
+namespace dynacore {
 
 inline float fp16_to_fp32(uint16_t h) {
   const uint32_t w = static_cast<uint32_t>(h) << 16;
@@ -72,4 +72,4 @@ inline uint16_t fp32_to_bf16(float f) {
   return static_cast<uint16_t>((u + 0x7FFFu + ((u >> 16) & 1u)) >> 16);
 }
 
-}  // namespace engine
+}  // namespace dynacore

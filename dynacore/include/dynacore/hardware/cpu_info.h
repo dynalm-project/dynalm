@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace engine {
+namespace dynacore {
 
 struct CpuFeatures {
   // x86. Each flag means "the CPU supports it AND the OS saves the state".
@@ -67,4 +67,4 @@ MemoryInfo memory_info();
 // Detection entry point without caching; exposed for tests.
 CpuInfo detect_cpu_info();
 
-}  // namespace engine
+}  // namespace dynacore

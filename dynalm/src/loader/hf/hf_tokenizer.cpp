@@ -3,8 +3,9 @@
 #include <algorithm>
 #include <unordered_map>
 #include <vector>
+#include "common/core.h"
 
-namespace engine::hf {
+namespace dynalm::hf {
 namespace {
 
 // Pre-tokenizer split patterns, exactly as tokenizer.json stores them.
@@ -264,4 +265,4 @@ Result<TokenizerData> read_tokenizer(const TokenizerFiles& f) {
   return d;
 }
 
-}  // namespace engine::hf
+}  // namespace dynalm::hf

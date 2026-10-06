@@ -28,12 +28,13 @@
 #include <string>
 #include <vector>
 
-#include "dynacore/cpu/cpu_backend.h"
+#include "dynacore/cpu/cpu_device.h"
 #include "bench_harness.h"
 #include "loader/model_loader.h"
 #include "model/transformer.h"
 #include "dynacore/hardware/process_stats.h"
 #include "runtime/sequence.h"
+#include "common/core.h"
 
 namespace {
 
@@ -59,7 +60,7 @@ double pct(std::vector<double> v, double p) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  using namespace engine;
+  using namespace dynalm;
   if (argc < 2) {
     std::fprintf(stderr,
                  "usage: bench_batch_decode <model.gguf> [threads=0] [contexts=128] [seqs=1,2,4,8,16,32] [reps=1] "
@@ -91,7 +92,7 @@ int main(int argc, char** argv) {
   if (!m.ok()) return std::fprintf(stderr, "%s\n", m.status().to_string().c_str()), 1;
   const ModelConfig& c = (*m)->config;
   ThreadPool pool(threads);
-  CpuBackend be(pool, select_best_isa(cpu_info().features));
+  CpuDevice be(pool, select_best_isa(cpu_info().features));
   constexpr int kWarm = 2, kProfiled = 12, kChunk = 256;
   const int max_ctx = *std::max_element(contexts.begin(), contexts.end());
   const int max_seqs = *std::max_element(seq_counts.begin(), seq_counts.end());

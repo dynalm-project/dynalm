@@ -1,6 +1,6 @@
 # Quantization
 
-Quantization is its own subsystem (`src/quant/`). Model code never contains
+Quantization is its own DynaCore subsystem (`dynacore/include/dynacore/quantization/`; the GPTQ/AWQ repacker is a DynaLM loader step in `dynalm/src/loader/gptq_awq.*`). Model code never contains
 format-specific logic; it sees `DType`s, and the backend decides how to compute
 with them.
 

@@ -6,9 +6,10 @@
 #include <random>
 #include <thread>
 
-#include "dynacore/cpu/cpu_backend.h"
+#include "dynacore/cpu/cpu_device.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 class KvPaged : public ::testing::Test {
@@ -40,7 +41,7 @@ class KvPaged : public ::testing::Test {
   }
 
   ThreadPool tp{1};
-  CpuBackend be{tp, CpuIsa::kGeneric};
+  CpuDevice be{tp, CpuIsa::kGeneric};
   std::unique_ptr<KvBlockPool> pool;
 };
 
@@ -157,4 +158,4 @@ TEST_F(KvPaged, ConcurrentStress) {
 }
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynalm

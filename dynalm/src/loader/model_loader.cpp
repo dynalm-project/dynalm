@@ -13,8 +13,9 @@
 #include "loader/safetensors/safetensors.h"
 #include "logging/log.h"
 #include "dynacore/quantization/dequant.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 Result<std::string> detect_format(const std::string& path) {
@@ -274,4 +275,4 @@ Result<std::unique_ptr<LoadedModel>> load_model(const std::string& path) {
   return load_gguf(path);
 }
 
-}  // namespace engine
+}  // namespace dynalm

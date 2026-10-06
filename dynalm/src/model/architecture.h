@@ -15,8 +15,9 @@
 #include "dynacore/base/status.h"
 #include "model_ir/model_config.h"
 #include "model_ir/tensor_registry.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 class ModelArchitecture {
  public:
@@ -50,4 +51,4 @@ std::vector<std::string_view> supported_architecture_ids();
 // Shared validation of a standard decoder (exposed for adapters and tests).
 Status validate_standard_decoder(const ModelConfig& config, const TensorRegistry& weights);
 
-}  // namespace engine
+}  // namespace dynalm

@@ -13,7 +13,7 @@
 #include "dynacore/hardware/cpu_info.h"
 #include "dynacore/quantization/dequant.h"
 
-namespace engine {
+namespace dynacore {
 namespace {
 
 // Byte offsets of fp16 scale fields per block (GGML layouts).
@@ -190,4 +190,4 @@ TEST(Kernels, BestTierSelectedWhenSupported) {
 }
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynacore

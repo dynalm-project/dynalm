@@ -6,8 +6,9 @@
 #include <string>
 
 #include "runtime/engine.h"
+#include "common/core.h"
 
-namespace engine::cli {
+namespace dynalm::cli {
 
 struct ChatSettings {
   std::string system;     // system message ("" = none)
@@ -19,4 +20,4 @@ struct ChatSettings {
 // Runs the read-eval-print loop on stdin/stdout until /bye or end of input.
 int run_chat_session(Engine& engine, ChatSettings settings);
 
-}  // namespace engine::cli
+}  // namespace dynalm::cli

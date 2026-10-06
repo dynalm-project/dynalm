@@ -9,7 +9,7 @@
 
 #include "dynacore/tensor/dtype.h"
 
-namespace engine {
+namespace dynacore {
 
 // Converts `n` elements starting at `src` to fp32. `n` must be a multiple of
 // the dtype's block size. Returns false for dtypes without a converter.
@@ -17,4 +17,4 @@ bool dequantize_row(DType type, const void* src, float* dst, int64_t n);
 
 bool dequant_supported(DType type);
 
-}  // namespace engine
+}  // namespace dynacore

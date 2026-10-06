@@ -8,9 +8,10 @@
 
 #include "bench_harness.h"
 #include "sampling/sampler.h"
+#include "common/core.h"
 
 int main() {
-  using namespace engine;
+  using namespace dynalm;
   constexpr size_t kVocab = 151936;
   std::mt19937 rng(1);
   std::normal_distribution<float> nd(0.0f, 3.0f);

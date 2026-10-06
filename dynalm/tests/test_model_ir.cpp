@@ -9,11 +9,12 @@
 #include "loader/gguf/gguf_model.h"
 #include "model_ir/model_config.h"
 #include "model_ir/tensor_registry.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
-using engine::testing::GgufBuilder;
+using dynalm::testing::GgufBuilder;
 
 ModelConfig valid_config() {
   ModelConfig c;
@@ -204,8 +205,8 @@ TEST(MemoryEstimate, AddsWeightsKvAndScratch) {
 }
 
 TEST(ModelIrReal, SmolLm2ConfigIfAvailable) {
-  const std::string path = engine::testing::smollm_model();
-  if (!engine::testing::exists(path)) GTEST_SKIP() << "test model not present";
+  const std::string path = dynalm::testing::smollm_model();
+  if (!dynalm::testing::exists(path)) GTEST_SKIP() << "test model not present";
   auto g = gguf::GgufFile::open(path);
   ASSERT_TRUE(g.ok());
   auto c = gguf::read_model_config(**g);
@@ -218,4 +219,4 @@ TEST(ModelIrReal, SmolLm2ConfigIfAvailable) {
 }
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynalm

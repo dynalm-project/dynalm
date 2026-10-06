@@ -12,14 +12,14 @@
 #include <cstring>
 #include <random>
 
-#include "dynacore/cpu/cpu_backend.h"
+#include "dynacore/cpu/cpu_device.h"
 #include "dynacore/cpu/cpu_kernels.h"
 #include "dynacore/tensor/fp16.h"
 #include "dynacore/hardware/cpu_info.h"
 #include "dynacore/quantization/dequant.h"
 #include "dynacore/tensor/tensor.h"
 
-namespace engine {
+namespace dynacore {
 namespace {
 
 std::vector<CpuKernels> tiers() {
@@ -137,7 +137,7 @@ TEST(Int8Matmul, BackendPathMatchesFp32WithinQuantizationError) {
     GTEST_SKIP() << "int8 decode is accelerated only on the AVX2 tier";
   }
   ThreadPool pool(4);
-  CpuBackend be(pool, CpuIsa::kAvx2);
+  CpuDevice be(pool, CpuIsa::kAvx2);
   std::mt19937 rng(9);
   std::normal_distribution<float> nd(0, 1);
   const int64_t n = 67, k = 512;  // odd n: uneven parallel chunks
@@ -176,7 +176,7 @@ TEST(Int8Matmul, BackendPathMatchesFp32WithinQuantizationError) {
 // outputs like MoE slices. Each job must match its own matmul.
 TEST(GroupedMatmul, EveryPathMatchesIndividualMatmuls) {
   ThreadPool pool(4);
-  CpuBackend be(pool, select_best_isa(cpu_info().features));
+  CpuDevice be(pool, select_best_isa(cpu_info().features));
   std::mt19937 rng(21);
   std::normal_distribution<float> nd(0, 1);
   const int64_t k = 256, n = 40, wide = 2 * k;  // x rows are slices of a wider buffer
@@ -189,7 +189,7 @@ TEST(GroupedMatmul, EveryPathMatchesIndividualMatmuls) {
     be.set_kernel_plan(kp);
     std::vector<int64_t> rows = {1, 3, 5, 9};
     std::vector<Tensor> xs, ys, refs;
-    std::vector<Backend::MatmulJob> jobs;
+    std::vector<Device::MatmulJob> jobs;
     for (int64_t m : rows) {
       auto xbuf = Tensor::empty(DType::kF32, {m, wide});
       for (int64_t i = 0; i < m * wide; ++i) xbuf->data_as<float>()[i] = nd(rng);
@@ -220,4 +220,4 @@ TEST(GroupedMatmul, EveryPathMatchesIndividualMatmuls) {
 }
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynacore

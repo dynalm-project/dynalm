@@ -7,8 +7,9 @@
 #include <span>
 
 #include "tokenizer/tokenizer.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 // tokens[i] runs at position start_pos + i; K/V are written through
 // `block_table`.
@@ -22,4 +23,4 @@ struct SeqBatch {
   int32_t logits_last = 1;
 };
 
-}  // namespace engine
+}  // namespace dynalm

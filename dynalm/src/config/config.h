@@ -17,8 +17,9 @@
 #include <vector>
 
 #include "dynacore/base/status.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 struct OptionSpec {
   std::string_view name;  // long name without "--"
@@ -39,4 +40,4 @@ Result<std::vector<std::string>> parse_config_text(std::string_view text, std::s
 // "auto" or a non-negative integer; auto maps to 0 (the engine's AUTO mode).
 bool parse_int_or_auto(std::string_view s, int& out);
 
-}  // namespace engine
+}  // namespace dynalm

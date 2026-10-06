@@ -5,8 +5,9 @@
 #include <ctime>
 #include <mutex>
 #include <string>
+#include "common/core.h"
 
-namespace engine::log {
+namespace dynalm::log {
 
 std::string_view level_name(Level l) {
   switch (l) {
@@ -55,4 +56,4 @@ void write(Level level, std::string_view msg) {
 }
 
 }  // namespace detail
-}  // namespace engine::log
+}  // namespace dynalm::log

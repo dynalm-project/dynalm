@@ -9,15 +9,16 @@
 #include "dynacore/base/status.h"
 #include "logging/log.h"
 #include "dynacore/hardware/cpu_info.h"
+#include "common/core.h"
 
 namespace {
 
-engine::Result<int> make_result(int v) { return v; }
+dynalm::Result<int> make_result(int v) { return v; }
 
 }  // namespace
 
 int main() {
-  using namespace engine;
+  using namespace dynalm;
   std::printf("cpu: %s\n\n", cpu_info().brand.c_str());
   bench::print_header();
 

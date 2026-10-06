@@ -5,8 +5,10 @@
 
 #include "dynacore/tensor/fp16.h"
 #include "dynacore/quantization/quant_formats.h"
+#include "common/core.h"
 
-namespace engine::quant {
+namespace dynalm::quant {
+using namespace ::dynacore::quant;  // block layouts (BlockQ4_0, kQK, ...)
 namespace {
 
 // AWQ packs output column c*8 + kAwqOrder[k] into nibble k; kAwqNibble is
@@ -225,4 +227,4 @@ Result<Tensor> repack(const PackedScheme& s, const PackedLinear& w, RepackTarget
   return t;
 }
 
-}  // namespace engine::quant
+}  // namespace dynalm::quant

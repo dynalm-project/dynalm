@@ -29,7 +29,7 @@
 #include <sys/types.h>
 #endif
 
-namespace engine {
+namespace dynacore {
 namespace {
 
 #if ENGINE_ARCH_X86_64
@@ -357,4 +357,4 @@ MemoryInfo memory_info() {
   return m;
 }
 
-}  // namespace engine
+}  // namespace dynacore

@@ -8,15 +8,16 @@
 #include <cmath>
 #include <random>
 
-#include "dynacore/cpu/cpu_backend.h"
+#include "dynacore/cpu/cpu_device.h"
 #include "execution/batch_planner.h"
 #include "loader/model_loader.h"
 #include "model/transformer.h"
 #include "dynacore/tensor/fp16.h"
 #include "dynacore/hardware/cpu_info.h"
 #include "dynacore/hardware/isa.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 std::string data(const std::string& f) { return std::string(ENGINE_TEST_DATA_DIR) + "/" + f; }
@@ -144,7 +145,7 @@ class PlannedForward : public ::testing::TestWithParam<std::string> {
   }
 
   ThreadPool tp{4};
-  CpuBackend be{tp, CpuIsa::kGeneric};
+  CpuDevice be{tp, CpuIsa::kGeneric};
   std::unique_ptr<LoadedModel> model;
   std::unique_ptr<KvBlockPool> pool;
   std::unique_ptr<Transformer> tf;
@@ -188,7 +189,7 @@ TEST_P(PlannedForward, ExpandThresholdIsHonored) {
 TEST(GqaAttention, OneRowMatchesNaiveInEveryLayout) {
   for (DType kvt : {DType::kF32, DType::kF16}) {
     ThreadPool tp(8);
-    CpuBackend be(tp, select_best_isa(cpu_info().features));
+    CpuDevice be(tp, select_best_isa(cpu_info().features));
     KvGeometry g;
     g.num_layers = 1;
     g.num_kv_heads = 2;
@@ -281,7 +282,7 @@ TEST(GqaAttention, GroupedMatchesPerHeadAndNaive) {
       for (int32_t hd : {64, 128, 72}) {
         for (int32_t group : {1, 2, 3, 4, 6, 7, 8, 9}) {
           ThreadPool tp(4);
-          CpuBackend be(tp, isa);
+          CpuDevice be(tp, isa);
           constexpr int32_t kNkv = 2, kBlocks = 80, kBs = 16;
           KvGeometry g;
           g.num_layers = 1;
@@ -385,4 +386,4 @@ INSTANTIATE_TEST_SUITE_P(Arch, PlannedForward, ::testing::Values("llama", "gemma
                          [](const auto& pi) { return pi.param; });
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynalm

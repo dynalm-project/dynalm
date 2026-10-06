@@ -12,8 +12,9 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include "common/core.h"
 
-namespace engine::metrics {
+namespace dynalm::metrics {
 
 class Counter {
  public:
@@ -61,4 +62,4 @@ std::vector<double> latency_buckets_ms();
 void render_counter(std::string_view name, std::string_view help, double value, std::string& out);
 void render_gauge(std::string_view name, std::string_view help, double value, std::string& out);
 
-}  // namespace engine::metrics
+}  // namespace dynalm::metrics

@@ -6,8 +6,9 @@
 #include "dynacore/base/timer.h"
 #include "logging/log.h"
 #include "sampling/sampler.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 std::string_view scheduler_policy_name(SchedulerPolicy p) {
   switch (p) {
@@ -417,4 +418,4 @@ void Scheduler::run_until_idle() {
   }
 }
 
-}  // namespace engine
+}  // namespace dynalm

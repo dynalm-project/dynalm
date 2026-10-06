@@ -23,8 +23,9 @@
 #include "model_ir/model_config.h"
 #include "model_ir/tensor_registry.h"
 #include "loader/gptq_awq.h"
+#include "common/core.h"
 
-namespace engine::hf {
+namespace dynalm::hf {
 
 // Files of a model given as a directory or as one of its .safetensors files.
 struct ModelFiles {
@@ -68,4 +69,4 @@ bool split_packed_name(std::string_view name, std::string& weight_name, std::str
 // Llama 3 rope factors).
 Status apply_conventions(const json::Value& config, const ModelConfig& c, TensorRegistry& weights);
 
-}  // namespace engine::hf
+}  // namespace dynalm::hf

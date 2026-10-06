@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-namespace engine {
+namespace dynacore {
 
 // Resident set size in bytes (0 if unavailable).
 int64_t process_rss_bytes();
@@ -13,4 +13,4 @@ int64_t process_peak_rss_bytes();
 // User + system CPU time consumed by the process, in seconds.
 double process_cpu_seconds();
 
-}  // namespace engine
+}  // namespace dynacore

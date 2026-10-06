@@ -16,8 +16,9 @@
 #include "dynacore/base/status.h"
 #include "dynacore/device/ops.h"
 #include "dynacore/tensor/dtype.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 enum class MlpType : uint8_t {
   kGated,  // down(act(gate(x)) * up(x))   — SwiGLU / GeGLU
@@ -123,4 +124,4 @@ std::string_view norm_type_name(NormType n);
 std::string_view activation_name(Activation a);
 std::string_view rope_style_name(RopeStyle r);
 
-}  // namespace engine
+}  // namespace dynalm

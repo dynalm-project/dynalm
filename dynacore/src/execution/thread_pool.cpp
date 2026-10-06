@@ -12,7 +12,7 @@
 #include <immintrin.h>
 #endif
 
-namespace engine {
+namespace dynacore {
 namespace {
 
 // ~100 µs of spinning on current x86 before a worker sleeps.
@@ -146,4 +146,4 @@ void ThreadPool::parallel_for(size_t n, size_t grain, FunctionRef<void(size_t, s
   }
 }
 
-}  // namespace engine
+}  // namespace dynacore

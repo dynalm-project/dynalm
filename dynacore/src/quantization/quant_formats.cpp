@@ -4,7 +4,7 @@
 
 #include "dynacore/tensor/fp16.h"
 
-namespace engine::quant {
+namespace dynacore::quant {
 
 void dequantize_q4_0(const BlockQ4_0* x, float* y, int64_t nb) {
   for (int64_t i = 0; i < nb; ++i, y += kQK) {
@@ -202,4 +202,4 @@ void dequantize_q8_K(const BlockQ8_K* x, float* y, int64_t nb) {
   }
 }
 
-}  // namespace engine::quant
+}  // namespace dynacore::quant

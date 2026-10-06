@@ -18,7 +18,7 @@
 
 #include "dynacore/tensor/dtype.h"
 
-namespace engine {
+namespace dynacore {
 
 struct KvGeometry {
   int32_t num_layers = 0;
@@ -56,4 +56,4 @@ struct KvLayerView {
   }
 };
 
-}  // namespace engine
+}  // namespace dynacore

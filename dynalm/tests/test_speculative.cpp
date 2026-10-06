@@ -10,12 +10,13 @@
 #include <string>
 #include <vector>
 
-#include "dynacore/cpu/cpu_backend.h"
+#include "dynacore/cpu/cpu_device.h"
 #include "loader/model_loader.h"
 #include "dynacore/hardware/cpu_info.h"
 #include "dynacore/hardware/isa.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 std::string data(const std::string& f) { return std::string(ENGINE_TEST_DATA_DIR) + "/" + f; }
@@ -24,7 +25,7 @@ std::string data(const std::string& f) { return std::string(ENGINE_TEST_DATA_DIR
 struct Loaded {
   std::unique_ptr<LoadedModel> model;
   std::unique_ptr<ThreadPool> pool;
-  std::unique_ptr<CpuBackend> backend;
+  std::unique_ptr<CpuDevice> backend;
   std::unique_ptr<KvBlockPool> kv;
   std::unique_ptr<Transformer> tf;
 };
@@ -35,7 +36,7 @@ Loaded load(const std::string& path, int32_t max_batch = 16) {
   EXPECT_TRUE(m.ok()) << m.status().to_string();
   l.model = std::move(*m);
   l.pool = std::make_unique<ThreadPool>(2);
-  l.backend = std::make_unique<CpuBackend>(*l.pool, select_best_isa(cpu_info().features));
+  l.backend = std::make_unique<CpuDevice>(*l.pool, select_best_isa(cpu_info().features));
   const ModelConfig& c = l.model->config;
   KvGeometry g{c.num_layers, c.num_kv_heads, c.head_dim, c.head_dim_v, 16, 16, DType::kF32};
   auto kv = KvBlockPool::create(g, *l.backend);
@@ -238,4 +239,4 @@ TEST(Speculative, RejectsIncompatibleDraftVocabulary) {
 }
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynalm

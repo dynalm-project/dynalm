@@ -38,8 +38,9 @@
 #include "prefix_cache/prefix_cache.h"
 #include "runtime/sequence.h"
 #include "tokenizer/tokenizer.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 struct RequestEvent {
   uint64_t request_id = 0;
@@ -204,4 +205,4 @@ class Scheduler {
   std::unique_ptr<PrefixCache> prefix_cache_;
 };
 
-}  // namespace engine
+}  // namespace dynalm

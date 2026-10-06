@@ -30,10 +30,11 @@
 #else
 #include <spawn.h>
 #include <sys/wait.h>
+#include "common/core.h"
 extern char** environ;
 #endif
 
-namespace engine::cli {
+namespace dynalm::cli {
 namespace {
 
 namespace fs = std::filesystem;
@@ -246,4 +247,4 @@ int cmd_pull(std::span<const std::string_view> args) {
   return 0;
 }
 
-}  // namespace engine::cli
+}  // namespace dynalm::cli

@@ -5,7 +5,7 @@
 #include "dynacore/base/platform.h"
 #include "dynacore/hardware/isa.h"
 
-namespace engine {
+namespace dynacore {
 namespace {
 
 TEST(CpuInfo, TopologyIsSane) {
@@ -82,4 +82,4 @@ TEST(Isa, ParseRoundTrip) {
 }
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynacore

@@ -10,8 +10,9 @@
 #include <string>
 
 #include "runtime/engine.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 constexpr OptionSpec kOpts[] = {{"threads"}, {"port"}, {"http-threads"}, {"model"}, {"disable-admin", false}};
@@ -110,4 +111,4 @@ TEST(Config, AutoKvTokensFollowsFreeRam) {
 }
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynalm

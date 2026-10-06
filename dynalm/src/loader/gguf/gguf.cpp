@@ -4,8 +4,9 @@
 #include <bit>
 #include <cstring>
 #include <limits>
+#include "common/core.h"
 
-namespace engine::gguf {
+namespace dynalm::gguf {
 
 static_assert(std::endian::native == std::endian::little,
               "GGUF reader assumes a little-endian host");
@@ -462,8 +463,8 @@ Result<Tensor> GgufFile::load_tensor(const TensorInfo& info) const {
   // One Storage per tensor, each keeping the mapping alive. Weight data is
   // read-only; kernels take const views.
   void* p = const_cast<std::byte*>(file_->data() + info.offset);
-  auto storage = Storage::borrow(p, static_cast<size_t>(info.nbytes), Device{}, file_);
+  auto storage = Storage::borrow(p, static_cast<size_t>(info.nbytes), DeviceLoc{}, file_);
   return Tensor::from_storage(std::move(storage), TensorView(p, layout));
 }
 
-}  // namespace engine::gguf
+}  // namespace dynalm::gguf

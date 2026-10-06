@@ -7,8 +7,9 @@
 #include <cmath>
 
 #include "model/architectures.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 // Layer l is sliding-window unless it is the last of each group of `pattern`
@@ -75,4 +76,4 @@ const ModelArchitecture& gemma_architecture() {
   return a;
 }
 
-}  // namespace engine
+}  // namespace dynalm

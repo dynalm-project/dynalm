@@ -9,20 +9,21 @@
 #include <string>
 #include <thread>
 
-#include "dynacore/device/backend_registry.h"
+#include "dynacore/device/device_registry.h"
 #include "cli/chat.h"
 #include "cli/commands.h"
 #include "dynacore/base/timer.h"
 #include "logging/log.h"
 #include "dynacore/hardware/cpu_info.h"
-#include "dynacore/cpu/cpu_backend.h"
+#include "dynacore/cpu/cpu_device.h"
 #include "dynacore/hardware/isa.h"
 #include "dynacore/hardware/thread_qos.h"
 #include "runtime/engine.h"
 #include "runtime/speculative.h"
 #include "runtime/text_stream.h"
+#include "common/core.h"
 
-namespace engine::cli {
+namespace dynalm::cli {
 namespace {
 
 constexpr double kMiB = 1024.0 * 1024.0;
@@ -78,7 +79,7 @@ struct SpecModel {
   std::unique_ptr<Transformer> tf;
 };
 
-Status load_spec_model(const std::string& path, CpuBackend& be, DType kv_dtype, int ctx, int batch, SpecModel& out) {
+Status load_spec_model(const std::string& path, CpuDevice& be, DType kv_dtype, int ctx, int batch, SpecModel& out) {
   ENGINE_ASSIGN_OR_RETURN(out.model, load_model(path));
   ENGINE_ASSIGN_OR_RETURN(out.kv, KvBlockPool::create(kv_geometry_for(out.model->config, kv_dtype, 16, ctx), be));
   ENGINE_ASSIGN_OR_RETURN(out.tf, Transformer::create(out.model->config, out.model->weights, be, batch));
@@ -94,7 +95,7 @@ int run_speculative(const std::string& path, const std::string& spec, int k, boo
   request_full_speed_process();  // as the Engine does (DD-052): this thread runs kernel chunks too
   request_full_speed_thread();
   ThreadPool pool(threads > 0 ? threads : cpu_info().physical_cores);
-  CpuBackend be(pool, select_best_isa(cpu_info().features));
+  CpuDevice be(pool, select_best_isa(cpu_info().features));
   SpecModel target, draft;
   if (Status st = load_spec_model(path, be, opts.kv_dtype, ctx, batch, target); !st.ok()) {
     std::fprintf(stderr, "run: %s\n", st.to_string().c_str());
@@ -226,7 +227,7 @@ int cmd_run(std::span<const std::string_view> args) {
       params.sampling.has_seed = true;
     }
     else if (a == "--backend") {
-      auto k = parse_backend_kind(value());
+      auto k = parse_device_kind(value());
       ok = k.ok();
       if (ok) opts.backend = *k;
     } else if (a == "--kv") {
@@ -288,7 +289,7 @@ int cmd_run(std::span<const std::string_view> args) {
   const ModelConfig& cfg = lm.config;
   LOG_INFO("Model: {} ({}, {})", cfg.name.empty() ? cfg.architecture : cfg.name, lm.architecture->name(),
            lm.quantization);
-  LOG_INFO("Backend: {}, threads: {}", e.backend_name(), e.threads());
+  LOG_INFO("Device: {}, threads: {}", e.backend_name(), e.threads());
   LOG_INFO("Weights: {:.1f} MiB mmapped, KV cache: {:.1f} MiB ({} tokens, {})", lm.weight_bytes / kMiB,
            e.kv_geometry().total_bytes() / kMiB, ctx, dtype_name(opts.kv_dtype));
   LOG_INFO("Load time: {:.1f} ms", load_timer.elapsed_ms());
@@ -372,4 +373,4 @@ int cmd_run(std::span<const std::string_view> args) {
   return 0;
 }
 
-}  // namespace engine::cli
+}  // namespace dynalm::cli

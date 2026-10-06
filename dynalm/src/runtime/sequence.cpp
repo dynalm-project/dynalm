@@ -1,8 +1,9 @@
 #include "runtime/sequence.h"
 
 #include <cassert>
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 std::string_view sequence_status_name(SequenceStatus s) {
   switch (s) {
@@ -96,4 +97,4 @@ int64_t kv_tokens_for_budget(const ModelConfig& c, DType dtype, int64_t budget_b
   return per_token > 0 ? budget_bytes / per_token : 0;
 }
 
-}  // namespace engine
+}  // namespace dynalm

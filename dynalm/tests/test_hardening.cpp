@@ -15,8 +15,9 @@
 #include <vector>
 
 #include "runtime/engine.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 std::unique_ptr<Engine> make_engine(int64_t kv_tokens) {
@@ -181,4 +182,4 @@ TEST(Hardening, ShutdownWithRequestsInFlight) {
 }
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynalm

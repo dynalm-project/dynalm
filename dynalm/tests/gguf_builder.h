@@ -8,8 +8,9 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include "common/core.h"
 
-namespace engine::testing {
+namespace dynalm::testing {
 
 class GgufBuilder {
  public:
@@ -121,4 +122,4 @@ class GgufBuilder {
   std::vector<PendingTensor> pending_;
 };
 
-}  // namespace engine::testing
+}  // namespace dynalm::testing

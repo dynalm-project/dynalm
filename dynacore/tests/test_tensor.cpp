@@ -6,7 +6,7 @@
 
 #include "dynacore/memory/host_memory.h"
 
-namespace engine {
+namespace dynacore {
 namespace {
 
 TEST(TensorShape, Basics) {
@@ -143,7 +143,7 @@ TEST(Tensor, BorrowedStorageKeepsOwnerAlive) {
   std::weak_ptr<std::vector<float>> weak = owner;
   auto l = TensorLayout::contiguous(DType::kF32, {8});
   ASSERT_TRUE(l.ok());
-  auto storage = Storage::borrow(owner->data(), 32, Device{}, owner);
+  auto storage = Storage::borrow(owner->data(), 32, DeviceLoc{}, owner);
   auto t = Tensor::from_storage(storage, TensorView(owner->data(), *l));
   ASSERT_TRUE(t.ok());
   owner.reset();
@@ -163,4 +163,4 @@ TEST(Tensor, AllocationFailureIsAnError) {
 }
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynacore

@@ -22,15 +22,16 @@
 #include <span>
 #include <vector>
 
-#include "dynacore/device/backend.h"
+#include "dynacore/device/device.h"
 #include "dynacore/base/status.h"
 #include "dynacore/attention/paged_kv.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 class KvBlockPool {
  public:
-  static Result<std::unique_ptr<KvBlockPool>> create(const KvGeometry& geom, Backend& backend);
+  static Result<std::unique_ptr<KvBlockPool>> create(const KvGeometry& geom, Device& backend);
 
   const KvGeometry& geometry() const { return geom_; }
   int32_t num_blocks() const { return geom_.num_blocks; }
@@ -60,7 +61,7 @@ class KvBlockPool {
   KvBlockPool() = default;
 
   KvGeometry geom_;
-  Backend* backend_ = nullptr;
+  Device* backend_ = nullptr;
   std::vector<std::shared_ptr<Storage>> k_, v_;
   std::unique_ptr<std::atomic<int32_t>[]> refs_;
   mutable std::mutex free_mu_;
@@ -101,4 +102,4 @@ class KvBlockTable {
   std::vector<int32_t> blocks_;
 };
 
-}  // namespace engine
+}  // namespace dynalm

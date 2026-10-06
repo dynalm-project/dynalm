@@ -16,7 +16,7 @@
 #include <fstream>
 #include <numeric>
 
-#include "dynacore/cpu/cpu_backend.h"
+#include "dynacore/cpu/cpu_device.h"
 #include "dynacore/hardware/cpu_info.h"
 #include "dynacore/hardware/isa.h"
 #include "loader/hf/hf_model.h"
@@ -27,8 +27,9 @@
 #include "runtime/engine.h"
 #include "runtime/generator.h"
 #include "test_models.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 std::string data(const std::string& f) { return std::string(ENGINE_TEST_DATA_DIR) + "/" + f; }
@@ -176,7 +177,7 @@ TEST(HfConfig, Llama3RopeFactors) {
 
 std::vector<float> prompt_logits(const LoadedModel& m, const std::vector<TokenId>& tokens) {
   ThreadPool pool(2);
-  CpuBackend be(pool, select_best_isa(cpu_info().features));
+  CpuDevice be(pool, select_best_isa(cpu_info().features));
   const ModelConfig& c = m.config;
   KvGeometry g{c.num_layers, c.num_kv_heads, c.head_dim, c.head_dim_v, 16, 64, DType::kF32};
   auto cache = KvBlockPool::create(g, be);
@@ -382,4 +383,4 @@ INSTANTIATE_TEST_SUITE_P(Real, RealHf, ::testing::Values(0, 1),
                          [](const ::testing::TestParamInfo<int>& i) { return i.param == 0 ? "smollm2" : "qwen25"; });
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynalm

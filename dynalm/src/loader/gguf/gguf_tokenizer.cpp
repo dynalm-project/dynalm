@@ -1,6 +1,7 @@
 #include "loader/gguf/gguf_tokenizer.h"
+#include "common/core.h"
 
-namespace engine::gguf {
+namespace dynalm::gguf {
 namespace {
 
 TokenId optional_id(const GgufFile& f, std::string_view key) {
@@ -68,4 +69,4 @@ std::string read_chat_template(const GgufFile& f) {
   return t.ok() ? std::string(*t) : std::string();
 }
 
-}  // namespace engine::gguf
+}  // namespace dynalm::gguf

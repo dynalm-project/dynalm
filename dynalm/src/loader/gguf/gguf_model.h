@@ -10,8 +10,9 @@
 #include "loader/gguf/gguf.h"
 #include "model_ir/model_config.h"
 #include "model_ir/tensor_registry.h"
+#include "common/core.h"
 
-namespace engine::gguf {
+namespace dynalm::gguf {
 
 // Raw hyperparameters from `<arch>.*` keys. Family semantics (RoPE style, MLP
 // type, norms, biases) are left at defaults for the architecture adapter.
@@ -31,4 +32,4 @@ std::string_view file_type_name(uint32_t file_type);
 // Parses a GGUF tensor name into (role, layer). Exposed for tests.
 bool parse_tensor_name(std::string_view name, TensorRole& role, int& layer);
 
-}  // namespace engine::gguf
+}  // namespace dynalm::gguf

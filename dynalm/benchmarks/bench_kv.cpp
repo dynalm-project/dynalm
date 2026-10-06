@@ -7,16 +7,17 @@
 #include <cstdio>
 #include <thread>
 
-#include "dynacore/cpu/cpu_backend.h"
+#include "dynacore/cpu/cpu_device.h"
 #include "bench_harness.h"
 #include "kv_cache/kv_cache.h"
 #include "dynacore/hardware/cpu_info.h"
+#include "common/core.h"
 
 int main() {
-  using namespace engine;
+  using namespace dynalm;
   std::printf("cpu: %s\n\n", cpu_info().brand.c_str());
   ThreadPool tp(1);
-  CpuBackend be(tp, CpuIsa::kGeneric);
+  CpuDevice be(tp, CpuIsa::kGeneric);
   // SmolLM2-135M: 30 layers, 3 kv heads, head_dim 64; 16-token blocks, f16.
   auto pool = KvBlockPool::create(KvGeometry{30, 3, 64, 64, 16, 1024, DType::kF16}, be);
   if (!pool.ok()) return 1;

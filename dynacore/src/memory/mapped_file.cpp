@@ -16,7 +16,7 @@
 #include <cstring>
 #endif
 
-namespace engine {
+namespace dynacore {
 
 #if ENGINE_OS_WINDOWS
 
@@ -107,4 +107,4 @@ void MappedFile::prefetch(size_t offset, size_t len) const {
 
 #endif
 
-}  // namespace engine
+}  // namespace dynacore

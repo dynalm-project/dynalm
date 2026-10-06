@@ -5,7 +5,7 @@
 #include "dynacore/tensor/fp16.h"
 #include "dynacore/quantization/quant_formats.h"
 
-namespace engine {
+namespace dynacore {
 
 bool dequant_supported(DType type) {
   switch (type) {
@@ -64,4 +64,4 @@ bool dequantize_row(DType type, const void* src, float* dst, int64_t n) {
   }
 }
 
-}  // namespace engine
+}  // namespace dynacore

@@ -1,8 +1,9 @@
 #include "logging/log.h"
 
 #include <gtest/gtest.h>
+#include "common/core.h"
 
-namespace engine::log {
+namespace dynalm::log {
 namespace {
 
 // Restores the global level after each test.
@@ -43,4 +44,4 @@ TEST_F(LogTest, ParseLevel) {
 }
 
 }  // namespace
-}  // namespace engine::log
+}  // namespace dynalm::log

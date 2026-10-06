@@ -1,8 +1,9 @@
 #include "execution/batch_planner.h"
 
 #include <algorithm>
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 std::string_view step_phase_name(StepPhase p) {
   switch (p) {
@@ -46,4 +47,4 @@ ExecutionPlan BatchPlanner::plan(std::span<const SeqBatch> seqs) const {
   return p;
 }
 
-}  // namespace engine
+}  // namespace dynalm

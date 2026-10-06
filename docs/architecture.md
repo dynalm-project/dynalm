@@ -1,39 +1,42 @@
 # Architecture
 
-Status: **Phase 6** (single-sequence inference works end to end). This document describes the target architecture and marks
-what exists today. Implemented parts are marked ✅; everything else is planned.
+Status: all engine phases complete; DynaCore/DynaLM split done (R0, DD-068). Implemented parts are
+marked ✅. The full platform design, roadmap and decision summary are in
+[platform-design.md](platform-design.md).
 
-The planned split into DynaCore (runtime library) and DynaLM (platform) is designed in
-[platform-design.md](platform-design.md) (DD-068).
-
-## Layering
+## Two layers, one product
 
 ```
-CLI / API server            (cli/ ✅, server/ ✅ cpp-httplib, api/ ✅ OpenAI + JSON, metrics/ ✅)
-      │
-Engine facade               (runtime/engine ✅: scheduler thread + RequestStream streaming)
-      │
-Request manager / queue     (runtime/)
-      │
-Scheduler                   (scheduler/ ✅ continuous batching) — model-agnostic
-      │
-KV engine                   (kv_cache/ ✅ paged pool + refcounted block tables, prefix_cache/ ✅ radix (default) + hash, memory/)
-      │
-Model runtime               (model/, model_ir/ ✅)   — consumes ModelConfig only
-      │
-Kernel dispatch             (backends/backend.h ✅, CpuKernels table ✅)
-      │
-Backend                     (backends/cpu ✅ generic; avx2/avx512/amx in Phase 17; future GPU)
-      │
-Platform                    (platform/ ✅ CPU + memory detection, ISA selection)
+dynalm/  (namespace dynalm, library dynalm_runtime -> libdynalm, executable dynalm)
+  CLI / API server        cli/ ✅, server/ ✅ cpp-httplib, api/ ✅ OpenAI + JSON, metrics/ ✅
+        │
+  Engine facade           runtime/engine ✅: scheduler thread + RequestStream streaming
+        │
+  Scheduler               scheduler/ ✅ continuous batching, chunked prefill, policies
+        │
+  KV policy               kv_cache/ ✅ paged pool + refcounted block tables, prefix_cache/ ✅ radix + hash
+        │
+  Model runtime           model/ ✅ adapters + Transformer, model_ir/ ✅ ModelConfig + TensorRegistry
+        │                 execution/ ✅ BatchPlanner: SeqBatch[] -> StepShape
+  Loaders, text           loader/ ✅ GGUF, SafeTensors/HF, GPTQ/AWQ repack; tokenizer/, chat_template/
+════════╪═════════════════  dynacore:: public API only (dynacore/include/dynacore/...)
+dynacore/ (namespace dynacore, library dynacore)
+  Device                  device/device.h ✅ op interface, device_registry ✅, ops.h ✅ op parameters
+        │
+  Kernel selection        kernel/kernel_plan ✅ plan_kernels(StepShape, HardwareProfile)
+        │
+  CPU device              cpu/cpu_device ✅ + cpu_kernels table: generic ✅, avx2 ✅, neon ✅
+        │
+  Paged-KV layout         attention/paged_kv.h ✅ KvGeometry, KvLayerView (addressing only)
+  Execution               execution/thread_pool ✅ (QoS, P-cores first)
+  Tensor, memory, quant   tensor/ ✅ DType, TensorView; memory/ ✅ Storage, mmap; quantization/ ✅
+  Hardware                hardware/ ✅ cpu_info, isa selection, perf counters, process stats
 ```
 
-Data: `dtype/` ✅, `tensor/` ✅, `memory/` ✅ (host allocator + Storage; pools later).
-
-Text: `tokenizer/` ✅, `chat_template/` ✅ (neither knows about GGUF; the loader fills `TokenizerData`).
-
-Cross-cutting: `common/` ✅ (Status/Result, platform macros, timer),
-`logging/` ✅, `metrics/`, `config/`.
+DynaLM includes DynaCore headers as `"dynacore/<module>/<file>.h"` and sees the DynaCore names
+unqualified through `dynalm/src/common/core.h`. DynaCore has only `dynacore/include` on its
+include path, builds and tests alone (`cmake --preset core-only`), and is scanned by
+`tests/boundary/check_boundary.py` for LLM-level concepts.
 
 ## Dependency rules
 
@@ -44,7 +47,7 @@ Arrows point downward only. A lower layer never includes a higher one.
 | Scheduler | model architecture, file format, backend ISA |
 | KV cache | file format, model family |
 | Model runtime / adapters | GGUF (sees only the Tensor Registry + ModelConfig), SIMD |
-| Backends | model families, requests |
+| DynaCore (all of it) | model families, file formats, tokenizers, requests, HTTP, scheduling policy |
 | API/server | kernels, SIMD, KV layout |
 
 ## Model loading path ✅
@@ -62,13 +65,13 @@ handled inside the loaders. Adapters and the runtime see one IR (DD-040).
 - The baseline binary uses no global `-march`/`/arch` flags, so it runs on any x86-64.
 - SIMD variants are compiled per source file (`engine_set_isa()` in
   `cmake/EngineCompilerFlags.cmake`) and gated by `ENABLE_AVX2/AVX512/AMX`.
-- At startup `platform/cpu_info` detects CPU features (cpuid + XCR0 OS-state
-  checks) and `platform/isa` picks the best tier that is both **compiled** and
+- At startup `dynacore/hardware/cpu_info` detects CPU features (cpuid + XCR0 OS-state
+  checks) and `dynacore/hardware/isa` picks the best tier that is both **compiled** and
   **supported**: `amx > avx512 > avx2 > neon > generic`.
 - The choice is made once. Kernels never re-check features per call.
 - Future GPU backends add a device dimension beside this. They do not change the
   scheduler, model, or KV interfaces.
-- Device memory is owned and touched only by the backend (`upload`, `allocate`, `copy`,
+- Device memory is owned and touched only by the DynaCore device (`upload`, `allocate`, `copy`,
   `download`, plus gather/scatter/fill ops). A memory-guarded test backend enforces this
   for every model and runtime path (DD-045; contract in `docs/gpu-backend.md`).
 

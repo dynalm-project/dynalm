@@ -19,8 +19,9 @@
 #include "kv_cache/kv_cache.h"
 #include "model_ir/model_config.h"
 #include "tokenizer/tokenizer.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 enum class SequenceStatus : uint8_t { kWaiting, kPrefill, kDecode, kFinished, kCancelled, kError };
 
@@ -100,4 +101,4 @@ class SequenceState {
 KvGeometry kv_geometry_for(const ModelConfig& config, DType dtype, int32_t block_size, int64_t tokens);
 int64_t kv_tokens_for_budget(const ModelConfig& config, DType dtype, int64_t budget_bytes);
 
-}  // namespace engine
+}  // namespace dynalm

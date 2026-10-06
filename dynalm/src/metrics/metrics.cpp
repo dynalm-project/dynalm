@@ -2,8 +2,9 @@
 
 #include <algorithm>
 #include <cstdio>
+#include "common/core.h"
 
-namespace engine::metrics {
+namespace dynalm::metrics {
 
 Histogram::Histogram(std::vector<double> upper_bounds)
     : bounds_(std::move(upper_bounds)), buckets_(std::make_unique<std::atomic<uint64_t>[]>(bounds_.size() + 1)) {
@@ -80,4 +81,4 @@ void render_gauge(std::string_view name, std::string_view help, double value, st
   render_scalar("gauge", name, help, value, out);
 }
 
-}  // namespace engine::metrics
+}  // namespace dynalm::metrics

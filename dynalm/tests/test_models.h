@@ -7,8 +7,9 @@
 #include <cstdlib>
 #include <filesystem>
 #include <string>
+#include "common/core.h"
 
-namespace engine::testing {
+namespace dynalm::testing {
 
 inline std::string model_path(const char* env, const char* fallback) {
   if (const char* p = std::getenv(env); p && *p) return p;
@@ -33,4 +34,4 @@ inline std::string granite_moe_model() {
 
 inline bool exists(const std::string& p) { return !p.empty() && std::filesystem::exists(p); }
 
-}  // namespace engine::testing
+}  // namespace dynalm::testing

@@ -6,15 +6,16 @@
 #include <thread>
 
 #include "loader/model_loader.h"
-#include "dynacore/cpu/cpu_backend.h"
+#include "dynacore/cpu/cpu_device.h"
 #include "dynacore/hardware/cpu_info.h"
 #include "dynacore/hardware/isa.h"
 #include "runtime/engine.h"
 #include "runtime/generator.h"
 #include "runtime/text_stream.h"
 #include "runtime/think_filter.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 std::string data(const std::string& f) { return std::string(ENGINE_TEST_DATA_DIR) + "/" + f; }
@@ -137,7 +138,7 @@ class EngineTest : public ::testing::Test {
   // Greedy reference text for a raw byte prompt.
   std::string solo_text(std::string_view prompt, int32_t n) {
     ThreadPool tp(1);
-    CpuBackend be(tp, CpuIsa::kGeneric);
+    CpuDevice be(tp, CpuIsa::kGeneric);
     const ModelConfig& c = eng->model().config;
     auto kv = KvBlockPool::create(kv_geometry_for(c, DType::kF16, 16, 256), be);
     auto tf = Transformer::create(c, eng->model().weights, be, 64);
@@ -259,4 +260,4 @@ TEST_F(EngineTest, StreamsOutliveEngine) {
 }
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynalm

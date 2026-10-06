@@ -13,8 +13,9 @@
 #include <vector>
 
 #include "runtime/engine.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 std::vector<double> softmax(const std::vector<float>& l, float t) {
@@ -237,4 +238,4 @@ TEST(SamplingEngine, SeededRequestsReproduce) {
 }
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynalm

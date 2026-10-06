@@ -3,7 +3,7 @@
 // Compute backend interface.
 //
 // The model runtime expresses a forward pass as a sequence of these ops on
-// TensorViews; it never touches SIMD or device APIs. CpuBackend implements it
+// TensorViews; it never touches SIMD or device APIs. CpuDevice implements it
 // today; a CUDA/HIP/Metal backend implements the same interface with device
 // memory. Ops are coarse (a whole matmul / attention over the batch), so a
 // virtual call per op is negligible.
@@ -24,7 +24,7 @@
 #include "dynacore/memory/storage.h"
 #include "dynacore/tensor/tensor.h"
 
-namespace engine {
+namespace dynacore {
 
 // Rows of a batch may belong to different sequences: row r reads/writes the
 // KV of sequence row_seq[r] through kv[row_seq[r]].
@@ -40,18 +40,18 @@ struct AttentionParams {
   int32_t sliding_window = 0;   // 0 = full causal attention
 };
 
-class Backend {
+class Device {
  public:
-  virtual ~Backend() = default;
+  virtual ~Device() = default;
 
   virtual std::string_view name() const = 0;
-  virtual Device device() const = 0;
+  virtual DeviceLoc device() const = 0;
 
   // --- memory (DD-045) ---
-  // Device memory; the runtime never dereferences it directly unless
+  // DeviceLoc memory; the runtime never dereferences it directly unless
   // host_accessible().
   virtual Result<std::shared_ptr<Storage>> allocate(size_t bytes) = 0;
-  // Device-to-device copy within this backend's memory.
+  // DeviceLoc-to-device copy within this backend's memory.
   virtual void copy(void* dst, const void* src, size_t bytes) = 0;
   virtual void synchronize() = 0;
   // True if device memory is ordinary host memory (CPU): the runtime may then
@@ -119,4 +119,4 @@ class Backend {
                                 const TensorView& dst) = 0;
 };
 
-}  // namespace engine
+}  // namespace dynacore

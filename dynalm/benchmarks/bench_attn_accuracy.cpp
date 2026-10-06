@@ -25,13 +25,14 @@
 #include <string>
 #include <vector>
 
-#include "dynacore/cpu/cpu_backend.h"
+#include "dynacore/cpu/cpu_device.h"
 #include "kv_cache/kv_cache.h"
 #include "loader/model_loader.h"
 #include "model/transformer.h"
 #include "dynacore/hardware/cpu_info.h"
 #include "dynacore/hardware/isa.h"
 #include "runtime/sequence.h"
+#include "common/core.h"
 
 namespace {
 
@@ -69,7 +70,7 @@ std::vector<int64_t> top_k(const std::vector<float>& v, int k) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  using namespace engine;
+  using namespace dynalm;
   if (argc < 2) {
     std::fprintf(stderr, "usage: bench_attn_accuracy <model.gguf> [contexts=64,1024,3072] [threads]\n");
     return 1;
@@ -88,7 +89,7 @@ int main(int argc, char** argv) {
   }
   const ModelConfig& c = (*lm)->config;
   ThreadPool pool(threads);
-  CpuBackend be(pool, select_best_isa(cpu_info().features));
+  CpuDevice be(pool, select_best_isa(cpu_info().features));
   constexpr int32_t kChunk = 256, kDecode = 32, kGreedy = 48;
   auto tf = Transformer::create(c, (*lm)->weights, be, kChunk);
   if (!tf.ok()) {

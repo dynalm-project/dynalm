@@ -25,7 +25,7 @@
 #include <fstream>
 #endif
 
-namespace engine {
+namespace dynacore {
 
 PerfSample PerfSample::delta(const PerfSample& a, const PerfSample& b) {
   auto d = [](int64_t x, int64_t y) { return x < 0 || y < 0 ? int64_t{-1} : y - x; };
@@ -256,4 +256,4 @@ double cpu_current_mhz() {
 
 #endif
 
-}  // namespace engine
+}  // namespace dynacore

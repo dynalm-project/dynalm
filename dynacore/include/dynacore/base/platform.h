@@ -28,11 +28,11 @@
 #define ENGINE_ARCH_ARM64 1
 #endif
 
-namespace engine {
+namespace dynacore {
 
 // Destructive-interference size used to pad hot shared counters. Hard-coded
 // rather than std::hardware_destructive_interference_size, which is not
 // ABI-stable across compilers and warns under GCC.
 inline constexpr std::size_t kCacheLineSize = 64;
 
-}  // namespace engine
+}  // namespace dynacore

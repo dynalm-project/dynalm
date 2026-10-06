@@ -24,8 +24,9 @@
 
 #include "dynacore/base/status.h"
 #include "tokenizer/tokenizer.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 struct SamplingParams {
   float temperature = 0.0f;  // <= 0: greedy
@@ -97,4 +98,4 @@ class Sampler {
   bool dense_ = false;  // probs_ indexed by token id (temperature-only path)
 };
 
-}  // namespace engine
+}  // namespace dynalm

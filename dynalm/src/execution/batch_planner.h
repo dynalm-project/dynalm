@@ -16,8 +16,9 @@
 #include "dynacore/kernel/kernel_plan.h"
 #include "model/seq_batch.h"
 #include "model_ir/model_config.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 enum class StepPhase : uint8_t {
   kDecode,   // every sequence contributes one row
@@ -55,4 +56,4 @@ class BatchPlanner {
   KernelPlan base_;
 };
 
-}  // namespace engine
+}  // namespace dynalm

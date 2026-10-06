@@ -11,8 +11,9 @@
 
 #include "loader/model_loader.h"
 #include "dynacore/execution/thread_pool.h"
+#include "common/core.h"
 
-namespace engine::bench {
+namespace dynalm::bench {
 
 // Sustained read bandwidth (GB/s, 1e9 bytes) over a buffer far larger than the
 // last-level cache, using every thread of `pool`. Best of a few passes.
@@ -69,4 +70,4 @@ struct Classification {
 // Thresholds and priority are documented in DD-050 and docs/performance.md.
 Classification classify(const ClassifierInputs& in);
 
-}  // namespace engine::bench
+}  // namespace dynalm::bench

@@ -4,8 +4,9 @@
 #include <string>
 
 #include "model/architectures.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 Status expect_shape(const TensorRegistry& w, TensorRole role, int layer, const TensorShape& want,
@@ -131,4 +132,4 @@ std::vector<std::string_view> supported_architecture_ids() {
   return ids;
 }
 
-}  // namespace engine
+}  // namespace dynalm

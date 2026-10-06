@@ -2,8 +2,9 @@
 
 #include <charconv>
 #include <string>
+#include "common/core.h"
 
-namespace engine::gguf {
+namespace dynalm::gguf {
 namespace {
 
 // Reads `<arch>.<suffix>` as an integer; rejects per-layer arrays, which the
@@ -271,4 +272,4 @@ Result<TensorMapping> map_tensors(const GgufFile& f, int num_layers) {
   return m;
 }
 
-}  // namespace engine::gguf
+}  // namespace dynalm::gguf

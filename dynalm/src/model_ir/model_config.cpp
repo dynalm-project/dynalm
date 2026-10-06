@@ -2,8 +2,9 @@
 
 #include <algorithm>
 #include <string>
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 int64_t ModelConfig::kv_bytes_per_token(DType kv) const {
   const int64_t per_layer = static_cast<int64_t>(num_kv_heads) * (head_dim + head_dim_v);
@@ -79,4 +80,4 @@ std::string_view rope_style_name(RopeStyle r) {
   return "?";
 }
 
-}  // namespace engine
+}  // namespace dynalm

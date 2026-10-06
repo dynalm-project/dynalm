@@ -3,13 +3,14 @@
 #include <cassert>
 #include <cstring>
 #include <string>
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 // ---------------------------------------------------------------------------
 // KvBlockPool
 
-Result<std::unique_ptr<KvBlockPool>> KvBlockPool::create(const KvGeometry& geom, Backend& backend) {
+Result<std::unique_ptr<KvBlockPool>> KvBlockPool::create(const KvGeometry& geom, Device& backend) {
   if (geom.num_layers <= 0 || geom.num_kv_heads <= 0 || geom.head_dim <= 0 || geom.head_dim_v <= 0 ||
       geom.block_size <= 0 || geom.num_blocks <= 0) {
     return InvalidArgument("KvBlockPool: invalid geometry");
@@ -138,4 +139,4 @@ void KvBlockTable::release() {
   blocks_.clear();
 }
 
-}  // namespace engine
+}  // namespace dynalm

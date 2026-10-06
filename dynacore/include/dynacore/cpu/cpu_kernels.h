@@ -16,7 +16,7 @@
 #include "dynacore/tensor/dtype.h"
 #include "dynacore/hardware/isa.h"
 
-namespace engine {
+namespace dynacore {
 
 // Dot product of one weight row (`n` elements of the slot's dtype, packed
 // blocks for quantized types) with fp32 activations.
@@ -101,4 +101,4 @@ bool register_neon_kernels(CpuKernels& k);
 // Best available table for `isa` (falls back to lower tiers).
 CpuKernels make_cpu_kernels(CpuIsa isa);
 
-}  // namespace engine
+}  // namespace dynacore

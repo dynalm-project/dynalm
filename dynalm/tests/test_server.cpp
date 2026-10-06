@@ -10,8 +10,9 @@
 #include "api/openai.h"
 #include "httplib.h"
 #include "server/server.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 json::Value J(const char* s) {
@@ -423,4 +424,4 @@ TEST_F(ServerTest, ChatWithoutTemplateIsClearError) {
 }
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynalm

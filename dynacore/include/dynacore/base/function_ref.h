@@ -6,7 +6,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace engine {
+namespace dynacore {
 
 template <typename Sig>
 class FunctionRef;
@@ -28,4 +28,4 @@ class FunctionRef<R(Args...)> {
   R (*call_)(void*, Args...);
 };
 
-}  // namespace engine
+}  // namespace dynacore

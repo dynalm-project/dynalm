@@ -11,7 +11,7 @@
 #include <bit>
 #include <cstdint>
 
-namespace engine {
+namespace dynacore {
 
 inline float exp_nonpos(float x) {
   x = std::max(x, -87.0f);
@@ -30,4 +30,4 @@ inline float exp_nonpos(float x) {
   return p * std::bit_cast<float>(bits);
 }
 
-}  // namespace engine
+}  // namespace dynacore

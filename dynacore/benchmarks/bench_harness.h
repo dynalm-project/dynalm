@@ -15,7 +15,7 @@
 
 #include "dynacore/base/timer.h"
 
-namespace engine::bench {
+namespace dynacore::bench {
 
 struct Stats {
   double mean = 0, p50 = 0, p90 = 0, p95 = 0, p99 = 0, min = 0, max = 0;
@@ -88,4 +88,4 @@ inline void print_row(const std::string& name, const Stats& s) {
               s.p95, s.p99);
 }
 
-}  // namespace engine::bench
+}  // namespace dynacore::bench

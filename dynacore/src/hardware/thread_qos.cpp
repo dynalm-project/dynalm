@@ -12,7 +12,7 @@
 #include <sched.h>
 #endif
 
-namespace engine {
+namespace dynacore {
 
 void request_full_speed_process() {
 #if ENGINE_OS_WINDOWS
@@ -53,4 +53,4 @@ bool pin_current_thread(int cpu) {
 #endif
 }
 
-}  // namespace engine
+}  // namespace dynacore

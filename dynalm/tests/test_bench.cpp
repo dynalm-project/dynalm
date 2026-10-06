@@ -3,8 +3,9 @@
 #include "bench/loadgen.h"
 
 #include <gtest/gtest.h>
+#include "common/core.h"
 
-namespace engine::bench {
+namespace dynalm::bench {
 namespace {
 
 TEST(Bench, PercentilesNearestRank) {
@@ -81,4 +82,4 @@ TEST_F(BenchEngine, PointsDoNotReuseEachOthersPrefixes) {
 }
 
 }  // namespace
-}  // namespace engine::bench
+}  // namespace dynalm::bench

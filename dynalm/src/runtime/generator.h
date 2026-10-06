@@ -15,8 +15,9 @@
 #include "model/transformer.h"
 #include "runtime/sequence.h"
 #include "tokenizer/tokenizer.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 struct GenerationStats {
   int32_t prompt_tokens = 0;
@@ -55,4 +56,4 @@ class Generator {
   uint64_t next_id_ = 1;
 };
 
-}  // namespace engine
+}  // namespace dynalm

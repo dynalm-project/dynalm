@@ -18,7 +18,7 @@
 #include "dynacore/tensor/fp16.h"
 #include "dynacore/quantization/quant_formats.h"
 
-namespace engine {
+namespace dynacore {
 namespace {
 
 using namespace quant;
@@ -812,12 +812,12 @@ bool register_avx2_kernels(CpuKernels& k) {
   return true;
 }
 
-}  // namespace engine
+}  // namespace dynacore
 
 #else  // AVX2 tier not compiled
 
-namespace engine {
+namespace dynacore {
 bool register_avx2_kernels(CpuKernels&) { return false; }
-}  // namespace engine
+}  // namespace dynacore
 
 #endif

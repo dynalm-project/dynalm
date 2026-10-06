@@ -15,7 +15,7 @@
 #include <memory>
 #include <string>
 
-namespace engine {
+namespace dynacore {
 
 struct PerfSample {
   // -1 = unavailable on this platform / configuration.
@@ -56,4 +56,4 @@ class PerfCounters {
 // Average current frequency over all logical CPUs in MHz, or -1 if unknown.
 double cpu_current_mhz();
 
-}  // namespace engine
+}  // namespace dynacore

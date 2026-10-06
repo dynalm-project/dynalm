@@ -9,15 +9,16 @@
 #include <string>
 #include <thread>
 
-#include "dynacore/device/backend_registry.h"
+#include "dynacore/device/device_registry.h"
 #include "cli/commands.h"
 #include "config/config.h"
 #include "logging/log.h"
 #include "dynacore/hardware/cpu_info.h"
 #include "runtime/engine.h"
 #include "server/server.h"
+#include "common/core.h"
 
-namespace engine::cli {
+namespace dynalm::cli {
 namespace {
 
 std::atomic<int> g_signals{0};
@@ -108,7 +109,7 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
     else if (a == "--shutdown-timeout") ok = parse_int(value(), shutdown_timeout_s);
     else if (a == "--disable-admin") so.enable_admin = false;
     else if (a == "--backend") {
-      auto k = parse_backend_kind(value());
+      auto k = parse_device_kind(value());
       ok = k.ok();
       if (ok) eo.backend = *k;
     } else if (a == "--kv") {
@@ -147,7 +148,7 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
   const MemoryInfo mem = memory_info();
   LOG_INFO("Model: {} ({})", lm.config.name.empty() ? lm.config.architecture : lm.config.name, lm.architecture->name());
   LOG_INFO("Quantization: {}", lm.quantization);
-  LOG_INFO("Backend: {}", e.backend_name());
+  LOG_INFO("Device: {}", e.backend_name());
   LOG_INFO("Threads: {}", e.threads());
   LOG_INFO("RAM required: {} (weights {}, KV cache {}); available {}", gib(e.weight_bytes() + e.kv_bytes()),
            gib(e.weight_bytes()), gib(e.kv_bytes()), gib(mem.available_bytes));
@@ -187,4 +188,4 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
   return 0;
 }
 
-}  // namespace engine::cli
+}  // namespace dynalm::cli

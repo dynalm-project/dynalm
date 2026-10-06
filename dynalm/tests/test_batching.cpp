@@ -7,11 +7,12 @@
 #include <numeric>
 #include <random>
 
-#include "dynacore/cpu/cpu_backend.h"
+#include "dynacore/cpu/cpu_device.h"
 #include "loader/model_loader.h"
 #include "model/transformer.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 std::string data(const std::string& f) { return std::string(ENGINE_TEST_DATA_DIR) + "/" + f; }
@@ -41,7 +42,7 @@ class Batching : public ::testing::TestWithParam<std::string> {
   }
 
   ThreadPool tp{3};
-  CpuBackend be{tp, CpuIsa::kGeneric};
+  CpuDevice be{tp, CpuIsa::kGeneric};
   std::unique_ptr<LoadedModel> model;
   std::unique_ptr<KvBlockPool> pool;
   std::unique_ptr<Transformer> tf;
@@ -128,4 +129,4 @@ INSTANTIATE_TEST_SUITE_P(Arch, Batching, ::testing::Values("llama", "gemma3", "p
                          [](const ::testing::TestParamInfo<std::string>& p) { return p.param; });
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynalm

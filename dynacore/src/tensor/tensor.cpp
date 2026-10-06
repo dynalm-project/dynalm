@@ -5,7 +5,7 @@
 #include <cstring>
 #include <utility>
 
-namespace engine {
+namespace dynacore {
 
 // ---------------------------------------------------------------------------
 // TensorShape
@@ -233,4 +233,4 @@ Result<Tensor> Tensor::slice(int dim, int64_t start, int64_t length) const {
   return Tensor(storage_, v);
 }
 
-}  // namespace engine
+}  // namespace dynacore

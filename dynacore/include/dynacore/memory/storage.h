@@ -13,7 +13,7 @@
 #include "dynacore/base/status.h"
 #include "dynacore/memory/host_memory.h"
 
-namespace engine {
+namespace dynacore {
 
 // Where a Storage lives. Only kCpu is implemented; GPU types are reserved so
 // the interfaces carry them from day one (DD-045). kSimulated is host memory
@@ -21,10 +21,10 @@ namespace engine {
 // device memory directly).
 enum class DeviceType : uint8_t { kCpu = 0, kCuda, kHip, kMetal, kVulkan, kSimulated };
 
-struct Device {
+struct DeviceLoc {
   DeviceType type = DeviceType::kCpu;
   int index = 0;
-  friend bool operator==(const Device&, const Device&) = default;
+  friend bool operator==(const DeviceLoc&, const DeviceLoc&) = default;
 };
 
 class Storage {
@@ -35,7 +35,7 @@ class Storage {
 
   // Wraps externally owned bytes. `keep_alive` is retained for the lifetime of
   // the Storage and may be null if the caller guarantees the bytes outlive it.
-  static std::shared_ptr<Storage> borrow(void* data, size_t size, Device device,
+  static std::shared_ptr<Storage> borrow(void* data, size_t size, DeviceLoc device,
                                          std::shared_ptr<const void> keep_alive);
 
   ~Storage();
@@ -44,7 +44,7 @@ class Storage {
 
   void* data() const { return data_; }
   size_t size() const { return size_; }
-  Device device() const { return device_; }
+  DeviceLoc device() const { return device_; }
   bool owned() const { return owned_; }
 
  private:
@@ -52,9 +52,9 @@ class Storage {
 
   void* data_ = nullptr;
   size_t size_ = 0;
-  Device device_;
+  DeviceLoc device_;
   bool owned_ = false;
   std::shared_ptr<const void> keep_alive_;
 };
 
-}  // namespace engine
+}  // namespace dynacore

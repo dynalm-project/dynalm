@@ -22,8 +22,9 @@
 #include "dynacore/tensor/dtype.h"
 #include "dynacore/memory/mapped_file.h"
 #include "dynacore/tensor/tensor.h"
+#include "common/core.h"
 
-namespace engine::gguf {
+namespace dynalm::gguf {
 
 enum class ValueType : uint32_t {
   kU8 = 0, kI8 = 1, kU16 = 2, kI16 = 3, kU32 = 4, kI32 = 5, kF32 = 6, kBool = 7,
@@ -123,4 +124,4 @@ class GgufFile {
   std::unordered_map<std::string_view, size_t> tensor_index_;
 };
 
-}  // namespace engine::gguf
+}  // namespace dynalm::gguf

@@ -6,8 +6,9 @@
 #include <array>
 
 #include "model/architectures.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 class LlamaArchitecture final : public ModelArchitecture {
@@ -45,4 +46,4 @@ const ModelArchitecture& llama_architecture() {
   return a;
 }
 
-}  // namespace engine
+}  // namespace dynalm

@@ -8,14 +8,15 @@
 #include <numeric>
 #include <sstream>
 
-#include "dynacore/cpu/cpu_backend.h"
+#include "dynacore/cpu/cpu_device.h"
 #include "loader/model_loader.h"
 #include "model/transformer.h"
 #include "runtime/generator.h"
 #include "sampling/sampler.h"
 #include "test_models.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 struct Ref {
@@ -58,7 +59,7 @@ TEST_P(TinyArch, MatchesReference) {
   ASSERT_FALSE(ref.tokens.empty());
 
   ThreadPool pool(3);
-  CpuBackend be(pool, CpuIsa::kGeneric);
+  CpuDevice be(pool, CpuIsa::kGeneric);
   KvGeometry g{c.num_layers, c.num_kv_heads, c.head_dim, c.head_dim_v, 4, 16, DType::kF32};
   auto cache = KvBlockPool::create(g, be);
   ASSERT_TRUE(cache.ok());
@@ -105,12 +106,12 @@ struct RealCase {
 class RealArch : public ::testing::TestWithParam<int> {};
 
 TEST_P(RealArch, MatchesReference) {
-  const RealCase cases[] = {{engine::testing::qwen_f16_model(), "ref_qwen25.txt"},
-                            {engine::testing::gemma_model(), "ref_gemma3.txt"},
-                            {engine::testing::qwen_q4_model(), "ref_qwen25_q4_k_m.txt"},
-                            {engine::testing::granite_moe_model(), "ref_granite_moe_q8_0.txt"}};
+  const RealCase cases[] = {{dynalm::testing::qwen_f16_model(), "ref_qwen25.txt"},
+                            {dynalm::testing::gemma_model(), "ref_gemma3.txt"},
+                            {dynalm::testing::qwen_q4_model(), "ref_qwen25_q4_k_m.txt"},
+                            {dynalm::testing::granite_moe_model(), "ref_granite_moe_q8_0.txt"}};
   const RealCase rc = cases[GetParam()];
-  if (!engine::testing::exists(rc.model)) GTEST_SKIP() << rc.model << " not present";
+  if (!dynalm::testing::exists(rc.model)) GTEST_SKIP() << rc.model << " not present";
   if (!std::filesystem::exists(data(rc.fixture))) GTEST_SKIP() << rc.fixture << " not generated";
   auto m = load_model(rc.model);
   ASSERT_TRUE(m.ok()) << m.status().to_string();
@@ -118,7 +119,7 @@ TEST_P(RealArch, MatchesReference) {
   const Ref ref = load_ref(data(rc.fixture));
 
   ThreadPool pool(4);
-  CpuBackend be(pool, CpuIsa::kGeneric);
+  CpuDevice be(pool, CpuIsa::kGeneric);
   KvGeometry g{c.num_layers, c.num_kv_heads, c.head_dim, c.head_dim_v, 16, 16, DType::kF32};
   auto cache = KvBlockPool::create(g, be);
   ASSERT_TRUE(cache.ok());
@@ -182,4 +183,4 @@ TEST(Architectures, UnsupportedArchitectureIsClearError) {
 }
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynalm

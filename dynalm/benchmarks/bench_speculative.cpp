@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-#include "dynacore/cpu/cpu_backend.h"
+#include "dynacore/cpu/cpu_device.h"
 #include "dynacore/base/timer.h"
 #include "loader/model_loader.h"
 #include "dynacore/hardware/cpu_info.h"
@@ -22,8 +22,9 @@
 #include "runtime/generator.h"
 #include "runtime/sequence.h"
 #include "runtime/speculative.h"
+#include "common/core.h"
 
-using namespace engine;
+using namespace dynalm;
 
 namespace {
 
@@ -33,7 +34,7 @@ struct Model {
   std::unique_ptr<Transformer> tf;
 };
 
-bool load(const std::string& path, CpuBackend& be, Model& out) {
+bool load(const std::string& path, CpuDevice& be, Model& out) {
   auto m = load_model(path);
   if (!m.ok()) return std::fprintf(stderr, "%s\n", m.status().to_string().c_str()), false;
   out.m = std::move(*m);
@@ -52,7 +53,7 @@ int main(int argc, char** argv) {
   const int threads = argc > 3 ? std::atoi(argv[3]) : cpu_info().physical_cores;
   const int k = argc > 4 ? std::atoi(argv[4]) : 4;
   ThreadPool pool(threads);
-  CpuBackend be(pool, select_best_isa(cpu_info().features));
+  CpuDevice be(pool, select_best_isa(cpu_info().features));
   Model target, draft;
   if (!load(argv[1], be, target)) return 1;
   const bool have_draft = argc > 2 && std::string(argv[2]) != "-" && load(argv[2], be, draft);

@@ -21,8 +21,9 @@
 #include "dynacore/base/status.h"
 #include "dynacore/memory/mapped_file.h"
 #include "dynacore/tensor/tensor.h"
+#include "common/core.h"
 
-namespace engine::safetensors {
+namespace dynalm::safetensors {
 
 struct TensorInfo {
   std::string name;
@@ -59,4 +60,4 @@ std::optional<DType> dtype_from_name(std::string_view name);
 // Element size in bytes of any SafeTensors dtype; 0 if the name is unknown.
 int element_bytes(std::string_view name);
 
-}  // namespace engine::safetensors
+}  // namespace dynalm::safetensors

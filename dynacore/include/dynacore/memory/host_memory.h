@@ -13,7 +13,7 @@
 
 #include "dynacore/base/platform.h"
 
-namespace engine {
+namespace dynacore {
 
 inline constexpr size_t kDefaultAlignment = 64;  // cache line; also AVX-512 width
 
@@ -35,4 +35,4 @@ HostMemoryStats host_memory_stats();
 // exercise OOM paths deterministically. 0 disables.
 void set_host_alloc_limit_for_testing(int64_t max_single_alloc_bytes);
 
-}  // namespace engine
+}  // namespace dynacore

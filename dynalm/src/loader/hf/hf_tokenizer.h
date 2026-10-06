@@ -15,8 +15,9 @@
 #include "api/json.h"
 #include "dynacore/base/status.h"
 #include "tokenizer/tokenizer.h"
+#include "common/core.h"
 
-namespace engine::hf {
+namespace dynalm::hf {
 
 struct TokenizerFiles {
   const json::Value* tokenizer = nullptr;          // tokenizer.json (required)
@@ -30,4 +31,4 @@ Result<TokenizerData> read_tokenizer(const TokenizerFiles& files);
 // The chat template from tokenizer_config.json ("" if none).
 std::string read_chat_template(const json::Value* tokenizer_config);
 
-}  // namespace engine::hf
+}  // namespace dynalm::hf

@@ -15,7 +15,7 @@
 #include "runtime/engine.h"
 
 #include "api/json.h"
-#include "dynacore/cpu/cpu_backend.h"
+#include "dynacore/cpu/cpu_device.h"
 #include "loader/hf/hf_model.h"
 #include "loader/model_loader.h"
 #include "model/transformer.h"
@@ -23,8 +23,9 @@
 #include "dynacore/hardware/isa.h"
 #include "dynacore/quantization/dequant.h"
 #include "loader/gptq_awq.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 std::string data(const std::string& f) { return std::string(ENGINE_TEST_DATA_DIR) + "/" + f; }
@@ -113,7 +114,7 @@ struct Variant {
 
 std::vector<float> prompt_logits(const LoadedModel& m, const std::vector<TokenId>& tokens) {
   ThreadPool pool(2);
-  CpuBackend be(pool, select_best_isa(cpu_info().features));
+  CpuDevice be(pool, select_best_isa(cpu_info().features));
   const ModelConfig& c = m.config;
   KvGeometry g{c.num_layers, c.num_kv_heads, c.head_dim, c.head_dim_v, 16, 16, DType::kF32};
   auto cache = KvBlockPool::create(g, be);
@@ -213,4 +214,4 @@ INSTANTIATE_TEST_SUITE_P(Qwen, RealPacked,
                          [](const auto& i) { return std::string(i.param.second); });
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynalm

@@ -4,8 +4,9 @@
 #include <array>
 
 #include "model/architectures.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 class PhiArchitecture final : public ModelArchitecture {
@@ -46,4 +47,4 @@ const ModelArchitecture& phi_architecture() {
   return a;
 }
 
-}  // namespace engine
+}  // namespace dynalm

@@ -7,7 +7,7 @@
 
 add_library(dynacore STATIC
   src/base/status.cpp
-  src/device/backend_registry.cpp
+  src/device/device_registry.cpp
   src/execution/thread_pool.cpp
   src/hardware/cpu_info.cpp
   src/hardware/isa.cpp
@@ -22,7 +22,7 @@ add_library(dynacore STATIC
   src/quantization/quant_formats.cpp
   src/tensor/dtype.cpp
   src/tensor/tensor.cpp
-  cpu/cpu_backend.cpp
+  cpu/cpu_device.cpp
   cpu/generic/kernels_generic.cpp
   cpu/avx2/kernels_avx2.cpp
   cpu/neon/kernels_neon.cpp

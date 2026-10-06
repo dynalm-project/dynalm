@@ -17,8 +17,9 @@
 #include <vector>
 
 #include "dynacore/base/status.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 struct ChatMessage {
   std::string role;  // "system" | "user" | "assistant"
@@ -60,4 +61,4 @@ class ChatTemplate {
   std::string separator_;       // text after each end-of-turn token (Granite: as in the template)
 };
 
-}  // namespace engine
+}  // namespace dynalm

@@ -17,8 +17,9 @@
 #include "dynacore/base/status.h"
 #include "dynacore/hardware/perf_counters.h"
 #include "runtime/engine.h"
+#include "common/core.h"
 
-namespace engine::bench {
+namespace dynalm::bench {
 
 struct RequestResult {
   bool ok = false;
@@ -113,4 +114,4 @@ PointResult run_point(Target& target, const Tokenizer& tokenizer, const PointCon
 // One JSON object (single line) per point, for tools/bench_report.py.
 std::string to_json(const PointResult& r, const std::string& model, const std::string& hardware);
 
-}  // namespace engine::bench
+}  // namespace dynalm::bench

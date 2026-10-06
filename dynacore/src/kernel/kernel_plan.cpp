@@ -5,7 +5,7 @@
 
 #include "dynacore/hardware/cpu_info.h"
 
-namespace engine {
+namespace dynacore {
 
 std::string_view attention_strategy_name(AttentionStrategy s) {
   switch (s) {
@@ -82,4 +82,4 @@ KernelPlan plan_kernels(const StepShape& shape, const HardwareProfile& hw, const
   return k;
 }
 
-}  // namespace engine
+}  // namespace dynacore

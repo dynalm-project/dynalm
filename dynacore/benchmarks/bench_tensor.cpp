@@ -13,7 +13,7 @@
 #include "dynacore/tensor/tensor.h"
 
 int main() {
-  using namespace engine;
+  using namespace dynacore;
   std::printf("cpu: %s\n\n", cpu_info().brand.c_str());
 
   constexpr int kN = 4096;

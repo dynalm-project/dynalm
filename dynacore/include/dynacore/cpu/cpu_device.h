@@ -6,21 +6,21 @@
 #include <memory>
 #include <vector>
 
-#include "dynacore/device/backend.h"
+#include "dynacore/device/device.h"
 #include "dynacore/cpu/cpu_kernels.h"
 #include "dynacore/hardware/isa.h"
 #include "dynacore/execution/thread_pool.h"
 
-namespace engine {
+namespace dynacore {
 
 
-class CpuBackend final : public Backend {
+class CpuDevice final : public Device {
  public:
   // `pool` must outlive the backend.
-  CpuBackend(ThreadPool& pool, CpuIsa isa);
+  CpuDevice(ThreadPool& pool, CpuIsa isa);
 
   std::string_view name() const override { return name_; }
-  Device device() const override { return Device{}; }
+  DeviceLoc device() const override { return DeviceLoc{}; }
   const CpuKernels& kernels() const { return k_; }
 
   Result<std::shared_ptr<Storage>> allocate(size_t bytes) override;
@@ -74,4 +74,4 @@ class CpuBackend final : public Backend {
   std::string name_;
 };
 
-}  // namespace engine
+}  // namespace dynacore

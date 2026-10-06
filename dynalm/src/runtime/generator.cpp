@@ -7,8 +7,9 @@
 #include "dynacore/base/timer.h"
 #include "runtime/sequence.h"
 #include "sampling/sampler.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 Status Generator::generate(std::span<const TokenId> prompt, const GenerateOptions& opts,
                            FunctionRef<bool(TokenId)> on_token, GenerationStats* stats) {
@@ -72,4 +73,4 @@ Status Generator::generate(std::span<const TokenId> prompt, const GenerateOption
   return seq.status() == SequenceStatus::kError ? seq.error() : Status::Ok();
 }
 
-}  // namespace engine
+}  // namespace dynalm

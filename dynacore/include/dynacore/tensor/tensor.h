@@ -25,7 +25,7 @@
 #include "dynacore/tensor/dtype.h"
 #include "dynacore/memory/storage.h"
 
-namespace engine {
+namespace dynacore {
 
 inline constexpr int kMaxDims = 4;
 
@@ -66,7 +66,7 @@ struct TensorLayout {
 class TensorView {
  public:
   TensorView() = default;
-  TensorView(void* data, TensorLayout layout, Device device = {})
+  TensorView(void* data, TensorLayout layout, DeviceLoc device = {})
       : data_(data), layout_(layout), device_(device) {}
 
   void* data() const { return data_; }
@@ -82,7 +82,7 @@ class TensorView {
   int64_t numel() const { return layout_.shape.numel(); }
   bool is_contiguous() const { return layout_.is_contiguous(); }
   int64_t span_bytes() const { return layout_.span_bytes(); }
-  Device device() const { return device_; }
+  DeviceLoc device() const { return device_; }
 
   // Same elements, new shape. Requires a contiguous view.
   Result<TensorView> reshape(const TensorShape& shape) const;
@@ -97,7 +97,7 @@ class TensorView {
  private:
   void* data_ = nullptr;
   TensorLayout layout_;
-  Device device_;
+  DeviceLoc device_;
 };
 
 class Tensor {
@@ -136,4 +136,4 @@ class Tensor {
   TensorView view_;
 };
 
-}  // namespace engine
+}  // namespace dynacore

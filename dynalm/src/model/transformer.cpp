@@ -8,8 +8,9 @@
 
 #include "dynacore/base/timer.h"
 #include "dynacore/quantization/dequant.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 // 2-D fp32 view over raw memory with an explicit row stride (bytes).
@@ -36,7 +37,7 @@ bool present(const TensorView& v) { return v.data() != nullptr; }
 }  // namespace
 
 Result<std::unique_ptr<Transformer>> Transformer::create(const ModelConfig& config, const TensorRegistry& weights,
-                                                         Backend& backend, int32_t max_batch_tokens) {
+                                                         Device& backend, int32_t max_batch_tokens) {
   ENGINE_RETURN_IF_ERROR(config.validate());
   if (max_batch_tokens <= 0) return InvalidArgument("max_batch_tokens must be > 0");
   std::unique_ptr<Transformer> t(new Transformer(config, backend));
@@ -559,4 +560,4 @@ Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& c
   return Status::Ok();
 }
 
-}  // namespace engine
+}  // namespace dynalm

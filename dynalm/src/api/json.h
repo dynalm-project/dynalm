@@ -17,8 +17,9 @@
 #include <vector>
 
 #include "dynacore/base/status.h"
+#include "common/core.h"
 
-namespace engine::json {
+namespace dynalm::json {
 
 class Value;
 using Array = std::vector<Value>;
@@ -74,4 +75,4 @@ void dump_to(const Value& v, std::string& out);
 // Appends `s` as a quoted, escaped JSON string.
 void append_quoted(std::string_view s, std::string& out);
 
-}  // namespace engine::json
+}  // namespace dynalm::json

@@ -12,8 +12,9 @@
 #include "tokenizer/pretokenizer.h"
 #include "tokenizer/tokenizer.h"
 #include "tokenizer/unicode.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 // ---------------------------------------------------------------------------
@@ -272,7 +273,7 @@ std::vector<GoldenCase> load_golden(const std::string& path) {
 }
 
 std::unique_ptr<Tokenizer> load_model_tokenizer(const std::string& path) {
-  if (!engine::testing::exists(path)) return nullptr;
+  if (!dynalm::testing::exists(path)) return nullptr;
   auto g = gguf::GgufFile::open(path);
   if (!g.ok()) return nullptr;
   auto data = gguf::read_tokenizer_data(**g);
@@ -302,13 +303,13 @@ void check_golden(const std::string& model, const std::string& golden_file) {
   EXPECT_EQ(mismatches, 0);
 }
 
-TEST(TokenizerGolden, SmolLm2) { check_golden(engine::testing::smollm_model(), "golden_smollm2.txt"); }
-TEST(TokenizerGolden, Qwen25) { check_golden(engine::testing::qwen_model(), "golden_qwen25.txt"); }
-TEST(TokenizerGolden, Gemma3Spm) { check_golden(engine::testing::gemma_model(), "golden_gemma3.txt"); }
+TEST(TokenizerGolden, SmolLm2) { check_golden(dynalm::testing::smollm_model(), "golden_smollm2.txt"); }
+TEST(TokenizerGolden, Qwen25) { check_golden(dynalm::testing::qwen_model(), "golden_qwen25.txt"); }
+TEST(TokenizerGolden, Gemma3Spm) { check_golden(dynalm::testing::gemma_model(), "golden_gemma3.txt"); }
 
 TEST(TokenizerGolden, SmolLm2ChatTemplate) {
-  const std::string path = engine::testing::smollm_model();
-  if (!engine::testing::exists(path)) GTEST_SKIP();
+  const std::string path = dynalm::testing::smollm_model();
+  if (!dynalm::testing::exists(path)) GTEST_SKIP();
   auto g = gguf::GgufFile::open(path);
   ASSERT_TRUE(g.ok());
   auto tmpl = ChatTemplate::from_jinja(gguf::read_chat_template(**g));
@@ -326,14 +327,14 @@ TEST(TokenizerGolden, SmolLm2ChatTemplate) {
 }
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynalm
 
-namespace engine {
+namespace dynalm {
 namespace {
 
 TEST(TokenizerGolden, Qwen25ChatTemplateDefaultSystem) {
-  const std::string path = engine::testing::qwen_model();
-  if (!engine::testing::exists(path)) GTEST_SKIP();
+  const std::string path = dynalm::testing::qwen_model();
+  if (!dynalm::testing::exists(path)) GTEST_SKIP();
   auto g = gguf::GgufFile::open(path);
   if (!g.ok()) GTEST_SKIP() << g.status().to_string();
   auto tmpl = ChatTemplate::from_jinja(gguf::read_chat_template(**g));
@@ -343,4 +344,4 @@ TEST(TokenizerGolden, Qwen25ChatTemplateDefaultSystem) {
 }
 
 }  // namespace
-}  // namespace engine
+}  // namespace dynalm

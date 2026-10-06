@@ -7,26 +7,29 @@ the rest of the engine already guarantees.
 ## What the runtime guarantees today
 
 1. **The model never dereferences device memory.** Every tensor byte the Transformer, KV cache,
-   prefix cache, scheduler or speculative decoder touches goes through a `Backend` op.
+   prefix cache, scheduler or speculative decoder touches goes through a DynaCore `Device` op.
    - **How this is enforced:** `test_device_backend` runs every supported architecture (dense
      and MoE), continuous batching with prefix-cache copy-on-write, and speculative decoding
-     on `GuardedBackend`, a test backend whose memory is `mprotect(PROT_NONE)` except inside
+     on `GuardedBackend`, a test device whose memory is `mprotect(PROT_NONE)` except inside
      its own ops.
    - **What failure looks like:** a stray host access is a SIGSEGV.
    - **What must hold:** results equal the CPU backend bit for bit.
-2. **Weights are placed by the backend.** `Backend::upload(host_tensor)` returns the device
+2. **Weights are placed by the device.** `Device::upload(host_tensor)` returns the device
    copy. CPU returns the same tensor, so loading stays zero-copy from the memory-mapped file.
-3. **Scratch and KV cache are backend allocations.** `Backend::allocate` provides them, and KV
-   copy-on-write uses `Backend::copy`.
+3. **Scratch and KV cache are device allocations.** `Device::allocate` provides them, and KV
+   copy-on-write uses `Device::copy`.
 4. **Host-side decisions use small downloads:**
    - final logits (sampling runs on the host);
    - MoE router logits, `m × experts` floats per layer (top-k routing on the host);
    - the shared-expert gate, `m` floats.
 5. **No CUDA (or other vendor) types leak** into the model, scheduler or KV interfaces.
-   `DeviceType` and `BackendKind` already carry the GPU kinds; `create_backend` reports them
+   `DeviceType` and `DeviceKind` already carry the GPU kinds; `create_device` reports them
    as "not built".
 
-## The interface (`src/backends/backend.h`)
+## The interface (`dynacore/include/dynacore/device/device.h`)
+
+A GPU device lives in DynaCore (`dynacore/gpu/<vendor>/`) and implements `dynacore::Device`.
+Nothing in `dynalm/` changes: it calls the same ops on whichever device it was given (DD-068).
 
 | group | ops | notes |
 |---|---|---|
@@ -64,9 +67,9 @@ them with the launch, or caches them; the tables are constant.
 |---|---|
 | speculative decoding, draft models, KV rollback | `runtime/speculative`, `SeqBatch::logits_last`, `KvBlockTable::truncate` (DD-044) |
 | MoE / expert parallelism | `matmul_many` over experts; routing results are explicit host arrays that an expert-parallel backend can partition (DD-042) |
-| GPU/CPU KV tiers, remote KV | the KV pool is allocated through a `Backend`; blocks are opaque ids with refcounts (prefix cache, COW) |
+| GPU/CPU KV tiers, remote KV | the KV pool is allocated through a `Device`; blocks are opaque ids with refcounts (prefix cache, COW) |
 | prefill/decode disaggregation | scheduler budgets separate prefill and decode rows (DD-027/028) |
-| tensor / pipeline parallelism | not started: would split `Transformer` layers or matmuls across several `Backend` instances |
+| tensor / pipeline parallelism | not started: would split `Transformer` layers or matmuls across several `Device` instances |
 | multimodal | not started |
 
 ## Build flags

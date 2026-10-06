@@ -29,8 +29,9 @@
 
 #include "kv_cache/kv_cache.h"
 #include "tokenizer/tokenizer.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 struct PrefixCacheStats {
   uint64_t lookups = 0;
@@ -73,4 +74,4 @@ std::unique_ptr<PrefixCache> make_hash_prefix_cache(KvBlockPool& pool, int32_t m
 // Radix tree of blocks with token-granular partial-block reuse (DD-030).
 std::unique_ptr<PrefixCache> make_radix_prefix_cache(KvBlockPool& pool, int32_t max_blocks = 0);
 
-}  // namespace engine
+}  // namespace dynalm

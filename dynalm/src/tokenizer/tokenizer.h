@@ -21,8 +21,9 @@
 #include <vector>
 
 #include "dynacore/base/status.h"
+#include "common/core.h"
 
-namespace engine {
+namespace dynalm {
 
 using TokenId = int32_t;
 inline constexpr TokenId kNoToken = -1;
@@ -122,4 +123,4 @@ class Utf8Buffer {
   std::string pending_;
 };
 
-}  // namespace engine
+}  // namespace dynalm

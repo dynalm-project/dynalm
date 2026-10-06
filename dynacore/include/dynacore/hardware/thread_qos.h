@@ -12,7 +12,7 @@
 //   Linux:   no-op (the scheduler has no equivalent per-thread hint).
 // Calls are cheap, idempotent and never fail loudly.
 
-namespace engine {
+namespace dynacore {
 
 // Process-wide hint; call once early (engine creation).
 void request_full_speed_process();
@@ -22,4 +22,4 @@ void request_full_speed_thread();
 // macOS, which has no hard affinity). False if the OS refused.
 bool pin_current_thread(int cpu);
 
-}  // namespace engine
+}  // namespace dynacore

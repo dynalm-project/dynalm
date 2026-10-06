@@ -14,7 +14,7 @@
 #include <utility>
 #include <variant>
 
-namespace engine {
+namespace dynacore {
 
 enum class StatusCode : uint8_t {
   kOk = 0,
@@ -91,7 +91,7 @@ class [[nodiscard]] Result {
   std::variant<Status, T> v_;
 };
 
-}  // namespace engine
+}  // namespace dynacore
 
 #define ENGINE_CONCAT_INNER(a, b) a##b
 #define ENGINE_CONCAT(a, b) ENGINE_CONCAT_INNER(a, b)
@@ -99,7 +99,7 @@ class [[nodiscard]] Result {
 // Propagate a non-OK Status.
 #define ENGINE_RETURN_IF_ERROR(expr)              \
   do {                                            \
-    ::engine::Status _st = (expr);                \
+    ::dynacore::Status _st = (expr);                \
     if (!_st.ok()) return _st;                    \
   } while (0)
 

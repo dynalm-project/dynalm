@@ -15,7 +15,7 @@
 #include <string>
 #endif
 
-namespace engine {
+namespace dynacore {
 
 #if ENGINE_OS_WINDOWS
 
@@ -87,4 +87,4 @@ double process_cpu_seconds() {
 
 #endif
 
-}  // namespace engine
+}  // namespace dynacore
