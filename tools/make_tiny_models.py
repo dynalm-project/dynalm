@@ -3,10 +3,10 @@
 reference outputs from tools/ref_model.py, for adapter tests that need no
 downloads.
 
-    PYTHONUTF8=1 python tools/make_tiny_models.py tests/data [arch ...]
+    PYTHONUTF8=1 python tools/make_tiny_models.py dynalm/tests/data [arch ...]
 
 Each model: 2-3 layers, hidden 64, byte-level vocab of 260 tokens, f16
-weights, fixed seed. Output: tests/data/tiny_<arch>.gguf and ref_tiny_<arch>.txt.
+weights, fixed seed. Output: dynalm/tests/data/tiny_<arch>.gguf and ref_tiny_<arch>.txt.
 """
 import os
 import subprocess

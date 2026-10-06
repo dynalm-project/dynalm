@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""GPTQ/AWQ fixtures: quantizes the linear layers of tests/data/hf_tiny_llama
+"""GPTQ/AWQ fixtures: quantizes the linear layers of dynalm/tests/data/hf_tiny_llama
 (round-to-nearest per group), packs them exactly as AutoGPTQ / AutoAWQ do,
 and writes for each variant
 
-    tests/data/hf_tiny_llama_<variant>/      packed checkpoint (config.json with quantization_config)
-    tests/data/hf_tiny_llama_<variant>_ref/  the same model with W = scale * (q - zero) as F32
+    dynalm/tests/data/hf_tiny_llama_<variant>/      packed checkpoint (config.json with quantization_config)
+    dynalm/tests/data/hf_tiny_llama_<variant>_ref/  the same model with W = scale * (q - zero) as F32
 
 The _ref directories are the independent oracle: they are computed here with
 NumPy from the codes, not by unpacking.
 
-    PYTHONUTF8=1 python tools/make_tiny_quant_hf.py tests/data
+    PYTHONUTF8=1 python tools/make_tiny_quant_hf.py dynalm/tests/data
 """
 import json
 import os

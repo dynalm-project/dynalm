@@ -9,6 +9,6 @@ Third-party components (not stored in this repository; fetched at build time):
 - GoogleTest v1.15.2 (BSD 3-Clause License), https://github.com/google/googletest
   Used only to build the tests.
 
-Test data: tests/data/granite31_chat_template.jinja is the chat template of IBM
-Granite 3.1 (Apache License 2.0). The tiny models under tests/data are generated
+Test data: dynalm/tests/data/granite31_chat_template.jinja is the chat template of IBM
+Granite 3.1 (Apache License 2.0). The tiny models under dynalm/tests/data are generated
 with random weights by the scripts in tools/ and contain no third-party weights.

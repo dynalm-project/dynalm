@@ -30,7 +30,7 @@ wait_health() {
 bench() {  # $1 = port, $2 = label
   MSYS_NO_PATHCONV=1 docker run --rm --add-host=host.docker.internal:host-gateway \
     -v "$SRC:/src" -v dynalm-linux-build:/src/build dynalm-dev \
-    /src/build/linux-release/src/dynalm benchmark "/src/models/$MODEL" --url "http://host.docker.internal:$1" \
+    /src/build/linux-release/bin/dynalm benchmark "/src/models/$MODEL" --url "http://host.docker.internal:$1" \
     --concurrency "$CONC" --prompt "$PROMPTS" --output "$OUTPUTS" --out "/src/$OUT.$2"
   # Label rows by target name for the report.
   python - "$OUT.$2" "$2" "$OUT" <<'PY'
@@ -46,7 +46,7 @@ PY
 echo "== DynaLM (threads $THREADS)"
 docker rm -f bench-dynalm >/dev/null 2>&1 || true
 MSYS_NO_PATHCONV=1 docker run -d --name bench-dynalm -p 127.0.0.1:8000:8000 -v "$SRC:/src" -v dynalm-linux-build:/src/build \
-  dynalm-dev /src/build/linux-release/src/dynalm --log-level warn serve "/src/models/$MODEL" --host 0.0.0.0 --port 8000 \
+  dynalm-dev /src/build/linux-release/bin/dynalm --log-level warn serve "/src/models/$MODEL" --host 0.0.0.0 --port 8000 \
   -t "$THREADS" --ctx 32768 >/dev/null
 wait_health 8000
 bench 8000 "dynalm"

@@ -10,7 +10,7 @@ HF checkpoint of the same weights would contain:
 
 The engine must load both forms to the same logits (test_safetensors).
 
-    PYTHONUTF8=1 python tools/make_tiny_hf.py tests/data
+    PYTHONUTF8=1 python tools/make_tiny_hf.py dynalm/tests/data
 """
 import json
 import os

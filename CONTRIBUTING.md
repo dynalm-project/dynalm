@@ -34,7 +34,7 @@ and Windows (MSVC). A pull request should keep all of them green.
 - **Add a test.**
   - Every fix gets a regression test.
   - Every new kernel or model is checked against a reference: see `tools/ref_model.py` and the tiny-model
-    fixtures in `tests/data`.
+    fixtures in `dynalm/tests/data`.
 - **No fake implementations.** An unsupported feature must fail with a clear error, never silently produce
   wrong output.
 - **Measure performance changes.** A change that claims a speedup includes before and after numbers from

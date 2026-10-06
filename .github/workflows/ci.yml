@@ -41,7 +41,7 @@ jobs:
       - run: cmake --preset linux-release
       - run: cmake --build --preset linux-release
       - run: ctest --preset linux-release --timeout 900
-      - run: ./build/linux-release/src/dynalm version
+      - run: ./build/linux-release/bin/dynalm version
 
   windows:
     name: windows-x64 (MSVC)
@@ -63,7 +63,7 @@ jobs:
       - run: cmake --preset macos-release
       - run: cmake --build --preset macos-release
       - run: ctest --preset macos-release --timeout 900
-      - run: ./build/macos-release/src/dynalm info
+      - run: ./build/macos-release/bin/dynalm info
 
   install-scripts:
     name: install script (${{ matrix.os }})

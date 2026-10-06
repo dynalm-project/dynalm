@@ -22,7 +22,7 @@ mkdir -p "$(dirname "$OUT")"
 curl -s -m 3 http://127.0.0.1:11434/api/version >/dev/null || { echo "ollama is not running" >&2; exit 1; }
 MSYS_NO_PATHCONV=1 docker run --rm --add-host=host.docker.internal:host-gateway \
   -v "$SRC:/src" -v dynalm-linux-build:/src/build dynalm-dev \
-  /src/build/linux-release/src/dynalm benchmark "/src/models/$MODEL" --url "http://host.docker.internal:11434" \
+  /src/build/linux-release/bin/dynalm benchmark "/src/models/$MODEL" --url "http://host.docker.internal:11434" \
   --model-name "$OLLAMA_MODEL" --concurrency "$CONC" --prompt "$PROMPTS" --output "$OUTPUTS" --out "/src/$OUT.tmp"
 python - "$OUT.tmp" "$OUT" <<'PY'
 import json, sys

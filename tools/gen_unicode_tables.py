@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Generates src/tokenizer/unicode_tables.inc from Python's unicodedata.
+"""Generates dynalm/src/tokenizer/unicode_tables.inc from Python's unicodedata.
 
 Emits sorted, merged code-point ranges for the categories the pre-tokenizers
 need: letters (\\p{L}), numbers (\\p{N}) and White_Space (\\s).
 
-    PYTHONUTF8=1 python tools/gen_unicode_tables.py > src/tokenizer/unicode_tables.inc
+    PYTHONUTF8=1 python tools/gen_unicode_tables.py > dynalm/src/tokenizer/unicode_tables.inc
 """
 import sys
 import unicodedata

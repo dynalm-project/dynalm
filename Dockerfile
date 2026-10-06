@@ -14,7 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends g++ cmake ninja
 WORKDIR /src
 COPY CMakeLists.txt CMakePresets.json README.md CHANGELOG.md LICENSE NOTICE ./
 COPY cmake cmake
-COPY src src
+COPY dynacore dynacore
+COPY dynalm dynalm
 COPY docs docs
 RUN cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
       -DENABLE_TESTS=OFF -DENABLE_BENCHMARKS=OFF -DDYNALM_STATIC_RUNTIME=ON \

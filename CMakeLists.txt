@@ -97,22 +97,29 @@ endforeach()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(EngineCompilerFlags)
 
-add_subdirectory(src)
+# Two libraries, one product (DD-068):
+#   dynacore        low-level inference runtime (tensors, memory, devices, kernels)
+#   dynalm_runtime  LLM platform on top of it (models, scheduler, KV policy, API)
+# DynaCore never depends on DynaLM; the core-only build proves it.
+option(DYNALM_CORE_ONLY "Configure only DynaCore and its tests (boundary check)" OFF)
 
 if(ENABLE_TESTS)
   enable_testing()
-  add_subdirectory(tests)
+  include(DynalmTesting)
 endif()
 
-if(ENABLE_BENCHMARKS)
-  add_subdirectory(benchmarks)
+add_subdirectory(dynacore)
+if(NOT DYNALM_CORE_ONLY)
+  add_subdirectory(dynalm)
 endif()
 
 # --- install + packages -------------------------------------------------------
 #   cmake --install build --prefix ~/.local     -> bin/dynalm, share/doc/dynalm
 #   cpack --config build/CPackConfig.cmake      -> dynalm-<ver>-<os>-<arch>.zip/.tar.gz
 include(GNUInstallDirs)
-install(TARGETS dynalm RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+if(NOT DYNALM_CORE_ONLY)
+  install(TARGETS dynalm RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
 install(FILES README.md CHANGELOG.md LICENSE NOTICE DESTINATION ${CMAKE_INSTALL_DOCDIR})
 install(DIRECTORY docs/ DESTINATION ${CMAKE_INSTALL_DOCDIR}/docs)
 set(CPACK_PACKAGE_NAME dynalm)

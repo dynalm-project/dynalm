@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Generates tokenizer golden fixtures from HF reference tokenizers.
 
-    PYTHONUTF8=1 python tools/gen_tokenizer_golden.py models/hf/smollm2/tokenizer.json tests/data/golden_smollm2.txt
-    PYTHONUTF8=1 python tools/gen_tokenizer_golden.py models/hf/qwen25/tokenizer.json tests/data/golden_qwen25.txt
+    PYTHONUTF8=1 python tools/gen_tokenizer_golden.py models/hf/smollm2/tokenizer.json dynalm/tests/data/golden_smollm2.txt
+    PYTHONUTF8=1 python tools/gen_tokenizer_golden.py models/hf/qwen25/tokenizer.json dynalm/tests/data/golden_qwen25.txt
 
 Output format, one case per line:  <hex-encoded UTF-8 text>\t<space-separated ids>
 (no special tokens added; special-token text in inputs is parsed as HF does).

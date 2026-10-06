@@ -4,7 +4,7 @@
 #
 #   tools/perf_sweep.sh [quick|full] [OUT_DIR]
 #
-# Env: DYNALM (binary, default: dynalm on PATH or build/*/src/dynalm[.exe]),
+# Env: DYNALM (binary, default: dynalm on PATH or build/*/bin/dynalm[.exe]),
 #      MODELS_DIR (default models/). Models that are absent are skipped.
 # Every point appends one JSON line to OUT_DIR/sweep.jsonl; OUT_DIR/report.md
 # and OUT_DIR/graphs/*.svg are rewritten at the end. Run on an idle machine:
@@ -16,8 +16,8 @@ out="${2:-results/sweep-$(date +%Y%m%d-%H%M%S)}"
 models="${MODELS_DIR:-models}"
 bin="${DYNALM:-}"
 if [[ -z "$bin" ]]; then
-  for c in "$(command -v dynalm || true)" build/msvc-release/src/dynalm.exe build/linux-release/src/dynalm \
-           build/macos-release/src/dynalm; do
+  for c in "$(command -v dynalm || true)" build/msvc-release/bin/dynalm.exe build/linux-release/bin/dynalm \
+           build/macos-release/bin/dynalm; do
     if [[ -n "$c" && -x "$c" ]]; then bin="$c"; break; fi
   done
 fi

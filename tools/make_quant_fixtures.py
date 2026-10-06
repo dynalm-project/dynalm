@@ -4,7 +4,7 @@
 For each GGML block type: random block bytes (with the fp16 scale fields set to
 sane values so outputs are finite) and the expected fp32 values.
 
-    PYTHONUTF8=1 python tools/make_quant_fixtures.py tests/data/quant
+    PYTHONUTF8=1 python tools/make_quant_fixtures.py dynacore/tests/data/quant
 
 Writes <type>.bin (raw blocks) and <type>.f32 (expected little-endian floats).
 """
