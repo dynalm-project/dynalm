@@ -197,6 +197,7 @@ Yes. DynaLM is licensed under Apache-2.0. The models you run have their own lice
 - [docs/gpu-backend.md](docs/gpu-backend.md): the GPU backend contract.
 - [docs/platform-design.md](docs/platform-design.md): DynaLM on DynaCore, the low-level runtime it is built on.
 - [docs/configuration.md](docs/configuration.md): zero-config defaults, `~/.dynalm/config.yaml`, environment variables.
+- [docs/installation.md](docs/installation.md), [docs/build.md](docs/build.md), [docs/api.md](docs/api.md), [docs/dynacore.md](docs/dynacore.md), [docs/dynalm.md](docs/dynalm.md).
 - DynaCore compiler: [IR](docs/dynacore-ir.md), [compiler and compiled execution](docs/dynacore-compiler.md),
   [language and dynacorec](docs/dynacore-language.md), [optimization log](docs/dynacore-optimization.md),
   [backends](docs/compiler-backends.md), [benchmarks](docs/compiler-benchmarks.md).

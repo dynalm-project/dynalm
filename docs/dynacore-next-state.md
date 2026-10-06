@@ -1,4 +1,25 @@
-# DynaCore next generation: starting state (2026-10-06)
+# DynaCore next generation: state audit
+
+## Status after the compiler roadmap (2026-10-07)
+
+| Roadmap item | State | Where |
+|---|---|---|
+| IR foundation, verifier, printer/parser, shape/type/layout | done | dynacore-ir.md, DD-071 |
+| Recording device (trace + deferred), op-level profiler | done | `bench_op_trace` |
+| Canonicalization, memory analysis, cost model, kernel selection | done | passes.h |
+| Fusion (Q/K/V groups, gated MLP), decode-shaped only | done, measured | DD-072 |
+| Compiled execution in DynaLM, fallback, plan cache (= kernel cache), metrics | done | `--execution compiled` |
+| Benchmark framework (decode A/B, end to end, dynacorec) | done | compiler-benchmarks.md |
+| Inference language, parser, language → IR, dynacorec | done | DD-073 |
+| Tile selection, vectorization, prefetch | not built: no measured headroom (GEMVs at 88–96% of DRAM) | compiler-backends.md |
+| AVX-VNNI / AVX-512 / AMX code generation | not built: VNNI measured slower (DD-058); no AVX-512/AMX hardware here | |
+| CUDA backend | blocked: no NVIDIA GPU on this machine | gpu-backend.md |
+| Runtime JIT | not needed: the plan cache specializes per shape without code generation | |
+| q8_0 KV | done, opt-in (speed neutral, −47% memory) | DD-074 |
+
+The rest of this page is the audit as taken before the work started.
+
+# Starting state (2026-10-06)
 
 This audit was taken before the IR/compiler work. It covers what exists, what is partial, and
 what has not started. It also records the measurements that decide where a compiler can help.
