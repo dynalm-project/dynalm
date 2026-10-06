@@ -20,8 +20,8 @@
 #include "backends/kernel_plan.h"
 #include "common/status.h"
 #include "kv_cache/kv_layout.h"
+#include "backends/ops.h"
 #include "memory/storage.h"
-#include "model_ir/model_config.h"
 #include "tensor/tensor.h"
 
 namespace engine {
