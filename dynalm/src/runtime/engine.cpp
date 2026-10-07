@@ -185,6 +185,10 @@ Engine::~Engine() {
   }
   wake_cv_.notify_all();
   if (thread_.joinable()) thread_.join();
+  // Compiled execution: run recorded work while the buffers it references
+  // (transformer scratch, KV) still exist, after the scheduler thread (the
+  // device's only other user) has stopped.
+  if (compiled_) (void)static_cast<dynacore::ir::RecordingDevice&>(*compiled_).flush();
   if (core_) {  // null when create() failed part-way (e.g. a corrupt model file)
     std::lock_guard<std::mutex> lock(core_->mu);
     core_->sched = nullptr;  // streams' cancel() becomes a no-op

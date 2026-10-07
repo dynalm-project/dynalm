@@ -83,7 +83,7 @@ int cmd_version() {
               dynacore::os_info().arch.c_str());
   std::printf("kernels:  generic%s%s%s%s (selected at run time: %s)\n", ENGINE_HAS_AVX2 ? " avx2" : "",
               ENGINE_HAS_AVX512 ? " avx512" : "", ENGINE_HAS_AMX ? " amx" : "", ENGINE_HAS_NEON ? " neon" : "",
-              std::string(dynalm::isa_name(dynalm::select_best_isa(dynalm::cpu_info().features))).c_str());
+              std::string(dynalm::isa_name(dynalm::select_isa(dynalm::cpu_info().features))).c_str());
   std::printf("devices:  cpu; cuda, hip, metal, vulkan: designed, not built (DD-045)\n");
   return 0;
 }

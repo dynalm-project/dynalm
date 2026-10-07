@@ -6,6 +6,7 @@
 // by the running CPU/OS. The kernel dispatcher picks the best usable tier once
 // at startup; kernels never re-check features per call.
 
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -37,5 +38,11 @@ CpuIsa select_best_isa(const CpuFeatures& f);
 bool parse_isa(std::string_view s, CpuIsa& out);
 
 std::vector<CpuIsa> usable_isas(const CpuFeatures& f);
+
+// The tier a device should use: DYNACORE_ISA (generic|avx2|avx512|amx|neon)
+// when that tier is usable here, otherwise the best usable tier. An
+// unusable or unknown request falls back instead of failing; `note` (if
+// given) says what happened, for diagnostics.
+CpuIsa select_isa(const CpuFeatures& f, std::string* note = nullptr);
 
 }  // namespace dynacore

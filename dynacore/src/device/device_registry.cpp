@@ -31,7 +31,7 @@ std::vector<DeviceKind> compiled_devices() { return {DeviceKind::kCpu}; }
 
 Result<std::unique_ptr<Device>> create_device(DeviceKind kind, ThreadPool& pool) {
   if (kind == DeviceKind::kCpu) {
-    return std::unique_ptr<Device>(std::make_unique<CpuDevice>(pool, select_best_isa(cpu_info().features)));
+    return std::unique_ptr<Device>(std::make_unique<CpuDevice>(pool, select_isa(cpu_info().features)));
   }
   return Unsupported("the " + std::string(device_kind_name(kind)) +
                      " backend is not built in this version: GPU backends are designed (docs/gpu-backend.md, "

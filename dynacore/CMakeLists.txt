@@ -63,7 +63,7 @@ if(ENABLE_TESTS)
     target_link_libraries(${name} PRIVATE dynacore GTest::gtest_main)
     target_compile_definitions(${name} PRIVATE ENGINE_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data"
                                              DYNACORE_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
-    gtest_discover_tests(${name} DISCOVERY_TIMEOUT 60)
+    gtest_discover_tests(${name} DISCOVERY_TIMEOUT 60 PROPERTIES LABELS dynacore)
   endfunction()
   dynacore_add_test(dynacore_test_foundation tests/test_status.cpp tests/test_cpu_info.cpp)
   dynacore_add_test(dynacore_test_tensor tests/test_dtype.cpp tests/test_tensor.cpp)

@@ -1,11 +1,13 @@
 #pragma once
 
-// `dynalm doctor`: one report with everything a bug report needs (versions,
-// OS, CPU and ISA, memory, GPUs, the device DynaLM will use, model store),
-// plus actionable warnings. Text for people, JSON (--json) for issue forms.
+// `dynalm doctor`: one report with everything an installation problem report
+// needs (versions, platform, CPU and ISA, the backend DynaLM will use,
+// memory, install location, model store), a short DynaCore kernel self-test,
+// and actionable warnings. Text for people, JSON (--json) for issue forms.
 
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "common/core.h"
@@ -15,7 +17,7 @@ namespace dynalm {
 struct DoctorReport {
   // Build.
   std::string dynalm_version, dynacore_version, build_type, compiler;
-  std::vector<std::string> compiled_isas;  // "generic", "avx2", ...
+  std::vector<std::string> compiled_isas;     // "generic", "avx2", ...
   std::vector<std::string> compiled_devices;  // "cpu"
   // System.
   std::string os, os_version, arch;
@@ -31,12 +33,19 @@ struct DoctorReport {
   };
   std::vector<Gpu> gpus;
   // What DynaLM will use.
-  std::string device;       // "CPU"
-  std::string kernel;       // best compiled and supported ISA tier
-  int32_t threads = 0;      // default compute threads
-  std::string model_store;  // directory
+  std::string device;    // "CPU"
+  std::string kernel;    // selected ISA tier
+  std::string isa_note;  // DYNACORE_ISA override / fallback, empty if none
+  int32_t threads = 0;   // default compute threads
+  // Installation.
+  std::string executable;
+  bool dynacorec_found = false;
+  std::string model_store;
   int32_t local_models = 0;
   std::string config_file;  // empty when none
+  // Checks.
+  bool dynacore_ok = false;
+  std::string dynacore_detail;
   // Problems worth acting on, one line each.
   std::vector<std::string> warnings;
   bool ready = true;

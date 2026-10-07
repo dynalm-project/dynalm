@@ -45,32 +45,41 @@ dynalm serve models/Qwen3-4B-Q4_K_M.gguf --port 8000       # OpenAI-compatible s
 
 ## Install
 
-| Platform | Command | Status |
-|---|---|---|
-| Linux (x86-64, ARM64) | `./scripts/install.sh` | ✅ tested in CI |
-| macOS (Apple Silicon, Intel) | `./scripts/install.sh` | ✅ tested in CI (Apple Silicon) |
-| Windows 10/11 (x64) | `powershell -ExecutionPolicy Bypass -File scripts\install.ps1 -AddToPath` | ✅ tested in CI |
-| Docker (amd64, arm64) | `docker build -t dynalm .` | ✅ tested in CI |
-
-You need a C++20 compiler and CMake ≥ 3.24.
-- On macOS: `xcode-select --install && brew install cmake ninja`.
-- On Windows: Visual Studio 2022 Build Tools with the C++ workload.
-
-The installers build a release binary and put `dynalm` in `~/.local/bin` (Linux/macOS) or
-`%LOCALAPPDATA%\Programs\DynaLM\bin` (Windows).
+**Linux and macOS:**
 
 ```sh
-git clone https://github.com/dynalm-project/dynalm.git && cd dynalm
-./scripts/install.sh            # or scripts\install.ps1 on Windows
-dynalm info                     # your CPU, its SIMD features and the kernels DynaLM will use
+curl -fsSL https://raw.githubusercontent.com/dynalm-project/dynalm/main/scripts/install.sh | sh
 ```
 
-Docker:
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/dynalm-project/dynalm/main/scripts/install.ps1 | iex
+```
+
+The installers:
+
+1. download the release archive for your OS and CPU;
+2. verify its SHA-256 against the release's `SHA256SUMS`;
+3. install `dynalm` and `dynacorec` for your user only, with no sudo or administrator rights;
+4. run `dynalm --version`.
+
+Install locations: `~/.local/bin` on Linux and macOS, `%LOCALAPPDATA%\Programs\DynaLM\bin` on
+Windows.
+
+Then:
 
 ```sh
-docker build -t dynalm .
-docker run --rm -p 8000:8000 -v "$PWD/models:/models" dynalm serve /models/model.gguf
+dynalm doctor              # your CPU, its features, the kernels DynaLM will use, a self-test
+dynalm pull qwen3:4b
+dynalm run qwen3:4b
 ```
+
+Release archives: Linux x86-64 and ARM64, macOS Apple Silicon and Intel, Windows x86-64.
+
+Other routes: build from source (`scripts/install.sh --from-source`) or use Docker. Details,
+including manual download and checksum verification, are in
+[docs/installation.md](docs/installation.md).
 
 ## Use
 

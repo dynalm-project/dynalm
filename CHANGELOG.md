@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Cross-platform CPU release
+- Release archives `dynalm-{linux-x86_64,linux-arm64,macos-arm64,macos-x86_64}.tar.gz` and
+  `dynalm-windows-x86_64.zip`, plus `SHA256SUMS`. Every archive is built, tested, installed
+  through the installer and smoke-tested before it is published (`tools/ci/package.sh`).
+- `scripts/install.sh` and `scripts/install.ps1` download the release for the detected
+  platform, verify its SHA-256 and install per user. The old build path is now
+  `--from-source` / `-FromSource`.
+- `dynalm doctor` has a new layout. It adds the install path, `dynacorec` presence and a
+  DynaCore kernel self-test (selected ISA vs generic).
+- `DYNACORE_ISA=generic|avx2|neon|...` forces a kernel tier. An unavailable tier falls back
+  with a note.
+- Smoke tests (ctest label `smoke`): version, doctor, inference with the best tier and with
+  generic, compiled execution, dynacorec, and `serve` with the OpenAI endpoints. All run on a
+  committed tiny model, offline. ctest labels: `dynacore`, `dynalm`, `boundary`, `smoke`.
+- Fixed: `--execution compiled` crashed when an engine was destroyed before its first forward
+  pass, for example after `dynalm run` failed early.
+
 ### DynaCore compiler and compiled execution (DD-071..073)
 - DynaCore IR (inference-typed SSA: quantized weights, paged KV, gqa), verifier, text form,
   recording device, passes (kernel selection, Q/K/V grouping, gated-MLP fusion), plan cache.

@@ -22,3 +22,4 @@ __pycache__/
 /results/*.log
 /results/*.md
 !dynalm/tests/data/hf_tiny_*/model.safetensors
+/dist/

@@ -49,6 +49,22 @@ in this repository.
   - the boundary check `boundary.dynacore`.
 - Real-model tests skip themselves when `models/*.gguf` are absent (`tools/fetch_models.sh`).
 
+## Test labels and smoke tests
+
+| Label | Contents |
+|---|---|
+| `dynacore` | DynaCore unit tests: tensor, quant, kernels, IR, language |
+| `dynalm` | DynaLM unit and integration tests |
+| `boundary` | `tests/boundary/check_boundary.py` |
+| `smoke` | `tests/smoke/cli_smoke.cmake` (version, doctor, inference with the best ISA, generic and compiled, dynacorec) and `tests/smoke/serve_smoke.py` (serve + OpenAI endpoints), on a committed tiny model |
+
+Run them with `ctest --preset msvc-release -L smoke` (or `-L dynacore`, ...).
+
+The smoke scripts also run against installed binaries. `tools/ci/package.sh` builds the
+release archive, installs it through the installer into an empty prefix, and runs them plus
+`tools/ci/check_isa.py`, which checks that the kernel tier matches the CPU and that the
+generic fallback works.
+
 ## Boundary
 
 - `tests/boundary/check_boundary.py` fails if anything under `dynacore/` includes a

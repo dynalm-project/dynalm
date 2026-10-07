@@ -1,5 +1,7 @@
 #include "dynacore/hardware/isa.h"
 
+#include <cstdlib>
+
 #include "dynacore/base/platform.h"
 
 namespace dynacore {
@@ -54,6 +56,29 @@ std::vector<CpuIsa> usable_isas(const CpuFeatures& f) {
 }
 
 CpuIsa select_best_isa(const CpuFeatures& f) { return usable_isas(f).front(); }
+
+CpuIsa select_isa(const CpuFeatures& f, std::string* note) {
+  const CpuIsa best = select_best_isa(f);
+  const char* env = std::getenv("DYNACORE_ISA");
+  if (env == nullptr || *env == '\0') {
+    if (note) note->clear();
+    return best;
+  }
+  CpuIsa want;
+  if (!parse_isa(env, want)) {
+    if (note) *note = "DYNACORE_ISA=" + std::string(env) + " is unknown; using " + std::string(isa_name(best));
+    return best;
+  }
+  if (!isa_compiled(want) || !isa_supported(want, f)) {
+    if (note) {
+      *note = "DYNACORE_ISA=" + std::string(env) + " is not available on this CPU/build; using " +
+              std::string(isa_name(best));
+    }
+    return best;
+  }
+  if (note) *note = "forced by DYNACORE_ISA";
+  return want;
+}
 
 bool parse_isa(std::string_view s, CpuIsa& out) {
   for (CpuIsa isa : {CpuIsa::kGeneric, CpuIsa::kAvx2, CpuIsa::kAvx512, CpuIsa::kAmx, CpuIsa::kNeon}) {

@@ -179,5 +179,20 @@ TEST(Compiled, EngineExecutionModeOption) {
   (void)tokens;
 }
 
+TEST(Compiled, EngineTornDownBeforeAnyForwardPass) {
+  // Regression: ops recorded while the Transformer was built were replayed by
+  // the recorder's destructor into freed scratch (segfault after `dynalm run`
+  // failed early, e.g. on a model without a chat template).
+  for (int i = 0; i < 3; ++i) {
+    EngineOptions o;
+    o.model_path = data("tiny_qwen3.gguf");
+    o.threads = 2;
+    o.kv_tokens = 128;
+    o.execution = ExecutionMode::kCompiled;
+    auto e = Engine::create(o);
+    ASSERT_TRUE(e.ok()) << e.status().to_string();
+  }
+}
+
 }  // namespace
 }  // namespace dynalm

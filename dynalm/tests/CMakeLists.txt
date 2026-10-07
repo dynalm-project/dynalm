@@ -29,7 +29,7 @@ function(engine_add_test name)
     ENGINE_TEST_MODEL_Q8_PATH="${ENGINE_TEST_MODEL_Q8}"
     ENGINE_TEST_MODEL_QWEN_Q4_PATH="${ENGINE_TEST_MODEL_QWEN_Q4}"
     ENGINE_TEST_MODEL_GRANITE_MOE_PATH="${ENGINE_TEST_MODEL_GRANITE_MOE}")
-  gtest_discover_tests(${name} DISCOVERY_TIMEOUT 60)
+  gtest_discover_tests(${name} DISCOVERY_TIMEOUT 60 PROPERTIES LABELS dynalm)
 endfunction()
 
 engine_add_test(test_logging

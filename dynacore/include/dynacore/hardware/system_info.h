@@ -28,6 +28,9 @@ struct GpuInfo {
   std::string driver;  // driver API version, e.g. "12.4"
 };
 
+// Absolute path of the running executable (empty if unknown).
+std::string executable_path();
+
 // GPUs visible through installed drivers (empty when none or no driver).
 // Probed once and cached; thread-safe.
 const std::vector<GpuInfo>& gpu_info();

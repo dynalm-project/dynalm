@@ -127,8 +127,9 @@ RecordingDevice::RecordingDevice(Device& inner, Mode mode)
 }
 
 RecordingDevice::~RecordingDevice() {
-  // Never drop recorded work silently.
-  if (ncalls_ > 0) (void)flush();
+  // Pending calls are not replayed here: the buffers they reference belong to
+  // the caller and may already be gone (an engine torn down after a failed
+  // start). Owners sync before destroying their buffers (Engine::~Engine).
 }
 
 void RecordingDevice::set_name(const void* data, std::string name) { names_[data] = std::move(name); }

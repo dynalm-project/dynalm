@@ -111,6 +111,7 @@ if(ENABLE_TESTS)
   if(Python3_FOUND)
     add_test(NAME boundary.dynacore
              COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/tests/boundary/check_boundary.py)
+    set_tests_properties(boundary.dynacore PROPERTIES LABELS boundary)
   endif()
 endif()
 
@@ -119,9 +120,36 @@ if(NOT DYNALM_CORE_ONLY)
   add_subdirectory(dynalm)
 endif()
 
+# Smoke tests (label "smoke"): the built binaries end to end, offline, with a
+# committed tiny model. tests/smoke/ also runs against installed binaries.
+if(ENABLE_TESTS AND NOT DYNALM_CORE_ONLY)
+  set(_smoke_model ${CMAKE_CURRENT_SOURCE_DIR}/dynalm/tests/data/tiny_llama.gguf)
+  add_test(NAME smoke.cli
+           COMMAND ${CMAKE_COMMAND} -DDYNALM=$<TARGET_FILE:dynalm> -DDYNACOREC=$<TARGET_FILE:dynacorec>
+                   -DMODEL=${_smoke_model} -DDYNA=${CMAKE_CURRENT_SOURCE_DIR}/examples/dynacore/decoder_layer.dyna
+                   -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke/cli_smoke.cmake)
+  set_tests_properties(smoke.cli PROPERTIES LABELS smoke TIMEOUT 600)
+  if(ENABLE_SERVER AND Python3_FOUND)
+    add_test(NAME smoke.serve
+             COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke/serve_smoke.py
+                     $<TARGET_FILE:dynalm> ${_smoke_model})
+    add_test(NAME smoke.serve_compiled
+             COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke/serve_smoke.py
+                     $<TARGET_FILE:dynalm> ${_smoke_model} --execution compiled)
+    set_tests_properties(smoke.serve smoke.serve_compiled PROPERTIES LABELS smoke TIMEOUT 300 RUN_SERIAL TRUE)
+  endif()
+endif()
+
 # --- install + packages -------------------------------------------------------
 #   cmake --install build --prefix ~/.local     -> bin/dynalm, share/doc/dynalm
-#   cpack --config build/CPackConfig.cmake      -> dynalm-<ver>-<os>-<arch>.zip/.tar.gz
+#   cpack --config build/CPackConfig.cmake      -> dynalm-<os>-<arch>.zip/.tar.gz
+#
+# Archive names carry no version, so "latest" download links and the
+# installers stay stable (scripts/install.sh, scripts/install.ps1); the
+# version is in `dynalm --version` and in the release tag. <os> is linux,
+# macos or windows; <arch> is x86_64 or arm64. Layout:
+#   dynalm-<os>-<arch>/bin/{dynalm,dynacorec}
+#   dynalm-<os>-<arch>/share/doc/dynalm/{README.md,LICENSE,NOTICE,CHANGELOG.md,docs/}
 include(GNUInstallDirs)
 install(TARGETS dynacorec RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 if(NOT DYNALM_CORE_ONLY)
@@ -134,7 +162,10 @@ set(CPACK_PACKAGE_VENDOR "DynaLM")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "${PROJECT_DESCRIPTION}")
 set(CPACK_RESOURCE_FILE_LICENSE "${PROJECT_SOURCE_DIR}/LICENSE")
 string(TOLOWER "${CMAKE_SYSTEM_NAME}" _dynalm_os)
-set(CPACK_PACKAGE_FILE_NAME "dynalm-${PROJECT_VERSION}-${_dynalm_os}-${DYNALM_ARCH}")
+if(_dynalm_os STREQUAL "darwin")
+  set(_dynalm_os macos)
+endif()
+set(CPACK_PACKAGE_FILE_NAME "dynalm-${_dynalm_os}-${DYNALM_ARCH}")
 if(WIN32)
   set(CPACK_GENERATOR ZIP)
 else()

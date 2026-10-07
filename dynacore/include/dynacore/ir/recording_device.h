@@ -103,7 +103,9 @@ class RecordingDevice final : public Device {
   const RecordingStats& stats() const { return stats_; }
   Device& inner() { return inner_; }
 
-  // Runs everything recorded so far (deferred mode).
+  // Runs everything recorded so far (deferred mode). Call it (or any sync
+  // point) before destroying buffers the recorded calls use: the destructor
+  // discards pending calls.
   Status flush();
 
   // --- Device ---

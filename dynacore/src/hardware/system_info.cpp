@@ -18,8 +18,13 @@
 #endif
 
 #if defined(__APPLE__)
+#include <mach-o/dyld.h>
 #include <sys/sysctl.h>
 #endif
+#if defined(__linux__)
+#include <unistd.h>
+#endif
+#include <filesystem>
 
 #include <fstream>
 
@@ -132,6 +137,27 @@ std::vector<GpuInfo> detect_gpus() {
 }
 
 }  // namespace
+
+std::string executable_path() {
+#if defined(_WIN32)
+  char buf[MAX_PATH * 4] = {};
+  const DWORD n = GetModuleFileNameA(nullptr, buf, sizeof(buf));
+  return n > 0 && n < sizeof(buf) ? std::string(buf, n) : std::string();
+#elif defined(__APPLE__)
+  char buf[4096] = {};
+  uint32_t size = sizeof(buf);
+  if (_NSGetExecutablePath(buf, &size) != 0) return {};
+  std::error_code ec;
+  const auto p = std::filesystem::weakly_canonical(buf, ec);
+  return ec ? std::string(buf) : p.string();
+#elif defined(__linux__)
+  std::error_code ec;
+  const auto p = std::filesystem::read_symlink("/proc/self/exe", ec);
+  return ec ? std::string() : p.string();
+#else
+  return {};
+#endif
+}
 
 const OsInfo& os_info() {
   static const OsInfo info = detect_os();

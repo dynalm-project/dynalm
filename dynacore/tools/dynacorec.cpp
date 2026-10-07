@@ -199,7 +199,7 @@ int main(int argc, char** argv) {
 
   // Benchmark: unplanned (one call per op) vs the compiled plan, interleaved.
   ThreadPool pool(nthreads);
-  CpuDevice cpu(pool, select_best_isa(cpu_info().features));
+  CpuDevice cpu(pool, select_isa(cpu_info().features));
   ir::ExecutorOptions eo;
   eo.symbols = prog.symbols;
   auto ex = ir::GraphExecutor::create(optimized, cpu, eo);
