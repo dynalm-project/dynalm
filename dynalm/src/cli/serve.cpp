@@ -42,7 +42,7 @@ void usage() {
                "  -t, --threads N|auto    compute threads (auto: physical cores)\n"
                "  -c, --ctx N|auto        KV cache capacity in tokens (auto: from free RAM)\n"
                "  --batch N|auto          max tokens per forward pass (auto: 256)\n"
-               "  --kv f16|f32|q8_0           KV cache dtype (default f16)\n"
+               "  --kv f16|f32|q8_0       KV cache dtype (default f16; q8_0 halves its memory)\n"
                "  --int8-decode N         int8 activations for matmuls of <= N rows (default 4, 0 = off;\n"
                "                          off makes outputs independent of batching, DD-053)\n"
                "  --policy P              balanced (default) | latency | throughput: first-token wait vs\n"

@@ -42,7 +42,7 @@ void usage() {
                "  -t, --threads N       worker threads (default: physical cores)\n"
                "  -c, --ctx N           KV cache capacity in tokens (default 4096)\n"
                "  --batch N             max tokens per forward pass (default 256)\n"
-               "  --kv f16|f32|q8_0         KV cache dtype (default f16)\n"
+               "  --kv f16|f32|q8_0     KV cache dtype (default f16; q8_0 halves its memory)\n"
                "  --int8-decode N       int8 activations for matmuls of <= N rows (default 4, 0 = off)\n"
                "  --backend cpu         compute backend (GPU backends are not built yet)\n"
                "  --execution MODE      reference (default) | compiled: DynaCore IR + fusion (DD-072)\n"
