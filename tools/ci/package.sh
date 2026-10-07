@@ -25,7 +25,7 @@ CXX_ARGS=()
 if [ "$WIN" = 1 ]; then CXX_ARGS=(-DCMAKE_CXX_COMPILER=cl); fi
 
 cmake -S . -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_TESTS=OFF -DENABLE_BENCHMARKS=OFF \
-  -DDYNALM_STATIC_RUNTIME=ON "${CXX_ARGS[@]}" "$@"
+  -DDYNALM_STATIC_RUNTIME=ON ${CXX_ARGS[@]+"${CXX_ARGS[@]}"} "$@"
 cmake --build "$BUILD"
 (cd "$BUILD" && cpack)
 
