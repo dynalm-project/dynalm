@@ -1,4 +1,6 @@
-# DynaCore optimization log
+# DynaCore Optimization Log: Measured CPU Inference Speedups
+
+Every CPU speed optimization tried in DynaCore, how it was measured, and whether it was kept.
 
 Every compiler optimization follows the same loop: profile → hypothesis → prototype →
 correctness → A/B → end to end → keep or revert.

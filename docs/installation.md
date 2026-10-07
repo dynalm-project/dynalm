@@ -1,4 +1,4 @@
-# Installation
+# Install DynaLM on Linux, macOS and Windows
 
 You install DynaLM only. DynaCore is a static library inside the `dynalm` binary, so there is
 nothing separate to install.

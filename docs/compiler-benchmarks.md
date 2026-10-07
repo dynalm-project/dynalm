@@ -1,4 +1,6 @@
-# DynaCore compiler benchmarks
+# DynaCore Compiler Benchmarks: Compiled vs Reference LLM Inference on CPU
+
+How much faster DynaLM runs local LLMs on a CPU with `--execution compiled`, measured end to end and per decode step, with the raw data.
 
 ```
 DynaCore Compiler Benchmark

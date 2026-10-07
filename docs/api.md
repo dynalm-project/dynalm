@@ -1,4 +1,4 @@
-# HTTP API
+# DynaLM OpenAI-Compatible API Reference (Local LLM Server)
 
 `dynalm serve <model>` exposes an OpenAI-compatible API. Clients built for OpenAI work by
 pointing them at `http://HOST:PORT/v1`.

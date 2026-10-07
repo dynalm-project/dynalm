@@ -1,4 +1,4 @@
-# Configuration
+# DynaLM Configuration: Settings File, Environment Variables and Defaults
 
 DynaLM runs with no configuration: `dynalm serve qwen3:4b` picks the device, the thread
 count, the KV cache size and the batching limits from the machine. Configuration exists to

@@ -1,4 +1,6 @@
-# Compiler backends
+# DynaCore Compiler Backends: CPU, GPU and Code Generation
+
+Which hardware the DynaCore compiler targets today (CPU) and why generated kernels and GPU support are not built yet.
 
 The DynaCore compiler lowers IR to calls on a `Device`. This page records which backend
 exists, which is designed, and the measurements behind each decision.

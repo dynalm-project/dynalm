@@ -1,4 +1,6 @@
-# Architecture
+# DynaLM Architecture: How the Local LLM Engine Works
+
+An overview of how DynaLM runs LLMs on a CPU: the platform layer (models, scheduler, server) on top of the DynaCore runtime (tensors, kernels, devices).
 
 Status: all engine phases complete; DynaCore/DynaLM split done (R0, DD-068). Implemented parts are
 marked ✅. The full platform design, roadmap and decision summary are in

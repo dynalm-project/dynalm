@@ -1,9 +1,10 @@
 cff-version: 1.2.0
 message: "If you use DynaLM in your work, please cite it as below."
-title: "DynaLM: a CPU-first LLM inference engine"
+title: "DynaLM: run large language models locally on CPU"
 type: software
 authors:
-  - name: "The DynaLM Authors"
+  - alias: "sajosam"
+    website: "https://github.com/sajosam"
 repository-code: "https://github.com/dynalm-project/dynalm"
 license: Apache-2.0
 version: 0.1.0

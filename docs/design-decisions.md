@@ -1,4 +1,6 @@
-# Design decisions
+# DynaLM Design Decisions (Architecture Decision Records)
+
+Every major design choice in DynaLM, with the reason, the alternatives and the measurements behind it.
 
 Format: Decision / Reason / Alternatives / Tradeoffs / Evidence.
 

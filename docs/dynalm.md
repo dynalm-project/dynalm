@@ -1,4 +1,4 @@
-# DynaLM
+# DynaLM Platform Overview: Modules and Supported Models
 
 DynaLM is the LLM inference and serving platform built on DynaCore. It owns every policy:
 which model, which requests run, how KV blocks are shared, which tokens are sampled, and what

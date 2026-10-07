@@ -1,4 +1,6 @@
-# DynaCore IR
+# DynaCore IR: An Intermediate Representation for LLM Inference
+
+The internal format DynaLM uses to describe one step of an LLM (weights, attention, KV cache) so a compiler can optimize it.
 
 The DynaCore IR is an inference-specific intermediate representation (DD-071). A graph is a
 list of operations in execution order over SSA values.

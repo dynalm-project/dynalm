@@ -1,4 +1,4 @@
-# DynaCore
+# DynaCore: The Low-Level CPU Inference Runtime Behind DynaLM
 
 DynaCore is the low-level inference runtime under DynaLM. It holds:
 

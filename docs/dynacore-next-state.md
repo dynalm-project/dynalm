@@ -1,4 +1,4 @@
-# DynaCore next generation: state audit
+# DynaCore Compiler Roadmap: Status and Audit
 
 ## Status after the compiler roadmap (2026-10-07)
 

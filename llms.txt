@@ -1,32 +1,52 @@
 # DynaLM
 
-> DynaLM is an open-source (Apache-2.0) C++20 engine for running large language models locally on a CPU,
-> with no GPU and no Python required. It is a local alternative to llama.cpp, Ollama and vLLM for CPU-only
-> machines. It runs on Linux, macOS (including Apple Silicon) and Windows, and serves an OpenAI-compatible
-> API.
+> DynaLM is a free, open-source (Apache-2.0) program for running large language models (LLMs) locally
+> on a CPU, with no GPU, no Python and no cloud account. It runs Llama, Qwen, Gemma, Phi, Mistral and
+> Granite models offline, as a terminal chat or as a local OpenAI-compatible API server. It is a CPU
+> alternative to Ollama, llama.cpp and vLLM, for Linux, macOS (Intel and Apple Silicon) and Windows.
 
 Key facts:
-- **Command-line tool:** `dynalm`.
-  - `pull`: download a GGUF from Hugging Face.
-  - `run`: generate from a prompt.
-  - `chat`: interactive multi-turn chat, like `ollama run`.
-  - `serve`: OpenAI-compatible server on port 8000.
-  - `list`, `rm`, `inspect`, `benchmark`.
-- **Model formats:** GGUF (as used by llama.cpp and Ollama), Hugging Face SafeTensors, GPTQ and AWQ.
-- **Quantization:** Q2_K–Q8_0, F16, BF16. IQ types are not supported yet.
-- **Model families:** Llama 1–3, Mistral, Qwen 2 / 2.5 / 3 (dense and MoE), Gemma 1–3, Phi-3, IBM Granite,
-  Mixtral, DeepSeek-R1-Distill.
-- **Not supported:** Qwen3.5 / Qwen3.8 (`qwen35`), LFM2, full DeepSeek-V3/R1.
-- **Serving:** continuous batching, paged KV cache, chunked prefill, prefix (radix) cache, speculative
-  decoding, Prometheus metrics.
-- **CPU kernels:** AVX2 on x86-64, NEON on ARM64 and Apple Silicon.
-- **Install:** `./scripts/install.sh` (Linux/macOS), `scripts\install.ps1` (Windows), or Docker.
+- **Install:**
+  - Linux/macOS: `curl -fsSL https://raw.githubusercontent.com/dynalm-project/dynalm/main/scripts/install.sh | sh`
+  - Windows: `irm https://raw.githubusercontent.com/dynalm-project/dynalm/main/scripts/install.ps1 | iex`
+  - Release archives with SHA-256 checksums: https://github.com/dynalm-project/dynalm/releases
+- **Quick start:** `dynalm doctor`, then `dynalm pull qwen3:4b`, then `dynalm run qwen3:4b`.
+- **Commands:**
+  - `run` (chat, or one prompt with `-p`), `chat`;
+  - `serve` (OpenAI-compatible API on port 8000), `stop`;
+  - `pull` (by name or Hugging Face link), `models` (list, `--available`, `rm`);
+  - `inspect`, `benchmark`, `doctor` (system check), `config`, `version`.
+- **Model names:**
+  - qwen3:0.6b, qwen3:1.7b, qwen3:4b;
+  - qwen2.5:0.5b, qwen2.5:1.5b;
+  - llama3.2:1b, llama3.2:3b;
+  - gemma3:270m, gemma3:1b;
+  - smollm2:135m, granite3.1-moe:1b, phi3.5:3.8b;
+  - any GGUF file from Hugging Face also works.
+- **Model formats:** GGUF (as used by llama.cpp and Ollama), Hugging Face SafeTensors, GPTQ, AWQ.
+- **Quantization:** Q2_K–Q8_0, F16, BF16, F32. IQ types are not supported yet.
+- **Model families:**
+  - supported: Llama 1–3, Mistral, Mixtral, Qwen 2/2.5/3 (dense and MoE), Gemma 1–3, Phi-3/3.5,
+    IBM Granite and Granite-MoE, DeepSeek-R1-Distill;
+  - not yet supported: Qwen3.5/3.8, LFM2, full DeepSeek-V3/R1.
+- **API endpoints:** `/v1/chat/completions` and `/v1/completions` (both with streaming),
+  `/v1/models`, `/health`, `/metrics`. Works with the OpenAI SDK, LangChain and LlamaIndex.
+- **Serving features:** continuous batching, paged KV cache (f16 or q8_0), chunked prefill, prefix
+  (radix) cache, speculative decoding, Prometheus metrics.
+- **CPU kernels:** AVX2 on x86-64 and NEON on ARM64/Apple Silicon, selected at run time with a generic
+  fallback. Optional compiled execution mode (`--execution compiled`) uses the DynaCore IR and compiler.
+- **GPU:** not supported yet; it is CPU-only.
 
 ## Docs
 
-- [README](https://github.com/dynalm-project/dynalm/blob/main/README.md): overview, install, usage, FAQ
-- [DynaLM](https://github.com/dynalm-project/dynalm/blob/main/docs/dynalm.md): modules and supported models
-- [Build](https://github.com/dynalm-project/dynalm/blob/main/docs/build.md): targets, options, tests
+- [README](https://github.com/dynalm-project/dynalm/blob/main/README.md): install, models, all commands, API, FAQ
+- [Installation](https://github.com/dynalm-project/dynalm/blob/main/docs/installation.md): installers, release archives, Docker
+- [CLI reference](https://github.com/dynalm-project/dynalm/blob/main/docs/cli.md): every command and option
+- [API reference](https://github.com/dynalm-project/dynalm/blob/main/docs/api.md): OpenAI-compatible endpoints
+- [Configuration](https://github.com/dynalm-project/dynalm/blob/main/docs/configuration.md): config.yaml, environment variables
+- [Supported models and modules](https://github.com/dynalm-project/dynalm/blob/main/docs/dynalm.md)
 - [Architecture](https://github.com/dynalm-project/dynalm/blob/main/docs/architecture.md)
-- [Compiler benchmarks](https://github.com/dynalm-project/dynalm/blob/main/docs/compiler-benchmarks.md)
+- [DynaCore runtime](https://github.com/dynalm-project/dynalm/blob/main/docs/dynacore.md)
+- [DynaCore compiler](https://github.com/dynalm-project/dynalm/blob/main/docs/dynacore-compiler.md) and [benchmarks](https://github.com/dynalm-project/dynalm/blob/main/docs/compiler-benchmarks.md)
+- [Build from source](https://github.com/dynalm-project/dynalm/blob/main/docs/build.md)
 - [Design decisions](https://github.com/dynalm-project/dynalm/blob/main/docs/design-decisions.md)

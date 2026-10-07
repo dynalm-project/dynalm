@@ -1,4 +1,4 @@
-# Build
+# Build DynaLM from Source (CMake on Linux, macOS and Windows)
 
 DynaLM is a CMake project with two libraries and two executables (DD-068).
 

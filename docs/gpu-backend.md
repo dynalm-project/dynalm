@@ -1,4 +1,4 @@
-# GPU backend architecture
+# DynaLM GPU Backend Design (CUDA, HIP, Metal, Vulkan)
 
 Status: **designed and enforced by tests; no GPU backend is implemented** (DD-045).
 This page is the contract a CUDA, HIP, Metal or Vulkan backend implements, and it lists what

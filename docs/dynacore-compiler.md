@@ -1,4 +1,6 @@
-# DynaCore compiler
+# DynaCore Compiler: Compiled Execution for LLM Inference
+
+How DynaLM can optimize the steps of a running model (grouping and fusing CPU operations) without changing its answers.
 
 The DynaCore compiler turns recorded IR into an execution plan for a device (DD-072). Today
 its backend is the existing C++ kernel library: the compiler decides **which calls** run,

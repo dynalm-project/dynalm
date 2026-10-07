@@ -1,4 +1,6 @@
-# DynaCore language
+# DynaCore Language (.dyna) and the dynacorec Compiler
+
+A small language for describing LLM inference graphs, and `dynacorec`, the tool that compiles, inspects and benchmarks them.
 
 A small language for **inference graphs** (DD-073). A program compiles to DynaCore IR, then
 goes through the same optimizer and backend as compiled execution.

@@ -1,4 +1,4 @@
-# DynaLM command reference
+# DynaLM CLI Reference: Every Command and Option
 
 Every `dynalm` command, with all options and examples. Run `dynalm help`, or any command without
 arguments, to see the same help in the terminal.

@@ -1,23 +1,36 @@
-# DynaLM
+# DynaLM: Run LLMs Locally on Your CPU
 
 [![CI](https://github.com/dynalm-project/dynalm/actions/workflows/ci.yml/badge.svg)](https://github.com/dynalm-project/dynalm/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/dynalm-project/dynalm)](https://github.com/dynalm-project/dynalm/releases/latest)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)
+![Platforms: Linux, macOS, Windows](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)
 
-**Run AI chat models on your own computer, using only the CPU.**
+**DynaLM is a free, open-source program for running large language models (LLMs) on your own
+computer with just the CPU.** It runs Llama, Qwen, Gemma, Phi, Mistral and Granite models offline,
+in the terminal or as a local server with an OpenAI-compatible API.
 
-- No GPU, no Python, no account, no internet needed once a model is downloaded.
-- One small program for Linux, macOS (Intel and Apple Silicon) and Windows.
-- Chat in the terminal, or run a local server that works with any app built for the OpenAI API.
+- **No GPU needed.** Fast CPU code for Intel and AMD (AVX2) and for ARM and Apple Silicon (NEON).
+- **No Python, no account, no cloud.** One small program. Your prompts never leave your machine.
+- **Works with the models you already have.** It reads GGUF files (the format used by llama.cpp
+  and Ollama), Hugging Face SafeTensors folders, and GPTQ/AWQ checkpoints.
+- **Drop-in OpenAI API.** Point the OpenAI SDK, LangChain or LlamaIndex at it.
+- **Linux, macOS and Windows**, with one-line installers.
 
 ```sh
 dynalm pull qwen3:4b      # download a model
 dynalm run qwen3:4b       # chat with it
 ```
 
+**Contents:** [Install](#1-install-dynalm-linux-macos-windows) ·
+[First run](#2-run-your-first-local-llm) · [Models](#3-supported-models-llama-qwen-gemma-phi-and-more) ·
+[Commands](#4-dynalm-commands-cli-reference) · [API server](#5-local-openai-compatible-api-server) ·
+[Configuration](#6-configuration) · [Speed](#7-how-to-make-a-local-llm-faster-on-cpu) ·
+[Troubleshooting](#8-troubleshooting) · [Comparison](#9-dynalm-vs-ollama-llamacpp-and-vllm) ·
+[FAQ](#10-faq) · [Developers](#11-for-developers)
+
 ---
 
-## 1. Install
+## 1. Install DynaLM (Linux, macOS, Windows)
 
 **Linux or macOS:** open a terminal and run:
 
@@ -52,7 +65,7 @@ Where it installs:
 
 Other ways to install (manual download, from source, Docker): [docs/installation.md](docs/installation.md).
 
-## 2. Your first chat
+## 2. Run your first local LLM
 
 ```sh
 dynalm pull qwen3:4b     # downloads about 2.5 GB, once
@@ -65,9 +78,9 @@ Ask one question without entering chat mode:
 dynalm run qwen3:4b -p "Explain what a CPU is in one sentence."
 ```
 
-## 3. Models
+## 3. Supported models: Llama, Qwen, Gemma, Phi and more
 
-### Ready-to-use names
+### Ready-to-use model names
 
 These short names work with `dynalm pull` and `dynalm run`:
 
@@ -94,7 +107,7 @@ the public site where AI models are shared. They come from the official Qwen acc
 the well-known `unsloth` and `bartowski` accounts. Each model keeps its maker's license
 (Gemma, Llama, Qwen, ...).
 
-### Any other model
+### Run any GGUF model from Hugging Face
 
 DynaLM runs most GGUF files, the same format llama.cpp and Ollama use. Give `dynalm pull` a
 Hugging Face path or link instead of a name:
@@ -105,7 +118,7 @@ dynalm pull <link> --check     # only check whether DynaLM can run it (downloads
 dynalm run ./path/to/any-model.gguf
 ```
 
-### Which model families work
+### Supported model families
 
 | Works | Not yet |
 |---|---|
@@ -122,7 +135,7 @@ dynalm run ./path/to/any-model.gguf
 **Quantizations:** Q2_K to Q8_0, F16, BF16 and F32. Pick `Q4_K_M` for the best balance. `Q8_0`
 is closer to the original but twice the size.
 
-### How much memory do I need?
+### How much RAM do I need to run an LLM?
 
 About the size of the model file, plus a little for the conversation:
 
@@ -135,7 +148,7 @@ About the size of the model file, plus a little for the conversation:
 
 `dynalm inspect <model>` prints an estimate for any model.
 
-## 4. All commands
+## 4. DynaLM commands (CLI reference)
 
 | Command | What it does | Example |
 |---|---|---|
@@ -198,7 +211,7 @@ Example: `dynalm -q run qwen3:4b`.
 Type `dynalm run` or `dynalm serve` with no model to see every option. The full reference is in
 [docs/cli.md](docs/cli.md).
 
-## 5. Use it from other apps (OpenAI-compatible API)
+## 5. Local OpenAI-compatible API server
 
 Start the server:
 
@@ -232,7 +245,7 @@ print(reply.choices[0].message.content)
 This works with the OpenAI SDKs, LangChain, LlamaIndex and other OpenAI-compatible apps. Details:
 [docs/api.md](docs/api.md).
 
-## 6. Settings
+## 6. Configuration
 
 You don't need any settings: DynaLM picks threads, memory and everything else automatically.
 To change the defaults, create a settings file:
@@ -266,7 +279,7 @@ file. All keys: [docs/configuration.md](docs/configuration.md).
 
 A `models` folder in the current directory is searched too.
 
-## 7. Speed tips
+## 7. How to make a local LLM faster on CPU
 
 On a CPU, every word the model writes means reading the whole model from memory. So speed
 depends mostly on model size and your RAM speed.
@@ -290,31 +303,71 @@ about 6 with a 4B model.
 | `dynalm: command not found` | open a new terminal; or add `~/.local/bin` to your `PATH` |
 | Windows: "An Application Control policy has blocked this file" | Windows Smart App Control blocks unsigned programs; allow it in Windows Security, or build from source |
 | Very slow, or "only X GiB RAM available" in `dynalm doctor` | use a smaller model and close other programs |
-| "architecture ... is not supported" | that model family isn't supported yet (see section 3) |
+| "architecture ... is not supported" | that model family isn't supported yet ([section 3](#supported-model-families)) |
 | Anything else | run `dynalm doctor` and include its output in an [issue](https://github.com/dynalm-project/dynalm/issues) |
 
 To force the simplest CPU code path, for example to rule out a CPU feature problem, run
 `DYNACORE_ISA=generic dynalm run ...`.
 
-## 9. FAQ
+## 9. DynaLM vs Ollama, llama.cpp and vLLM
 
-**Is this like Ollama or llama.cpp?**
-Yes, for CPUs. It reads the same GGUF files and has an OpenAI-compatible server. It is built to
-serve several users at once on a CPU-only machine. If you have a GPU, Ollama, llama.cpp or vLLM
-will be faster, because DynaLM is CPU-only for now.
+| | DynaLM | Ollama | llama.cpp | vLLM |
+|---|---|---|---|---|
+| Built for | CPU | CPU and GPU | CPU and GPU | GPU servers |
+| GGUF models | yes | yes | yes | partial |
+| Hugging Face SafeTensors, GPTQ, AWQ | yes, on CPU | import step | conversion step | yes, on GPU |
+| OpenAI-compatible server | yes | yes | yes | yes |
+| Many users at once (continuous batching, paged KV cache) | yes | through llama.cpp | partial | yes |
+| Short model names (`qwen3:4b`) | yes | yes | no | no |
+| GPU support | not yet | yes | yes | yes |
+| Language / runtime | C++20, one binary | Go + C++ | C/C++ | Python + CUDA |
 
-**Does it work on Apple Silicon or a Raspberry Pi?**
-Yes, Apple Silicon (M1 to M4) is supported and tested. A Raspberry Pi 4/5 with a 64-bit OS uses
-the same ARM64 build. Small models such as `qwen3:0.6b` or `llama3.2:1b` fit; speed there has not
-been measured yet.
+**Choose DynaLM** for a CPU-only machine: a laptop, a desktop without a graphics card, a cloud
+CPU server, or an ARM board. It also suits several users sharing one local model. **Choose
+Ollama, llama.cpp or vLLM** if you have a GPU: they are faster with one today.
 
-**Does it need the internet?**
-Only to download a model. After that everything runs offline, and nothing leaves your computer.
+## 10. FAQ
+
+**How do I run an LLM locally without a GPU?**
+Install DynaLM (section 1), then run `dynalm run qwen3:4b`. It downloads a 4-billion-parameter
+model (2.5 GB) and starts a chat that runs entirely on your CPU.
+
+**How do I run Llama 3, Qwen 3 or Gemma 3 on my computer?**
+`dynalm run llama3.2:3b`, `dynalm run qwen3:4b` or `dynalm run gemma3:1b`. Any other GGUF file
+from Hugging Face works with `dynalm pull <owner>/<repo>/<file>.gguf`.
+
+**Is DynaLM an alternative to Ollama?**
+Yes, for CPU-only computers. The commands feel similar (`pull`, `run`, `serve`) and it reads the
+same GGUF model files. Its server is built to handle several users at the same time.
+
+**Is DynaLM an alternative to llama.cpp?**
+Yes, for CPU inference. It is a separate C++ engine with its own AVX2 and NEON kernels, a
+scheduler for many concurrent requests, and an OpenAI-compatible server. It reads the same model
+files but does not embed llama.cpp.
+
+**Can I use a local LLM with the OpenAI Python SDK, LangChain or LlamaIndex?**
+Yes. Start `dynalm serve <model>` and set the client's base URL to `http://127.0.0.1:8000/v1`.
+Any API key works.
+
+**Does it work on Apple Silicon (M1, M2, M3, M4) or a Raspberry Pi?**
+Yes. Apple Silicon is supported and tested in CI. A Raspberry Pi 4/5 with a 64-bit OS uses the same
+ARM64 build. Small models such as `qwen3:0.6b` or `llama3.2:1b` fit; speed there has not been
+measured yet.
+
+**What is GGUF, and which quantization should I pick?**
+GGUF is the common file format for ready-to-run local models. Quantization shrinks a model by
+storing its numbers with fewer bits. `Q4_K_M` is the best balance of size and quality. `Q8_0` is
+closer to the original but twice the size.
+
+**Is it private? Does it need the internet?**
+Only downloading a model needs the internet. Chatting and the API server work fully offline, and
+nothing is sent anywhere.
 
 **Is it free for commercial use?**
-Yes, under the Apache-2.0 license. Each model has its own license from its maker.
+Yes. DynaLM is Apache-2.0 licensed. Each model has its own license from its maker (Llama, Gemma,
+Qwen, ...).
 
-## 10. For developers
+## 11. For developers
 
 | Read | About |
 |---|---|

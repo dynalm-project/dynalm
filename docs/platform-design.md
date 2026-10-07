@@ -1,6 +1,6 @@
-# DynaLM + DynaCore: Platform Design
+# DynaLM and DynaCore Platform Design
 
-Status: **design, not yet implemented** (DD-068). Written 2026-10-06 against commit `f0d870a`.
+Status: **implemented** (design DD-068, implementation DD-069 to DD-074). This was the design written before the work began; [architecture.md](architecture.md) describes the code as built.
 
 This document covers the 14 deliverables of the DynaLM/DynaCore platform spec. It starts from
 the engine as it is today, not from a blank page. DynaLM already loads GGUF and SafeTensors,
