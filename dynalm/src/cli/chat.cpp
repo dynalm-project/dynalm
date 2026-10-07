@@ -221,7 +221,7 @@ int run_chat_session(Engine& engine, ChatSettings st) {
                     lm.config.architecture.c_str(), lm.quantization.c_str(), st.context, history.size());
         std::printf("temp %.2f  top_k %d  top_p %.2f  min_p %.2f  repeat_penalty %.2f  max_tokens %d  thinking %s\n",
                     p.temperature, p.top_k, p.top_p, p.min_p, p.repetition_penalty, st.params.max_tokens,
-                    think ? "on" : "off");
+                    !has_think_switch ? "n/a" : think ? "on" : "off");
         std::printf("System message: %s\n", st.system.empty() ? "(none)" : st.system.c_str());
       } else {
         std::printf("Unknown command %s. Type /help.\n", cmd.c_str());
