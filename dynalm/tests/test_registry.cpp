@@ -2,6 +2,9 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -58,6 +61,33 @@ TEST(Registry, KnownNameResolvesEvenWhenNotDownloaded) {
   ASSERT_TRUE(r.ok()) << r.status().to_string();
   ASSERT_NE(r->entry, nullptr);
   EXPECT_NE(r->path.find("Phi-3.5-mini-instruct-Q4_K_M.gguf"), std::string::npos);
+}
+
+TEST(Registry, BareFileNameWithExtensionResolvesInModelsDir) {
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::temp_directory_path() / "dynalm_test_bare_name";
+  fs::create_directories(dir);
+  { std::ofstream(dir / "Some-Model-Q8_0.gguf") << "x"; }
+  const char* old = std::getenv("DYNALM_MODELS_DIR");
+  const std::string saved = old != nullptr ? old : "";
+#ifdef _WIN32
+  _putenv_s("DYNALM_MODELS_DIR", dir.string().c_str());
+#else
+  setenv("DYNALM_MODELS_DIR", dir.string().c_str(), 1);
+#endif
+  auto r = resolve_model("Some-Model-Q8_0.gguf");
+  auto missing = resolve_model("Other-Model.gguf");
+#ifdef _WIN32
+  _putenv_s("DYNALM_MODELS_DIR", saved.c_str());
+#else
+  if (old != nullptr) setenv("DYNALM_MODELS_DIR", saved.c_str(), 1); else unsetenv("DYNALM_MODELS_DIR");
+#endif
+  fs::remove_all(dir);
+  ASSERT_TRUE(r.ok()) << r.status().to_string();
+  EXPECT_NE(r->path.find("Some-Model-Q8_0.gguf"), std::string::npos);
+  EXPECT_TRUE(r->downloaded);
+  ASSERT_FALSE(missing.ok());
+  EXPECT_NE(missing.status().message().find("not found"), std::string::npos);
 }
 
 constexpr OptionSpec kServeLike[] = {{"model"}, {"threads"}, {"ctx"},  {"port"},

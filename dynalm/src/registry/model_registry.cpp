@@ -135,6 +135,19 @@ Result<ResolvedModel> resolve_model(std::string_view ref) {
     r.entry = registry_entry_for_file(as_path.filename().string());
     return r;
   }
+  const bool bare = !ref.empty() && ref.find_first_of("/\\") == std::string_view::npos;
+  if (bare && !is_model_name(ref)) {
+    // A bare file name with its extension, e.g. the name `dynalm models` prints.
+    for (const std::string& dir : model_search_dirs()) {
+      const fs::path c = fs::path(dir) / std::string(ref);
+      if (fs::exists(c, ec)) {
+        r.path = c.string();
+        r.downloaded = true;
+        r.entry = registry_entry_for_file(c.filename().string());
+        return r;
+      }
+    }
+  }
   if (!is_model_name(ref)) return NotFound("model file not found: " + std::string(ref));
   r.entry = find_registry_entry(ref);
   if (r.entry == nullptr) {

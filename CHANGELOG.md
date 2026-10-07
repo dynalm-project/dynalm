@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-07
+
+### Fixed
+- `dynalm run`, `serve` and `inspect` now accept a bare model file name that includes its
+  extension, such as `Meta-Llama-3.1-8B-Instruct-Q8_0.gguf`, exactly as `dynalm models` prints
+  it. The file is looked up in `~/.dynalm/models` and `./models`. Before, such a name failed
+  with "model file not found".
+
+## [0.1.0] - 2026-10-04
+
 ### Cross-platform CPU release
 - Release archives `dynalm-{linux-x86_64,linux-arm64,macos-arm64,macos-x86_64}.tar.gz` and
   `dynalm-windows-x86_64.zip`, plus `SHA256SUMS`. Every archive is built, tested, installed
