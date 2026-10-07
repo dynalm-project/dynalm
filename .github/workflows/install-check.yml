@@ -1,0 +1,64 @@
+# Installs a PUBLISHED release with the documented one-line commands on clean
+# runners (no build, no checkout of the binaries) and checks it works:
+#   curl -fsSL .../scripts/install.sh | sh        (Linux, macOS)
+#   irm .../scripts/install.ps1 | iex             (Windows)
+# then dynalm --version, dynalm doctor, a tiny-model inference and the server
+# smoke test against the installed binary. Runs after a release is published,
+# weekly, and on demand.
+name: install-check
+
+on:
+  release:
+    types: [published]
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  unix:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86_64 (ubuntu-22.04), os: ubuntu-22.04 }
+          - { name: linux-x86_64 (ubuntu-24.04), os: ubuntu-24.04 }
+          - { name: linux-arm64, os: ubuntu-24.04-arm }
+          - { name: macos-arm64, os: macos-14 }
+          - { name: macos-x86_64 (Intel), os: macos-15-intel }
+    steps:
+      # Only the test fixtures and smoke scripts come from the repository;
+      # the binaries come from the release.
+      - uses: actions/checkout@v4
+      - name: One-line install
+        run: curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh | sh
+      - name: Check
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          command -v dynalm
+          dynalm --version
+          dynalm doctor
+          dynalm -q run dynalm/tests/data/tiny_llama.gguf -p "hello" -n 8 --temp 0 --raw
+          python3 tests/smoke/serve_smoke.py "$(command -v dynalm)" dynalm/tests/data/tiny_llama.gguf
+          python3 tools/ci/check_isa.py "$(command -v dynalm)"
+
+  windows:
+    name: windows-x86_64
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: One-line install
+        shell: pwsh
+        run: irm https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.ps1 | iex
+      - name: Check
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\DynaLM\bin\dynalm.exe'
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          if (($userPath -split ';') -notcontains (Split-Path $exe)) { throw 'installer did not add DynaLM to the user PATH' }
+          & $exe --version; if ($LASTEXITCODE) { exit 1 }
+          & $exe doctor; if ($LASTEXITCODE) { exit 1 }
+          & $exe -q run dynalm/tests/data/tiny_llama.gguf -p "hello" -n 8 --temp 0 --raw; if ($LASTEXITCODE) { exit 1 }
+          python tests/smoke/serve_smoke.py $exe dynalm/tests/data/tiny_llama.gguf; if ($LASTEXITCODE) { exit 1 }
+          python tools/ci/check_isa.py $exe; if ($LASTEXITCODE) { exit 1 }
