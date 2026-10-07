@@ -11,7 +11,7 @@ name: ci
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, "ci/**"]
   pull_request:
   workflow_dispatch:
 
