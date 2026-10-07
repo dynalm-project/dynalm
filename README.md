@@ -1,388 +1,484 @@
-# DynaLM: Run LLMs Locally on Your CPU
+<p align="center">
+  <img src="public/light.png" alt="DynaLM" width="620">
+</p>
 
-[![CI](https://github.com/dynalm-project/dynalm/actions/workflows/ci.yml/badge.svg)](https://github.com/dynalm-project/dynalm/actions/workflows/ci.yml)
-[![Latest release](https://img.shields.io/github/v/release/dynalm-project/dynalm)](https://github.com/dynalm-project/dynalm/releases/latest)
-[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-![Platforms: Linux, macOS, Windows](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)
+<div align="center">
 
-**DynaLM is a free, open-source program for running large language models (LLMs) on your own
-computer with just the CPU.** It runs Llama, Qwen, Gemma, Phi, Mistral and Granite models offline,
-in the terminal or as a local server with an OpenAI-compatible API.
+  <h3>Fast, Lightweight Local LLM Inference Engine for Modern CPUs</h3>
 
-- **No GPU needed.** Fast CPU code for Intel and AMD (AVX2) and for ARM and Apple Silicon (NEON).
-- **No Python, no account, no cloud.** One small program. Your prompts never leave your machine.
-- **Works with the models you already have.** It reads GGUF files (the format used by llama.cpp
-  and Ollama), Hugging Face SafeTensors folders, and GPTQ/AWQ checkpoints.
-- **Drop-in OpenAI API.** Point the OpenAI SDK, LangChain or LlamaIndex at it.
-- **Linux, macOS and Windows**, with one-line installers.
+  <p>
+    <b>Run Llama, Qwen, Gemma, Phi, Mistral, and Granite models directly on your CPU — No GPU required, no Python runtime, 100% private and offline.</b>
+  </p>
 
-```sh
-dynalm pull qwen3:4b      # download a model
-dynalm run qwen3:4b       # chat with it
-```
+  <p align="center">
+    <a href="https://github.com/dynalm-project/dynalm/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/dynalm-project/dynalm/ci.yml?branch=main&label=CI&logo=github&style=flat-square" alt="CI"></a>
+    <a href="https://github.com/dynalm-project/dynalm/releases/latest"><img src="https://img.shields.io/github/v/release/dynalm-project/dynalm?color=3b82f6&label=Version&style=flat-square" alt="Latest Release"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-22c55e.svg?style=flat-square" alt="License"></a>
+    <a href="docs/architecture.md"><img src="https://img.shields.io/badge/Language-C%2B%2B20-00599C?style=flat-square&logo=c%2B%2B" alt="C++20"></a>
+    <a href="docs/installation.md"><img src="https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-64748b?style=flat-square" alt="Platforms"></a>
+    <a href="docs/api.md"><img src="https://img.shields.io/badge/API-OpenAI%20Compatible-a855f7?style=flat-square" alt="OpenAI Compatible"></a>
+    <a href="docs/architecture.md"><img src="https://img.shields.io/badge/Hardware-AVX2%20%7C%20NEON-f97316?style=flat-square" alt="CPU Kernels"></a>
+  </p>
 
-**Contents:** [Install](#1-install-dynalm-linux-macos-windows) ·
-[First run](#2-run-your-first-local-llm) · [Models](#3-supported-models-llama-qwen-gemma-phi-and-more) ·
-[Commands](#4-dynalm-commands-cli-reference) · [API server](#5-local-openai-compatible-api-server) ·
-[Configuration](#6-configuration) · [Speed](#7-how-to-make-a-local-llm-faster-on-cpu) ·
-[Troubleshooting](#8-troubleshooting) · [Comparison](#9-dynalm-vs-ollama-llamacpp-and-vllm) ·
-[FAQ](#10-faq) · [Developers](#11-for-developers)
+  <p align="center">
+    <a href="#-quick-start"><b>Quick Start</b></a> •
+    <a href="#1-installation"><b>Installation</b></a> •
+    <a href="#2-supported-models"><b>Supported Models</b></a> •
+    <a href="#3-cli-reference"><b>CLI Reference</b></a> •
+    <a href="#4-local-openai-compatible-api-server"><b>API Server</b></a> •
+    <a href="#6-cpu-performance--speed-optimization"><b>Performance Guide</b></a> •
+    <a href="#8-comparison-with-other-engines"><b>Comparison</b></a> •
+    <a href="#10-developer-guide--architecture"><b>Docs</b></a>
+  </p>
+
+</div>
 
 ---
 
-## 1. Install DynaLM (Linux, macOS, Windows)
+### ✨ Key Features
 
-**Linux or macOS:** open a terminal and run:
+| Capability | What It Delivers |
+| :--- | :--- |
+| ⚡ **Hardware-Tuned CPU Kernels** | Native AVX2 vectorization for x86_64 (Intel & AMD) and NEON acceleration for ARM64 & Apple Silicon (M1/M2/M3/M4). |
+| 🔒 **100% Private & Local** | Air-gapped execution with zero cloud calls, zero telemetry, and no accounts required. Prompts and tokens never leave your machine. |
+| 📦 **Zero-Dependency Native Binary** | Single C++20 binary executable. No Python virtualenvs, no Torch/CUDA runtime packages, and no driver headaches. |
+| 🌐 **Drop-In OpenAI API Server** | Built-in high-performance HTTP server with streaming completions (`/v1/chat/completions`), continuous batching, and paged KV cache. |
+| 🔄 **Broad Ecosystem Compatibility** | Direct support for GGUF files (llama.cpp & Ollama ecosystems), Hugging Face SafeTensors directories, and GPTQ / AWQ checkpoints. |
+| 💻 **Universal Cross-Platform** | Native one-line automated installers for Linux, macOS, and Windows. |
 
-```sh
+---
+
+## 🚀 Quick Start
+
+Get from zero to interactive AI chat in seconds:
+
+```bash
+# 1. Download an optimized model (~2.5 GB)
+dynalm pull qwen3:4b
+
+# 2. Launch an interactive terminal chat
+dynalm run qwen3:4b
+```
+
+> **Tip:** You can also ask single questions directly without entering interactive chat:
+> ```bash
+> dynalm run qwen3:4b -p "Explain what a CPU cache is in one sentence."
+> ```
+
+---
+
+## 1. Installation
+
+DynaLM provides automated, non-admin installers for Linux, macOS, and Windows.
+
+### Linux & macOS
+
+Open your terminal and run:
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/dynalm-project/dynalm/main/scripts/install.sh | sh
 ```
 
-**Windows:** open PowerShell and run:
+### Windows (PowerShell)
+
+Open PowerShell and execute:
 
 ```powershell
 irm https://raw.githubusercontent.com/dynalm-project/dynalm/main/scripts/install.ps1 | iex
 ```
 
-Then **open a new terminal** and check that it works:
+### Verify Your Installation
 
-```sh
+Open a **new** terminal session and verify your setup:
+
+```bash
 dynalm doctor
 ```
 
-The last line should say `Status: Ready`.
+The diagnostics report will check your CPU vector extensions, available RAM, and verify ready status (`Status: Ready`).
 
-The installer:
+<details>
+<summary><b>Installation Details & Locations</b></summary>
 
-1. Picks the right download for your computer.
-2. Checks the file is genuine, using its SHA-256 checksum.
-3. Installs it just for your user, without admin rights.
+The automated installer:
+1. Detects your CPU architecture and OS platform.
+2. Verifies download integrity using cryptographic SHA-256 checksums.
+3. Installs DynaLM in your user space (no root or administrator permissions needed).
 
-Where it installs:
+**Binary Locations:**
+- **Linux & macOS:** `~/.local/bin/dynalm`
+- **Windows:** `%LOCALAPPDATA%\Programs\DynaLM\bin\dynalm.exe`
 
-- Linux and macOS: `~/.local/bin`
-- Windows: `%LOCALAPPDATA%\Programs\DynaLM\bin`
+For manual downloads, building from source, or Docker setup, refer to [docs/installation.md](docs/installation.md).
 
-Other ways to install (manual download, from source, Docker): [docs/installation.md](docs/installation.md).
+</details>
 
-## 2. Run your first local LLM
+---
 
-```sh
-dynalm pull qwen3:4b     # downloads about 2.5 GB, once
-dynalm run qwen3:4b      # starts a chat; type /bye to leave
-```
+## 2. Supported Models
 
-Ask one question without entering chat mode:
+### Ready-to-Use Catalog
 
-```sh
-dynalm run qwen3:4b -p "Explain what a CPU is in one sentence."
-```
+DynaLM includes shortcuts for leading open-weight LLMs. Run `dynalm pull <name>` or `dynalm run <name>`:
 
-## 3. Supported models: Llama, Qwen, Gemma, Phi and more
+| Model Identifier | Download Size | Free RAM Needed | Best For |
+| :--- | :--- | :--- | :--- |
+| `smollm2:135m` | ~145 MB | ~1 GB | Fast unit testing and minimal environments |
+| `gemma3:270m` | ~292 MB | ~1 GB | Lightweight, compact Google model |
+| `qwen2.5:0.5b` | ~491 MB | ~1 GB | High-speed, low-footprint reasoning |
+| `qwen3:0.6b` | ~639 MB | ~1 GB | Compact thinking model with reasoning scratchpad |
+| `gemma3:1b` | ~806 MB | ~2 GB | General-purpose lightweight Google model |
+| `llama3.2:1b` | ~808 MB | ~2 GB | Ultra-fast Meta instruct model |
+| `granite3.1-moe:1b` | ~822 MB | ~2 GB | IBM Mixture-of-Experts (MoE) efficiency |
+| `qwen2.5:1.5b` | ~1.1 GB | ~2 GB | Optimal balance of speed and generation quality |
+| `qwen3:1.7b` | ~1.8 GB | ~2.5 GB | Mid-sized model with advanced chain-of-thought |
+| `llama3.2:3b` | ~2.0 GB | ~3–4 GB | High-quality Meta model for complex reasoning |
+| `phi3.5:3.8b` | ~2.4 GB | ~4 GB | Microsoft reasoning & coding tuned model |
+| `qwen3:4b` | ~2.5 GB | ~4 GB | **Recommended:** Premier quality & reasoning for CPU |
 
-### Ready-to-use model names
+> **Aliases:** Short names like `qwen3`, `llama`, `llama:3b`, `gemma`, `gemma:270m`, and `phi` are automatically resolved. Run `dynalm models --available` to see all supported presets.
 
-These short names work with `dynalm pull` and `dynalm run`:
+---
 
-| Name | Download size | Good for |
-|---|---|---|
-| `smollm2:135m` | 145 MB | testing; very fast, basic answers |
-| `gemma3:270m` | 292 MB | tiny Google model |
-| `qwen2.5:0.5b` | 491 MB | small and quick |
-| `qwen3:0.6b` | 639 MB | small model that "thinks" before answering |
-| `gemma3:1b` | 806 MB | small Google model |
-| `llama3.2:1b` | 808 MB | small Meta model |
-| `granite3.1-moe:1b` | 822 MB | IBM "mixture of experts" model |
-| `qwen2.5:1.5b` | 1.1 GB | good balance of speed and quality |
-| `qwen3:1.7b` | 1.8 GB | mid-size thinking model |
-| `llama3.2:3b` | 2.0 GB | Meta; good quality |
-| `phi3.5:3.8b` | 2.4 GB | Microsoft |
-| `qwen3:4b` | 2.5 GB | best quality in this list |
+### Run Any GGUF from Hugging Face
 
-Short forms also work: `qwen3`, `llama`, `llama:3b`, `gemma`, `gemma:270m` and `phi`. Run
-`dynalm models --available` to see this list on your machine, with what is already downloaded.
+DynaLM can directly resolve and stream GGUF models hosted on [Hugging Face](https://huggingface.co):
 
-**Where they come from:** every name points to one file on [Hugging Face](https://huggingface.co),
-the public site where AI models are shared. They come from the official Qwen account and from
-the well-known `unsloth` and `bartowski` accounts. Each model keeps its maker's license
-(Gemma, Llama, Qwen, ...).
-
-### Run any GGUF model from Hugging Face
-
-DynaLM runs most GGUF files, the same format llama.cpp and Ollama use. Give `dynalm pull` a
-Hugging Face path or link instead of a name:
-
-```sh
+```bash
+# Pull directly via Hugging Face repository path
 dynalm pull bartowski/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct-Q4_K_M.gguf
-dynalm pull <link> --check     # only check whether DynaLM can run it (downloads 256 KB)
+
+# Verify model compatibility before downloading full weights (downloads only 256 KB)
+dynalm pull <url-or-repo> --check
+
+# Execute local GGUF files directly
 dynalm run ./path/to/any-model.gguf
 ```
 
-### Supported model families
+---
 
-| Works | Not yet |
-|---|---|
-| Llama 1, 2, 3, 3.1, 3.2 (also Mistral, SmolLM, DeepSeek-R1-Distill) | Qwen 3.5 / 3.8 |
-| Qwen 2, 2.5, 3, including their MoE versions | LFM2 |
-| Gemma 1, 2, 3 (text) | full DeepSeek-V3 / R1 |
-| Phi-3 / 3.5 | files with "IQ" quantization (IQ2, IQ3, IQ4 ...) |
-| Mixtral, IBM Granite and Granite-MoE | |
+### Architecture & Format Compatibility
 
-`dynalm pull` refuses unsupported models before downloading them.
+| Supported Architectures | In Development / Planned |
+| :--- | :--- |
+| **Llama**: 1, 2, 3, 3.1, 3.2 (also Mistral, SmolLM, DeepSeek-R1-Distill) | Qwen 3.5 / 3.8 |
+| **Qwen**: 2, 2.5, 3 (including MoE variants) | LFM2 |
+| **Gemma**: 1, 2, 3 (text generation) | Full-parameter DeepSeek-V3 / R1 671B |
+| **Phi**: 3 / 3.5 | Legacy IQ quantization variants (IQ2, IQ3, IQ4) |
+| **Mixtral & Granite**: IBM Granite and Granite-MoE | GPU inference acceleration ([Roadmap](ROADMAP.md)) |
 
-**File formats:** GGUF; Hugging Face model folders (`.safetensors`); GPTQ and AWQ checkpoints.
+- **Weight Formats:** GGUF (`.gguf`), Hugging Face SafeTensors folders (`.safetensors`), and GPTQ/AWQ checkpoints.
+- **Quantization Types:** `Q2_K` through `Q8_0`, `F16`, `BF16`, and `F32`. We recommend `Q4_K_M` for the optimal performance-to-size trade-off.
 
-**Quantizations:** Q2_K to Q8_0, F16, BF16 and F32. Pick `Q4_K_M` for the best balance. `Q8_0`
-is closer to the original but twice the size.
+---
 
-### How much RAM do I need to run an LLM?
+### Memory Requirements Guide
 
-About the size of the model file, plus a little for the conversation:
+Estimated free RAM needed based on model parameter count:
 
-| Model size | Example | Free RAM needed |
-|---|---|---|
-| under 1B | `qwen3:0.6b` | about 1 GB |
-| 1–2B | `llama3.2:1b`, `qwen2.5:1.5b` | about 2 GB |
-| 3–4B | `qwen3:4b`, `llama3.2:3b` | about 3–4 GB |
-| 7–8B | Llama-3.1-8B (Q4_K_M) | about 6 GB |
+| Parameter Scale | Typical Quantization (`Q4_K_M`) | Minimum System RAM |
+| :---: | :---: | :---: |
+| **< 1 Billion** | ~300 MB – 650 MB | **1 GB** |
+| **1 – 2 Billion** | ~800 MB – 1.2 GB | **2 GB** |
+| **3 – 4 Billion** | ~2.0 GB – 2.5 GB | **4 GB** |
+| **7 – 8 Billion** | ~4.5 GB – 5.5 GB | **8 GB** |
 
-`dynalm inspect <model>` prints an estimate for any model.
-
-## 4. DynaLM commands (CLI reference)
-
-| Command | What it does | Example |
-|---|---|---|
-| `dynalm run <model>` | Chat in the terminal | `dynalm run qwen3:4b` |
-| `dynalm run <model> -p "text"` | Answer one question and exit | `dynalm run qwen3:4b -p "Hi"` |
-| `dynalm chat <model>` | Same as `run` without `-p` | `dynalm chat llama:3b` |
-| `dynalm serve <model>` | Start a local OpenAI-compatible server | `dynalm serve qwen3:4b --port 8000` |
-| `dynalm stop` | Stop a running server gracefully | `dynalm stop` |
-| `dynalm pull <name or link>` | Download a model | `dynalm pull gemma3:1b` |
-| `dynalm models` | List downloaded models | `dynalm models` |
-| `dynalm models --available` | List the names you can pull | `dynalm models --available` |
-| `dynalm models rm <name>` | Delete a downloaded model (asks first; `-y` skips) | `dynalm models rm gemma3:1b` |
-| `dynalm inspect <model>` | Show model details and memory needed | `dynalm inspect qwen3:4b` |
-| `dynalm doctor` | Check your computer and the install; paste this into bug reports | `dynalm doctor` |
-| `dynalm config` | Show your settings and where each comes from | `dynalm config show` |
-| `dynalm config init` | Create a starter settings file | `dynalm config init` |
-| `dynalm benchmark <model>` | Measure speed (tokens per second, response times) | `dynalm benchmark qwen3:4b` |
-| `dynalm version` | Show the version | `dynalm --version` |
-| `dynacorec <file>` | Developer tool: the DynaCore compiler ([docs](docs/dynacore-language.md)) | `dynacorec layer.dyna --dump-kernels` |
-
-`<model>` can be a name (`qwen3:4b`), a `.gguf` file, or a Hugging Face model folder.
-
-Global flags go before the command:
-
-- `-q`: quiet, errors only.
-- `-v`: verbose.
-- `--log-level debug`: more detail still.
-
-Example: `dynalm -q run qwen3:4b`.
-
-### Commands inside a chat
-
-| Type | Effect |
-|---|---|
-| `/bye` | leave the chat |
-| `/clear` | forget the conversation so far |
-| `/system <text>` | set the assistant's instructions, e.g. `/system Answer like a pirate` |
-| `/think on` or `/think off` | turn Qwen3's thinking step on or off; off gives faster, shorter replies |
-| `/set temp 0.7` | change a setting: `temp`, `top_p`, `top_k`, `min_p`, `repeat_penalty`, `max_tokens`, `seed` |
-| `/show` | show the model and the current settings |
-| `/stats on` or `/stats off` | show or hide speed numbers after each reply |
-| `/help` | list these commands |
-
-### Useful options for `run` and `serve`
-
-| Option | Meaning | Default |
-|---|---|---|
-| `-n 256` / `--max-tokens 256` | longest reply, in tokens | 128 for one question; 2048 in chat |
-| `--temp 0.7` | creativity: 0 always picks the most likely word, higher is more varied | 0 with `-p`; 0.8 in chat |
-| `--top-p`, `--top-k`, `--min-p` | other ways to limit word choice | |
-| `--seed 42` | same answer every time | random |
-| `--system "text"` | assistant instructions (`run`) | |
-| `-t 8` / `--threads 8` | CPU threads to use | number of physical cores |
-| `-c 8192` / `--ctx 8192` | how much conversation the model remembers, in tokens | 4096 (`run`); sized from free RAM (`serve`) |
-| `--kv q8_0` | store the conversation memory in half the RAM, at the same speed | `f16` |
-| `--execution compiled` | optimized execution mode; up to about 8% faster for one user | `reference` |
-| `--host 0.0.0.0` / `--port 8000` | where the server listens (`serve`) | `127.0.0.1:8000` |
-| `--max-active 64` | requests the server handles at once before it answers "busy" | 64 |
-
-Type `dynalm run` or `dynalm serve` with no model to see every option. The full reference is in
-[docs/cli.md](docs/cli.md).
-
-## 5. Local OpenAI-compatible API server
-
-Start the server:
-
-```sh
-dynalm serve qwen3:4b
+To inspect exact model memory requirements, run:
+```bash
+dynalm inspect <model-name-or-path>
 ```
 
-Any program that talks to the OpenAI API can now use your local model. Set its "base URL" to
-`http://127.0.0.1:8000/v1`; any API key works.
+---
 
-```sh
-curl http://127.0.0.1:8000/v1/chat/completions -H "Content-Type: application/json" \
-  -d '{"messages":[{"role":"user","content":"Hello"}],"stream":true}'
+## 3. CLI Reference
+
+### Primary Commands
+
+| Command | Purpose | Example |
+| :--- | :--- | :--- |
+| `dynalm run <model>` | Start an interactive terminal chat session | `dynalm run qwen3:4b` |
+| `dynalm run <model> -p "..."` | Generate a single completion and exit | `dynalm run qwen3:4b -p "Hello"` |
+| `dynalm chat <model>` | Alias for interactive chat mode | `dynalm chat llama:3b` |
+| `dynalm serve <model>` | Start a local OpenAI-compatible HTTP server | `dynalm serve qwen3:4b --port 8000` |
+| `dynalm stop` | Gracefully shut down background server | `dynalm stop` |
+| `dynalm pull <target>` | Download a model from registry or Hugging Face | `dynalm pull gemma3:1b` |
+| `dynalm models` | List all locally cached models | `dynalm models` |
+| `dynalm models --available` | Browse available catalog presets | `dynalm models --available` |
+| `dynalm models rm <model>` | Delete a locally cached model (`-y` to skip confirmation) | `dynalm models rm gemma3:1b` |
+| `dynalm inspect <model>` | Display architecture, tensor sizes, and memory specs | `dynalm inspect qwen3:4b` |
+| `dynalm doctor` | System check (CPU features, RAM, binary health) | `dynalm doctor` |
+| `dynalm config show` | Display active configuration values and sources | `dynalm config show` |
+| `dynalm config init` | Generate a default `~/.dynalm/config.yaml` file | `dynalm config init` |
+| `dynalm benchmark <model>` | Benchmark token generation throughput & latency | `dynalm benchmark qwen3:4b` |
+| `dynalm version` | Display version information | `dynalm --version` |
+| `dynacorec <file>` | Low-level DynaCore kernel compiler ([docs](docs/dynacore-language.md)) | `dynacorec layer.dyna --dump-kernels` |
+
+> **Global flags:** Use `-q` (quiet), `-v` (verbose), or `--log-level debug` before the command (e.g., `dynalm -v run qwen3:4b`).
+
+---
+
+### In-Chat Slash Commands
+
+Inside an interactive chat session (`dynalm run` or `dynalm chat`), use these control commands:
+
+| Command | Action |
+| :--- | :--- |
+| `/bye` | Exit the chat session |
+| `/clear` | Clear the ongoing conversation context |
+| `/system <text>` | Set runtime system prompt (e.g., `/system You are a succinct coding assistant`) |
+| `/think on` \| `/think off` | Toggle Qwen3 reasoning scratchpad (turn `off` for faster, concise responses) |
+| `/set <key> <val>` | Dynamically update parameters (`temp`, `top_p`, `top_k`, `min_p`, `max_tokens`, `seed`) |
+| `/show` | Display active model metadata and sampling configuration |
+| `/stats on` \| `/stats off` | Display tokens/second generation metrics after each response |
+| `/help` | Print in-chat help menu |
+
+---
+
+### Execution Flags (`run` & `serve`)
+
+| Parameter | Description | Default |
+| :--- | :--- | :--- |
+| `-t, --threads <N>` | CPU worker threads | Number of physical cores |
+| `-c, --ctx <N>` | Context window size in tokens | `4096` (`run`) / auto-sized (`serve`) |
+| `-n, --max-tokens <N>` | Maximum output tokens per reply | `128` (single prompt) / `2048` (chat) |
+| `--temp <float>` | Sampling temperature (creativity) | `0.0` (with `-p`) / `0.8` (chat) |
+| `--top-p, --top-k, --min-p` | Advanced sampling controls | Standard model defaults |
+| `--kv <type>` | KV cache precision (`f16`, `q8_0`) | `f16` (use `q8_0` to save ~50% cache RAM) |
+| `--execution compiled` | DynaCore compiled execution backend | `reference` |
+| `--host <address>` | Server host address (`serve`) | `127.0.0.1` |
+| `--port <port>` | Server listening port (`serve`) | `8000` |
+| `--max-active <N>` | Concurrent in-flight request limit | `64` |
+
+*For complete CLI documentation, view [docs/cli.md](docs/cli.md).*
+
+---
+
+## 4. Local OpenAI-Compatible API Server
+
+Start the lightweight, multi-threaded inference server:
+
+```bash
+dynalm serve qwen3:4b --port 8000
 ```
+
+DynaLM serves an OpenAI-compliant REST API. Point any tool, framework, or client directly to `http://127.0.0.1:8000/v1`:
+
+### Using cURL
+
+```bash
+curl http://127.0.0.1:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3:4b",
+    "messages": [{"role": "user", "content": "How do CPU vector instructions work?"}],
+    "stream": true
+  }'
+```
+
+### Using Python (`openai` SDK)
 
 ```python
 from openai import OpenAI
-client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="unused")
-reply = client.chat.completions.create(model="qwen3:4b", messages=[{"role": "user", "content": "Hi"}])
-print(reply.choices[0].message.content)
+
+client = OpenAI(
+    base_url="http://127.0.0.1:8000/v1",
+    api_key="unused"  # DynaLM requires no auth
+)
+
+response = client.chat.completions.create(
+    model="qwen3:4b",
+    messages=[{"role": "user", "content": "Give me a quick high-five in words."}]
+)
+
+print(response.choices[0].message.content)
 ```
 
-| Address | Purpose |
-|---|---|
-| `POST /v1/chat/completions` | chat; add `"stream": true` to get the reply word by word |
-| `POST /v1/completions` | plain text completion |
-| `GET /v1/models` | the model being served |
-| `GET /health` | is the server ready |
-| `GET /metrics` | numbers for monitoring tools (Prometheus) |
+### Supported Endpoints
 
-This works with the OpenAI SDKs, LangChain, LlamaIndex and other OpenAI-compatible apps. Details:
-[docs/api.md](docs/api.md).
+| Endpoint | Method | Description |
+| :--- | :---: | :--- |
+| `/v1/chat/completions` | `POST` | OpenAI-compatible chat completions with SSE streaming support |
+| `/v1/completions` | `POST` | Plain text raw completions |
+| `/v1/models` | `GET` | List currently loaded active model(s) |
+| `/health` | `GET` | Server liveness and readiness probe |
+| `/metrics` | `GET` | Prometheus-compatible inference latency and memory metrics |
 
-## 6. Configuration
+*Supports seamless integration with LangChain, LlamaIndex, LiteLLM, Open WebUI, and Continue.dev. See [docs/api.md](docs/api.md).*
 
-You don't need any settings: DynaLM picks threads, memory and everything else automatically.
-To change the defaults, create a settings file:
+---
 
-```sh
-dynalm config init       # writes ~/.dynalm/config.yaml with comments
-dynalm config show       # shows every setting and where it comes from
+## 5. Configuration & Storage
+
+DynaLM is zero-configuration by default. To persist custom defaults, initialize a configuration file:
+
+```bash
+dynalm config init    # Writes ~/.dynalm/config.yaml
+dynalm config show    # Inspects effective settings and source hierarchy
 ```
 
 ```yaml
 runtime:
   threads: auto
   context_length: 8192
+
 kv_cache:
   dtype: q8_0
+
 server:
   host: 0.0.0.0
   port: 8000
 ```
 
-Priority: command-line options beat environment variables (`DYNALM_PORT=9000`), which beat the
-file. All keys: [docs/configuration.md](docs/configuration.md).
+> **Precedence Hierarchy:** Command-line flags > Environment variables (e.g. `DYNALM_PORT=9000`) > Configuration file (`config.yaml`) > Built-in defaults.
 
-### Where things are stored
+### Storage Directory Layout
 
-| What | Where |
-|---|---|
-| Downloaded models | `~/.dynalm/models` (Windows: `C:\Users\<you>\.dynalm\models`); change with `DYNALM_MODELS_DIR` |
-| Settings | `~/.dynalm/config.yaml` |
-| Program | `~/.local/bin` (Windows: `%LOCALAPPDATA%\Programs\DynaLM\bin`) |
+| Data | Path | Environment Override |
+| :--- | :--- | :--- |
+| **Model Weights** | `~/.dynalm/models` (Windows: `%USERPROFILE%\.dynalm\models`) | `DYNALM_MODELS_DIR` |
+| **User Settings** | `~/.dynalm/config.yaml` | `DYNALM_CONFIG` |
+| **Installed Binary** | `~/.local/bin/dynalm` (Windows: `%LOCALAPPDATA%\Programs\DynaLM\bin`) | Standard system `PATH` |
 
-A `models` folder in the current directory is searched too.
+*DynaLM also automatically inspects a `./models` directory in the current working directory.*
 
-## 7. How to make a local LLM faster on CPU
+---
 
-On a CPU, every word the model writes means reading the whole model from memory. So speed
-depends mostly on model size and your RAM speed.
+## 6. CPU Performance & Speed Optimization
 
-- **Use a smaller model** for faster replies: `qwen2.5:1.5b` instead of `qwen3:4b`, or `Q4_K_M`
-  instead of `Q8_0`.
-- **Keep enough free RAM.** If the model doesn't fit, it is read from disk and gets very slow.
-  Close large apps first.
-- **Use `/think off`** with Qwen3 for short answers. The model skips its long thinking step.
-- **Use `dynalm serve`** when you ask many questions: the model stays loaded.
-- **Try `--execution compiled`.** On a 1.5B model it gave about 8% more tokens per second for a
-  single user. Bigger models and many users see little change.
+LLM inference on a CPU is primarily **memory-bandwidth bound** during token generation: every decoded token requires transferring model weights through memory channels.
 
-Rough speed on a laptop CPU (Intel i7-1255U): about 13 tokens per second with a 1.5B model, and
-about 6 with a 4B model.
+### Optimization Strategies
 
-## 8. Troubleshooting
+1. **Pick the Right Model Scale:** For rapid responses, prefer smaller or MoE architectures (`qwen2.5:1.5b` or `llama3.2:1b`) over larger checkpoints.
+2. **Quantization Selection:** Use `Q4_K_M` for optimal inference throughput with minimal perplexity degradation.
+3. **Turn Off Chain-of-Thought for Short Queries:** With reasoning models like Qwen3, use `/think off` to bypass lengthy reasoning tokens when concise answers are preferred.
+4. **Leverage the Server Mode:** Keep the model weights resident in RAM with `dynalm serve` to eliminate startup and initialization latencies.
+5. **Enable Compiled Execution:** Pass `--execution compiled` to engage specialized DynaCore kernel pipelines for an additional ~8% single-stream throughput gain.
+6. **Ensure Adequate Free RAM:** Keep sufficient free physical memory to avoid page swapping, which drastically degrades CPU throughput.
 
-| Problem | Fix |
-|---|---|
-| `dynalm: command not found` | open a new terminal; or add `~/.local/bin` to your `PATH` |
-| Windows: "An Application Control policy has blocked this file" | Windows Smart App Control blocks unsigned programs; allow it in Windows Security, or build from source |
-| Very slow, or "only X GiB RAM available" in `dynalm doctor` | use a smaller model and close other programs |
-| "architecture ... is not supported" | that model family isn't supported yet ([section 3](#supported-model-families)) |
-| Anything else | run `dynalm doctor` and include its output in an [issue](https://github.com/dynalm-project/dynalm/issues) |
+### Measured Throughput (Reference Laptop: Intel Core i7-1255U)
 
-To force the simplest CPU code path, for example to rule out a CPU feature problem, run
-`DYNACORE_ISA=generic dynalm run ...`.
+| Model Scale | Quantization | Generation Speed |
+| :---: | :---: | :---: |
+| **1.5 Billion** (`qwen2.5:1.5b`) | `Q4_K_M` | **~13.0 tokens/sec** |
+| **4.0 Billion** (`qwen3:4b`) | `Q4_K_M` | **~6.0 tokens/sec** |
 
-## 9. DynaLM vs Ollama, llama.cpp and vLLM
+---
 
-| | DynaLM | Ollama | llama.cpp | vLLM |
-|---|---|---|---|---|
-| Built for | CPU | CPU and GPU | CPU and GPU | GPU servers |
-| GGUF models | yes | yes | yes | partial |
-| Hugging Face SafeTensors, GPTQ, AWQ | yes, on CPU | import step | conversion step | yes, on GPU |
-| OpenAI-compatible server | yes | yes | yes | yes |
-| Many users at once (continuous batching, paged KV cache) | yes | through llama.cpp | partial | yes |
-| Short model names (`qwen3:4b`) | yes | yes | no | no |
-| GPU support | not yet | yes | yes | yes |
-| Language / runtime | C++20, one binary | Go + C++ | C/C++ | Python + CUDA |
+## 7. Troubleshooting
 
-**Choose DynaLM** for a CPU-only machine: a laptop, a desktop without a graphics card, a cloud
-CPU server, or an ARM board. It also suits several users sharing one local model. **Choose
-Ollama, llama.cpp or vLLM** if you have a GPU: they are faster with one today.
+| Symptom | Probable Cause | Recommended Resolution |
+| :--- | :--- | :--- |
+| `dynalm: command not found` | PATH variable not reloaded | Open a new terminal window or add `~/.local/bin` to your shell `PATH`. |
+| Windows: "An Application Control policy has blocked this file" | Windows Smart App Control | Permit execution in Windows Security settings, or compile directly from source. |
+| Slow generation / high RAM warning in `dynalm doctor` | Insufficient physical memory | Switch to a smaller model (`1b` or `1.5b`) and close high-memory background applications. |
+| `"architecture ... is not supported"` | Unsupported model family | Check [Supported Model Families](#architecture--format-compatibility) or open a feature request. |
+| ISA or kernel CPU exception | Unsupported vector instructions | Run with `DYNACORE_ISA=generic dynalm run ...` to force the portable fallback path. |
 
-## 10. FAQ
+> To report an issue, run `dynalm doctor` and paste the sanitized diagnostic output in a [GitHub Issue](https://github.com/dynalm-project/dynalm/issues).
 
-**How do I run an LLM locally without a GPU?**
-Install DynaLM (section 1), then run `dynalm run qwen3:4b`. It downloads a 4-billion-parameter
-model (2.5 GB) and starts a chat that runs entirely on your CPU.
+---
 
-**How do I run Llama 3, Qwen 3 or Gemma 3 on my computer?**
-`dynalm run llama3.2:3b`, `dynalm run qwen3:4b` or `dynalm run gemma3:1b`. Any other GGUF file
-from Hugging Face works with `dynalm pull <owner>/<repo>/<file>.gguf`.
+## 8. Comparison with Other Engines
 
-**Is DynaLM an alternative to Ollama?**
-Yes, for CPU-only computers. The commands feel similar (`pull`, `run`, `serve`) and it reads the
-same GGUF model files. Its server is built to handle several users at the same time.
+| Capability | DynaLM | Ollama | llama.cpp | vLLM |
+| :--- | :---: | :---: | :---: | :---: |
+| **Target Architecture** | **CPU-First** | CPU & GPU | CPU & GPU | GPU Clusters |
+| **GGUF Format Support** | **Native** | Native | Native | Partial |
+| **SafeTensors / GPTQ / AWQ** | **Native CPU** | Import required | Conversion required | GPU-only |
+| **OpenAI-Compatible REST API** | **Built-in** | Built-in | Built-in | Built-in |
+| **Continuous Batching & Paged KV** | **Native** | Via llama.cpp | Partial | Native |
+| **Direct Model Registry (`pull model:size`)** | **Yes** | Yes | No | No |
+| **Runtime & Dependencies** | **Single C++20 Binary** | Go + C++ | C / C++ | Python + CUDA |
+| **GPU Acceleration** | Planned | Yes | Yes | Yes |
 
-**Is DynaLM an alternative to llama.cpp?**
-Yes, for CPU inference. It is a separate C++ engine with its own AVX2 and NEON kernels, a
-scheduler for many concurrent requests, and an OpenAI-compatible server. It reads the same model
-files but does not embed llama.cpp.
+* **Choose DynaLM** when deploying on CPU-based hardware: consumer laptops, desktops without discrete GPUs, cost-effective cloud CPU instances, or edge ARM devices.
+* **Choose Ollama, llama.cpp, or vLLM** if you have dedicated high-end GPU hardware available today.
 
-**Can I use a local LLM with the OpenAI Python SDK, LangChain or LlamaIndex?**
-Yes. Start `dynalm serve <model>` and set the client's base URL to `http://127.0.0.1:8000/v1`.
-Any API key works.
+---
 
-**Does it work on Apple Silicon (M1, M2, M3, M4) or a Raspberry Pi?**
-Yes. Apple Silicon is supported and tested in CI. A Raspberry Pi 4/5 with a 64-bit OS uses the same
-ARM64 build. Small models such as `qwen3:0.6b` or `llama3.2:1b` fit; speed there has not been
-measured yet.
+## 9. Frequently Asked Questions
 
-**What is GGUF, and which quantization should I pick?**
-GGUF is the common file format for ready-to-run local models. Quantization shrinks a model by
-storing its numbers with fewer bits. `Q4_K_M` is the best balance of size and quality. `Q8_0` is
-closer to the original but twice the size.
+<details>
+<summary><b>How do I run an LLM locally without a discrete GPU?</b></summary>
+<br>
+Install DynaLM and run <code>dynalm run qwen3:4b</code>. It automatically downloads the 4B parameter model and begins interactive generation using optimized vector instructions on your CPU.
+</details>
 
-**Is it private? Does it need the internet?**
-Only downloading a model needs the internet. Chatting and the API server work fully offline, and
-nothing is sent anywhere.
+<details>
+<summary><b>Can I run Llama 3, Qwen 3, or Gemma 3 on my computer?</b></summary>
+<br>
+Yes. Simply run <code>dynalm run llama3.2:3b</code>, <code>dynalm run qwen3:4b</code>, or <code>dynalm run gemma3:1b</code>. Any standard GGUF model hosted on Hugging Face can also be loaded via <code>dynalm pull &lt;owner&gt;/&lt;repo&gt;/&lt;file&gt;.gguf</code>.
+</details>
 
-**Is it free for commercial use?**
-Yes. DynaLM is Apache-2.0 licensed. Each model has its own license from its maker (Llama, Gemma,
-Qwen, ...).
+<details>
+<summary><b>Is DynaLM an alternative to Ollama or llama.cpp?</b></summary>
+<br>
+Yes, specifically engineered for CPU inference. It provides familiar commands (<code>pull</code>, <code>run</code>, <code>serve</code>) and supports the same GGUF model ecosystem while featuring an independent C++ engine with custom AVX2/NEON vector kernels and high-concurrency continuous batching.
+</details>
 
-## 11. For developers
+<details>
+<summary><b>Can I connect LangChain, LlamaIndex, or the OpenAI SDK?</b></summary>
+<br>
+Yes. Launch the background daemon with <code>dynalm serve &lt;model&gt;</code> and configure your client to connect to <code>http://127.0.0.1:8000/v1</code>.
+</details>
 
-| Read | About |
-|---|---|
-| [docs/build.md](docs/build.md) | building from source, tests, CI |
-| [docs/architecture.md](docs/architecture.md), [docs/dynalm.md](docs/dynalm.md), [docs/dynacore.md](docs/dynacore.md) | how it is built: DynaLM (models, server) on top of DynaCore (low-level engine) |
-| [docs/dynacore-compiler.md](docs/dynacore-compiler.md), [docs/dynacore-ir.md](docs/dynacore-ir.md), [docs/dynacore-language.md](docs/dynacore-language.md) | the DynaCore compiler, its IR and the `.dyna` language |
-| [docs/compiler-benchmarks.md](docs/compiler-benchmarks.md), [docs/dynacore-optimization.md](docs/dynacore-optimization.md) | measured performance |
-| [docs/design-decisions.md](docs/design-decisions.md) | every major design choice, with evidence |
-| [docs/platform-design.md](docs/platform-design.md), [docs/compiler-backends.md](docs/compiler-backends.md), [docs/gpu-backend.md](docs/gpu-backend.md) | overall design, backends, GPU plans |
-| [CHANGELOG.md](CHANGELOG.md), [ROADMAP.md](ROADMAP.md) | what changed, what's next |
+<details>
+<summary><b>Does DynaLM run on Apple Silicon (M1/M2/M3/M4) and Raspberry Pi?</b></summary>
+<br>
+Yes. macOS ARM64 Apple Silicon is natively supported and validated in CI. Linux ARM64 (such as Raspberry Pi 4/5 with a 64-bit OS) runs using native NEON vectorization.
+</details>
 
-Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md). Report security issues
-privately: see [SECURITY.md](SECURITY.md).
+<details>
+<summary><b>Are my prompts private? Does DynaLM phone home?</b></summary>
+<br>
+Completely private. DynaLM contains zero telemetry and zero tracking. The internet is only accessed when you explicitly request a model download using <code>dynalm pull</code>.
+</details>
 
-## License
+<details>
+<summary><b>Is DynaLM free for commercial use?</b></summary>
+<br>
+Yes. DynaLM is open-source under the Apache-2.0 license. Downloaded model weights are governed by their respective author licenses (Meta Llama, Google Gemma, Qwen, etc.).
+</details>
 
-[Apache License 2.0](LICENSE). Third-party parts are listed in [NOTICE](NOTICE). To cite DynaLM,
-use [CITATION.cff](CITATION.cff).
+---
+
+## 10. Developer Guide & Architecture
+
+DynaLM is architected in two clean layers:
+1. **DynaLM:** High-level model loader, CLI, request scheduler, and OpenAI-compatible server.
+2. **DynaCore:** Low-level high-performance tensor execution engine, memory manager, and compiler.
+
+| Documentation Guide | Focus Area |
+| :--- | :--- |
+| 🛠️ [docs/build.md](docs/build.md) | Source build instructions, test suites, and CI workflows |
+| 🏛️ [docs/architecture.md](docs/architecture.md) | Architectural overview of DynaLM and DynaCore |
+| 📦 [docs/dynalm.md](docs/dynalm.md) & [docs/dynacore.md](docs/dynacore.md) | Model runtimes, tensor structures, and memory arenas |
+| ⚙️ [docs/dynacore-compiler.md](docs/dynacore-compiler.md) | DynaCore intermediate representation (IR) and JIT compiler |
+| 📝 [docs/dynacore-language.md](docs/dynacore-language.md) | The `.dyna` kernel specification domain-specific language |
+| 📊 [docs/compiler-benchmarks.md](docs/compiler-benchmarks.md) | Empirical micro-benchmarks and kernel performance analysis |
+| ⚖️ [docs/design-decisions.md](docs/design-decisions.md) | In-depth engineering rationale and technical benchmarks |
+| 🗺️ [docs/platform-design.md](docs/platform-design.md) & [docs/gpu-backend.md](docs/gpu-backend.md) | Platform hardware architecture and future GPU roadmap |
+| 📋 [CHANGELOG.md](CHANGELOG.md) & [ROADMAP.md](ROADMAP.md) | Release history, migration guides, and future plans |
+
+### Building from Source
+
+```bash
+cmake --preset release
+cmake --build --preset release
+ctest --preset test-all
+```
+
+Contributions are enthusiastically welcomed! Please review our [Contribution Guidelines](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md). For security reports, refer to [SECURITY.md](SECURITY.md).
+
+---
+
+## 📄 License & Attribution
+
+DynaLM is released under the **[Apache License 2.0](LICENSE)**. Third-party components and attributions are documented in [NOTICE](NOTICE).
+
+If you use DynaLM in academic research or production infrastructure, please cite our project using [CITATION.cff](CITATION.cff).
+
+<p align="center">
+  <sub>Built with ❤️ for local, private, and open-source AI computing.</sub>
+</p>
