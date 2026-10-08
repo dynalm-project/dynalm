@@ -6,7 +6,7 @@
 //
 // Each pass is a plain function, testable on its own. compile_segment() runs
 // the pipeline that the compiled execution mode applies at every sync point.
-// Every decision here was measured first (docs/dynacore-optimization.md);
+// Every decision here was measured first (see the design decisions);
 // passes that do not pay for themselves stay off by default.
 
 #include <cstdint>

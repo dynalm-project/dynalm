@@ -42,6 +42,14 @@ Result<std::unique_ptr<Transformer>> Transformer::create(const ModelConfig& conf
   if (max_batch_tokens <= 0) return InvalidArgument("max_batch_tokens must be > 0");
   std::unique_ptr<Transformer> t(new Transformer(config, backend));
   ENGINE_RETURN_IF_ERROR(t->init(weights, max_batch_tokens));
+  // One-time weight preparation for multi-row decode (DD-078): the backend
+  // keeps interleaved copies of the weights it has kernels for.
+  for (const Layer& L : t->layers_) {
+    for (const TensorView* w : {&L.wq, &L.wk, &L.wv, &L.wqkv, &L.wo, &L.w_gate, &L.w_up, &L.w_gate_up}) {
+      if (w->data() != nullptr) backend.prepack_weight(*w);
+    }
+  }
+  if (t->lm_head_.data() != nullptr) backend.prepack_weight(t->lm_head_);
   t->planner_ = std::make_unique<BatchPlanner>(config, HardwareProfile::detect(backend.parallelism(), backend.name()));
   return t;
 }
@@ -412,8 +420,12 @@ Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& c
   backend_.set_kernel_plan(kernels_);
   // The down projection may run without int8 activations (outlier channels).
   KernelPlan down_kernels = kernels_;
-  if (!kernels_.int8_ffn_down) down_kernels.int8_decode_max_rows = 0;
-  const bool switch_for_down = down_kernels.int8_decode_max_rows != kernels_.int8_decode_max_rows;
+  if (!kernels_.int8_ffn_down) {
+    // int16 activations instead, while int8 decode is on (DD-076).
+    if (kernels_.int16_ffn_down) down_kernels.int16_decode_max_rows = kernels_.int8_decode_max_rows;
+    down_kernels.int8_decode_max_rows = 0;
+  }
+  const bool switch_for_down = !(down_kernels == kernels_);
   const std::span<const TokenId> tokens = batch_tokens_;
   const std::span<const int32_t> positions = batch_pos_;
   const std::span<const int32_t> row_seq = batch_seq_;

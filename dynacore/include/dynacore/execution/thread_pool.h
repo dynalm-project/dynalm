@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <mutex>
 #include <thread>
+#include <memory>
 #include <vector>
 
 #include "dynacore/base/function_ref.h"
@@ -32,6 +33,9 @@ struct ThreadPoolStats {
   int64_t region_ns = 0;        // wall time of the parallel regions
   int64_t tail_wait_ns = 0;     // caller idle after its own chunks, waiting for workers
   uint64_t sleeps = 0;          // times a worker gave up spinning and slept (always counted)
+  // Time each thread spent running chunks inside regions: [0] is the caller,
+  // [1..] the workers. busy / region_ns is that thread's utilization.
+  std::vector<int64_t> busy_ns;
 };
 
 class ThreadPool {
@@ -57,15 +61,17 @@ class ThreadPool {
 
   // Statistics are owned by the thread that calls parallel_for (one scheduler
   // thread); toggle and read them from that thread or while it is quiescent.
-  void set_stats_enabled(bool on) { stats_on_ = on; }
+  void set_stats_enabled(bool on) { stats_on_.store(on, std::memory_order_relaxed); }
   ThreadPoolStats stats() const {
     ThreadPoolStats s = stats_;
     s.sleeps = sleeps_.load(std::memory_order_relaxed);
+    s.busy_ns.resize(static_cast<size_t>(size()));
+    for (int i = 0; i < size(); ++i) s.busy_ns[static_cast<size_t>(i)] = busy_[i].ns.load(std::memory_order_relaxed);
     return s;
   }
 
  private:
-  void worker_loop();
+  void worker_loop(int index);
   void run_chunks();
 
   std::vector<std::thread> workers_;
@@ -82,8 +88,15 @@ class ThreadPool {
   std::condition_variable cv_;
   std::atomic<bool> stop_{false};
 
-  bool stats_on_ = false;
+  // Read by workers at every region (relaxed): stats are switched between
+  // regions, never during one.
+  std::atomic<bool> stats_on_{false};
   ThreadPoolStats stats_;
+  // Per-thread busy time while stats are on, one cache line each.
+  struct alignas(kCacheLineSize) Busy {
+    std::atomic<int64_t> ns{0};
+  };
+  std::unique_ptr<Busy[]> busy_;
   alignas(kCacheLineSize) std::atomic<uint64_t> sleeps_{0};
   alignas(kCacheLineSize) std::atomic<int> sleepers_{0};  // workers blocked on cv_
 };

@@ -48,5 +48,3 @@ DynaLM never sees IR or kernels in either mode.
 Further reading:
 
 - architecture: [architecture.md](architecture.md)
-- design: [platform-design.md](platform-design.md)
-- decisions: [design-decisions.md](design-decisions.md)

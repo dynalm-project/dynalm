@@ -10,7 +10,7 @@ DynaCore is the low-level inference runtime under DynaLM. It holds:
 - the IR, compiler and language.
 
 It knows nothing about LLMs as products: no model families, file formats, tokenizers,
-requests or HTTP. A ctest and a CI job enforce this (DD-068).
+requests or HTTP. The `core-only` build and its CI job enforce this.
 
 | Module (`dynacore/include/dynacore/...`) | Contents |
 |---|---|

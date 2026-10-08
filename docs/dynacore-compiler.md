@@ -4,10 +4,10 @@ How DynaLM can optimize the steps of a running model (grouping and fusing CPU op
 
 The DynaCore compiler turns recorded IR into an execution plan for a device (DD-072). Today
 its backend is the existing C++ kernel library: the compiler decides **which calls** run,
-how they are **grouped**, and under **which kernel plan**. Stage 1 of
-[the native code generation strategy](platform-design.md) is implemented and measured.
-Stages 2 and 3 (generated intrinsic kernels, native code) are not built.
-[compiler-backends.md](compiler-backends.md) explains why.
+how they are **grouped**, and under **which kernel plan**. Stage 1 of the native code
+generation strategy is implemented and measured. Stages 2 and 3 (generated intrinsic kernels,
+native code) are not built: the hand-written kernels already run large GEMVs at 88-96% of DRAM
+bandwidth.
 
 ```
 DynaLM Transformer
@@ -108,4 +108,4 @@ of logits for all 11 tiny architectures.
 
 ## Results
 
-See [compiler-benchmarks.md](compiler-benchmarks.md).
+

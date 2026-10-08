@@ -90,8 +90,16 @@ int main(int argc, char** argv) {
     if (!table.reserve(pos + 1).ok()) std::abort();
     const SeqBatch b{std::span<const TokenId>(&t, 1), pos, table.block_table(), true};
     ExecutionPlan plan = (*tf)->planner().plan({&b, 1});
-    plan.kernels.int8_decode_max_rows = mode == 1 || mode == 3 ? 4 : 0;
-    plan.kernels.int8_ffn_down = mode != 3;
+    // Modes 4/5: super-block activations (DD-075), forced at M = 1 (the
+    // per-row arithmetic is the same at any M).
+    // Mode 6: int8 except ffn_down, which uses int16 activations (DD-076).
+    plan.kernels.int8_decode_max_rows = mode == 1 || mode >= 3 ? 4 : 0;
+    plan.kernels.int8_ffn_down = mode != 3 && mode != 4 && mode != 6;
+    plan.kernels.int8_superblock_min_rows = mode == 4 || mode == 5 ? 1 : 0;
+    plan.kernels.int16_ffn_down = mode == 6 || mode == 7;
+    // Mode 7: sub-scaled int8 activations (DD-077) forced at M = 1, int16 down.
+    plan.kernels.int8_subscale_min_rows = mode == 7 ? 1 : 0;
+    if (mode == 7) plan.kernels.int8_ffn_down = false;
     plan.kernels.expand_min_rows = mode == 2 ? 1 : 1 << 30;
     out.resize(static_cast<size_t>(vocab));
     if (!(*tf)->forward_batch({&b, 1}, kv, out, &plan).ok()) std::abort();
@@ -155,9 +163,78 @@ int main(int argc, char** argv) {
   std::printf("top-1 agreement %.2f%% | max |logit diff| %.4f\n", 100.0 * agree / n, dmax);
   std::printf("greedy continuation: identical for %zu of %zu tokens\n", diverge, out_fp.size());
   };
+  // Prefill shapes (DD-078): the text in chunks of `chunk` tokens, every
+  // position scored, default plan (as the scheduler would run it) against the
+  // fp32 plan. Exercises the multi-row paths a token-at-a-time run never hits.
+  auto compare_prefill = [&](int chunk) {
+    double nll_fp = 0, nll_alt = 0, kl_sum = 0, kl_max = 0, dmax = 0;
+    int agree = 0, n = 0;
+    std::unique_ptr<KvBlockPool> kv_fp = make_kv(), kv_alt = make_kv();
+    KvBlockTable tab_fp(*kv_fp), tab_alt(*kv_alt);
+    std::vector<float> lf, la;
+    const auto total = static_cast<int32_t>(text.size()) - 1;  // positions with a next token
+    for (int32_t start = 0; start < total; start += chunk) {
+      const int32_t len = std::min(chunk, total - start);
+      const std::span<const TokenId> toks(text.data() + start, static_cast<size_t>(len));
+      for (int path = 0; path < 2; ++path) {
+        KvBlockTable& tab = path == 0 ? tab_fp : tab_alt;
+        if (!tab.reserve(start + len).ok()) std::abort();
+        SeqBatch b{toks, start, tab.block_table(), true};
+        b.logits_last = len;
+        ExecutionPlan plan = (*tf)->planner().plan({&b, 1});
+        if (path == 0 && std::getenv("BENCH_REF_SAME")) {  // reference: identical plan (determinism)
+        } else if (path == 0 && std::getenv("BENCH_REF_UNPACKED")) {  // reference: same plan, original layout
+          plan.kernels.q4_repack_min_rows = 0;
+        } else if (path == 0) {  // fp32 reference: no int8/int16 activations
+          plan.kernels.int8_decode_max_rows = 0;
+          plan.kernels.int16_ffn_down = false;
+        }
+        std::vector<float>& out = path == 0 ? lf : la;
+        out.resize(static_cast<size_t>(len) * static_cast<size_t>(vocab));
+        if (!(*tf)->forward_batch({&b, 1}, path == 0 ? *kv_fp : *kv_alt, out, &plan).ok()) std::abort();
+      }
+      for (int32_t r = 0; r < len; ++r) {
+        const float* a_l = lf.data() + static_cast<size_t>(r) * static_cast<size_t>(vocab);
+        const float* b_l = la.data() + static_cast<size_t>(r) * static_cast<size_t>(vocab);
+        const auto a = log_softmax(a_l, vocab), bq = log_softmax(b_l, vocab);
+        const auto next = static_cast<size_t>(text[static_cast<size_t>(start + r + 1)]);
+        nll_fp -= a[next];
+        nll_alt -= bq[next];
+        double kl = 0;
+        int64_t am = 0, bm = 0;
+        for (int64_t i = 0; i < vocab; ++i) {
+          kl += std::exp(a[static_cast<size_t>(i)]) * (a[static_cast<size_t>(i)] - bq[static_cast<size_t>(i)]);
+          dmax = std::max(dmax, std::abs(static_cast<double>(a_l[i]) - b_l[i]));
+          if (a_l[i] > a_l[am]) am = i;
+          if (b_l[i] > b_l[bm]) bm = i;
+        }
+        kl_sum += kl;
+        kl_max = std::max(kl_max, kl);
+        agree += am == bm ? 1 : 0;
+        ++n;
+      }
+    }
+    std::printf("\n[prefill chunks of %d: default plan vs fp32]\n", chunk);
+    std::printf("teacher-forced positions: %d\n", n);
+    std::printf("perplexity fp32 %.4f | alt %.4f | change %+.3f%%\n", std::exp(nll_fp / n), std::exp(nll_alt / n),
+                100.0 * (std::exp(nll_alt / n) / std::exp(nll_fp / n) - 1.0));
+    std::printf("KL(fp32 || alt) mean %.6f max %.6f nats\n", kl_sum / n, kl_max);
+    std::printf("top-1 agreement %.2f%% | max |logit diff| %.4f\n", 100.0 * agree / n, dmax);
+  };
   std::printf("model: %s (%s), %d threads\n", argv[1], (*lm)->quantization.c_str(), threads);
+  if (std::getenv("BENCH_PREFILL_ONLY")) {
+    compare_prefill(32);
+    compare_prefill(64);
+    return 0;
+  }
   compare(2, "fp32 expand path (summation-order noise floor)");
   compare(1, "int8 activations");
   compare(3, "int8 activations except ffn_down");
+  compare(4, "super-block int8 activations except ffn_down (DD-075)");
+  compare(5, "super-block int8 activations incl. ffn_down");
+  compare(6, "int8 activations, int16 for ffn_down (DD-076)");
+  compare(7, "sub-scaled int8 activations (DD-077), int16 for ffn_down");
+  compare_prefill(32);
+  compare_prefill(64);
   return 0;
 }

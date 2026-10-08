@@ -66,6 +66,19 @@ class Device {
   // Execution decisions for the next forward pass, from the planner (DD-051).
   // Backends without per-step choices ignore it.
   virtual void set_kernel_plan(const KernelPlan& plan) { (void)plan; }
+
+  // Optional one-time preparation of a matmul weight at model load, such as
+  // an interleaved copy for multi-row decode (DD-078). Never on the request
+  // path. Backends without such layouts ignore it.
+  virtual void prepack_weight(const TensorView& w) { (void)w; }
+  struct PrepackStats {
+    int64_t tensors = 0;
+    int64_t source_bytes = 0;
+    int64_t packed_bytes = 0;
+    int64_t skipped = 0;  // tensors left unpacked by the memory budget
+    double ms = 0;
+  };
+  virtual PrepackStats prepack_stats() const { return {}; }
   // Independent workers kernels can use (CPU: thread-pool size).
   virtual int32_t parallelism() const { return 1; }
 

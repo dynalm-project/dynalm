@@ -6,7 +6,7 @@
 // captured as DynaCore IR and timed individually. Prints time by op kind and
 // the slowest individual ops of a decode step, and optionally writes the IR
 // of the last decode step (bench_op_trace ... --dump step.ir). This is the
-// measurement compiler decisions are made from (docs/dynacore-next-state.md).
+// measurement compiler decisions are made from.
 
 #include <algorithm>
 #include <chrono>

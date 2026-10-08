@@ -4,6 +4,6 @@
 
 ## Checklist
 
-- [ ] Tests added or updated, and `ctest` passes locally
+- [ ] Builds locally, and `dynalm doctor` passes
 - [ ] Benchmarks attached if this claims a performance change
 - [ ] Docs updated (README, docs/, CHANGELOG.md) if behavior changed

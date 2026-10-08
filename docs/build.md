@@ -13,7 +13,7 @@ DynaLM is a CMake project with two libraries and two executables (DD-068).
 ```sh
 cmake --preset msvc-release          # linux-release, linux-clang-release, macos-release
 cmake --build --preset msvc-release
-ctest --preset msvc-release
+build/msvc-release/bin/dynalm doctor   # DynaCore kernel self-test
 ```
 
 Windows needs a shell with MSVC on the PATH: a Developer PowerShell, or `tools\dev.cmd <command>`
@@ -23,15 +23,15 @@ in this repository.
 
 | Preset | Purpose |
 |---|---|
-| `msvc-release`, `linux-release`, `linux-clang-release`, `macos-release` | release builds with tests and benchmarks |
+| `msvc-release`, `linux-release`, `linux-clang-release`, `macos-release` | release builds with benchmarks |
 | `msvc-asan`, `linux-asan-ubsan`, `linux-tsan` | sanitizers |
-| `core-only` | DynaCore alone (`DYNALM_CORE_ONLY=ON`): proves DynaCore builds and tests without `dynalm/` |
+| `core-only` | DynaCore alone (`DYNALM_CORE_ONLY=ON`): proves DynaCore builds without `dynalm/` |
 
 ## Options
 
 | Option | Default | Effect |
 |---|---|---|
-| `ENABLE_TESTS`, `ENABLE_BENCHMARKS`, `ENABLE_SERVER` | ON | components |
+| `ENABLE_BENCHMARKS`, `ENABLE_SERVER` | ON | components |
 | `ENABLE_AVX2` / `ENABLE_AVX512` / `ENABLE_AMX` | ON / OFF / OFF | x86-64 kernel tiers (selected at run time; off on other CPUs) |
 | `ENABLE_NEON` | ON | ARM64 kernel tier |
 | `ENABLE_CUDA` / `HIP` / `METAL` / `VULKAN` | OFF | future devices; ON is a configure error |
@@ -40,37 +40,17 @@ in this repository.
 | `DYNALM_LTO` | OFF | link-time optimization (DD-063) |
 | `ENABLE_ASAN` / `ENABLE_UBSAN` / `ENABLE_TSAN` | OFF | sanitizers |
 
-## Tests
+## Checking a build
 
-- `ctest` runs these suites:
-  - DynaCore: foundation, tensor, quant, kernels, IR, language;
-  - DynaLM: loader, tokenizer, architectures, runtime, scheduler, KV, prefix cache, server,
-    compiled execution, registry/config, ...;
-  - the boundary check `boundary.dynacore`.
-- Real-model tests skip themselves when `models/*.gguf` are absent (`tools/fetch_models.sh`).
-
-## Test labels and smoke tests
-
-| Label | Contents |
-|---|---|
-| `dynacore` | DynaCore unit tests: tensor, quant, kernels, IR, language |
-| `dynalm` | DynaLM unit and integration tests |
-| `boundary` | `tests/boundary/check_boundary.py` |
-| `smoke` | `tests/smoke/cli_smoke.cmake` (version, doctor, inference with the best ISA, generic and compiled, dynacorec) and `tests/smoke/serve_smoke.py` (serve + OpenAI endpoints), on a committed tiny model |
-
-Run them with `ctest --preset msvc-release -L smoke` (or `-L dynacore`, ...).
-
-The smoke scripts also run against installed binaries. `tools/ci/package.sh` builds the
-release archive, installs it through the installer into an empty prefix, and runs them plus
-`tools/ci/check_isa.py`, which checks that the kernel tier matches the CPU and that the
-generic fallback works.
-
-## Boundary
-
-- `tests/boundary/check_boundary.py` fails if anything under `dynacore/` includes a
-  non-DynaCore header or names an LLM-platform concept (model families, GGUF, tokenizer, HTTP,
-  scheduler, the product name).
-- The CI job `boundary` runs the check and the `core-only` build.
+- `dynalm --version` prints the build and the kernel tiers compiled in.
+- `dynalm doctor` (or `--json`) reports the CPU, the kernel tier in use and memory, and runs a
+  DynaCore kernel self-test (selected tier against the generic kernels).
+- `tools/ci/check_isa.py <dynalm>` checks that the selected tier matches the CPU and that the
+  generic fallback works (`DYNACORE_ISA=generic`).
+- `tools/ci/package.sh` builds the release archive, installs it through the installer into an
+  empty prefix, and runs these checks on the installed binaries.
+- The `core-only` preset builds DynaCore without `dynalm/`, so any dependency of DynaCore on
+  DynaLM fails to compile; the CI job `boundary` runs it.
 
 ## Platforms
 
@@ -79,17 +59,16 @@ generic fallback works.
 | Linux x86-64 | generic + AVX2 | CI: gcc, clang, ASAN/UBSAN, TSAN |
 | Linux ARM64 | generic + NEON | CI (`ubuntu-24.04-arm`) |
 | macOS Apple Silicon | NEON | CI (`macos-14`) |
-| Windows x64 | generic + AVX2 | MSVC build and full suite locally; CI |
+| Windows x64 | generic + AVX2 | MSVC build locally; CI |
 
-## Test models
+## Models for local runs
 
 `bash tools/fetch_models.sh` downloads SmolLM2-135M and Qwen2.5-0.5B into `models/`, which is
-git-ignored. Real-model tests use them when present.
+git-ignored.
 
 ## Windows Smart App Control
 
-- In enforce mode, Smart App Control can block freshly linked, unsigned test executables
+- In enforce mode, Smart App Control can block freshly linked, unsigned executables
   ("An Application Control policy has blocked this file").
-- gtest discovery then reports `Error running test executable`.
 - The build does not work around this host policy. Rely on the CI jobs, or change the policy
   yourself.

@@ -355,6 +355,7 @@ LLM inference on a CPU is primarily **memory-bandwidth bound** during token gene
 4. **Leverage the Server Mode:** Keep the model weights resident in RAM with `dynalm serve` to eliminate startup and initialization latencies.
 5. **Enable Compiled Execution:** Pass `--execution compiled` to engage specialized DynaCore kernel pipelines for an additional ~8% single-stream throughput gain.
 6. **Ensure Adequate Free RAM:** Keep sufficient free physical memory to avoid page swapping, which drastically degrades CPU throughput.
+7. **Serving several users at once:** DynaLM keeps an extra interleaved copy of Q4_K weights for batched decoding (2-8 requests at a time), about +5% of the Q4_K weight size per tensor packed. It is skipped tensor by tensor when it would leave less than 3 GiB of RAM free. Control it with `DYNACORE_Q4_REPACK=off|auto|always`. `--policy latency` shortens the pauses running streams see while a new long prompt is read; `--policy throughput` turns that protection off.
 
 ### Measured Throughput (Reference Laptop: Intel Core i7-1255U)
 
@@ -451,14 +452,11 @@ DynaLM is architected in two clean layers:
 
 | Documentation Guide | Focus Area |
 | :--- | :--- |
-| 🛠️ [docs/build.md](docs/build.md) | Source build instructions, test suites, and CI workflows |
+| 🛠️ [docs/build.md](docs/build.md) | Source build instructions and CI workflows |
 | 🏛️ [docs/architecture.md](docs/architecture.md) | Architectural overview of DynaLM and DynaCore |
 | 📦 [docs/dynalm.md](docs/dynalm.md) & [docs/dynacore.md](docs/dynacore.md) | Model runtimes, tensor structures, and memory arenas |
 | ⚙️ [docs/dynacore-compiler.md](docs/dynacore-compiler.md) | DynaCore intermediate representation (IR) and JIT compiler |
 | 📝 [docs/dynacore-language.md](docs/dynacore-language.md) | The `.dyna` kernel specification domain-specific language |
-| 📊 [docs/compiler-benchmarks.md](docs/compiler-benchmarks.md) | Empirical micro-benchmarks and kernel performance analysis |
-| ⚖️ [docs/design-decisions.md](docs/design-decisions.md) | In-depth engineering rationale and technical benchmarks |
-| 🗺️ [docs/platform-design.md](docs/platform-design.md) & [docs/gpu-backend.md](docs/gpu-backend.md) | Platform hardware architecture and future GPU roadmap |
 | 📋 [CHANGELOG.md](CHANGELOG.md) & [ROADMAP.md](ROADMAP.md) | Release history, migration guides, and future plans |
 
 ### Building from Source
@@ -466,7 +464,6 @@ DynaLM is architected in two clean layers:
 ```bash
 cmake --preset release
 cmake --build --preset release
-ctest --preset test-all
 ```
 
 Contributions are enthusiastically welcomed! Please review our [Contribution Guidelines](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md). For security reports, refer to [SECURITY.md](SECURITY.md).

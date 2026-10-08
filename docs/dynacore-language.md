@@ -115,8 +115,7 @@ benchmark (CPU/avx2, 10 threads, M=1): unplanned 2709.7 us, compiled 2368.2 us, 
 ## What the language is not (yet)
 
 - **Kernel bodies.** There are no tiles, vectors, loads or stores. A kernel-level sublanguage
-  is useful only once the compiler generates kernels (stage 2,
-  [compiler-backends.md](compiler-backends.md)). Measurements show the hand-written GEMVs at
+  is useful only once the compiler generates kernels (stage 2). Measurements show the hand-written GEMVs at
   88–96% of DRAM bandwidth on this machine, so there is no case for it yet.
 - **Prefetch and tile directives.** They are rejected rather than silently ignored, because
   the optimizer does not act on them.

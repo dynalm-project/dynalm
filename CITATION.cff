@@ -7,8 +7,8 @@ authors:
     website: "https://github.com/sajosam"
 repository-code: "https://github.com/dynalm-project/dynalm"
 license: Apache-2.0
-version: 0.1.1
-date-released: "2026-10-07"
+version: 0.1.2
+date-released: "2026-10-08"
 keywords:
   - large language models
   - LLM inference

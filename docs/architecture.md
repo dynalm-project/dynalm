@@ -3,8 +3,7 @@
 An overview of how DynaLM runs LLMs on a CPU: the platform layer (models, scheduler, server) on top of the DynaCore runtime (tensors, kernels, devices).
 
 Status: all engine phases complete; DynaCore/DynaLM split done (R0, DD-068). Implemented parts are
-marked ✅. The full platform design, roadmap and decision summary are in
-[platform-design.md](platform-design.md).
+marked ✅. The roadmap is in [ROADMAP.md](../ROADMAP.md).
 
 ## Two layers, one product
 
@@ -42,8 +41,7 @@ on the same kernels. See [dynacore-compiler.md](dynacore-compiler.md).
 
 DynaLM includes DynaCore headers as `"dynacore/<module>/<file>.h"` and sees the DynaCore names
 unqualified through `dynalm/src/common/core.h`. DynaCore has only `dynacore/include` on its
-include path, builds and tests alone (`cmake --preset core-only`), and is scanned by
-`tests/boundary/check_boundary.py` for LLM-level concepts.
+include path, and builds alone (`cmake --preset core-only`).
 
 ## Dependency rules
 
@@ -79,8 +77,7 @@ handled inside the loaders. Adapters and the runtime see one IR (DD-040).
 - Future GPU backends add a device dimension beside this. They do not change the
   scheduler, model, or KV interfaces.
 - Device memory is owned and touched only by the DynaCore device (`upload`, `allocate`, `copy`,
-  `download`, plus gather/scatter/fill ops). A memory-guarded test backend enforces this
-  for every model and runtime path (DD-045; contract in `docs/gpu-backend.md`).
+  `download`, plus gather/scatter/fill ops).
 
 ## Forward pass (✅)
 

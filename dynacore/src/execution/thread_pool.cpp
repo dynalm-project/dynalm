@@ -30,6 +30,7 @@ inline void cpu_relax() {
 
 ThreadPool::ThreadPool(int num_threads) {
   const int workers = std::max(0, num_threads - 1);
+  busy_ = std::make_unique<Busy[]>(static_cast<size_t>(workers) + 1);
   workers_.reserve(static_cast<size_t>(workers));
   for (int i = 0; i < workers; ++i) {
     workers_.emplace_back([this, i] {
@@ -38,7 +39,7 @@ ThreadPool::ThreadPool(int num_threads) {
         const auto& cores = cpu_info().core_first_cpu;
         if (static_cast<size_t>(i) + 1 < cores.size()) pin_current_thread(cores[static_cast<size_t>(i) + 1]);
       }
-      worker_loop();
+      worker_loop(i);
     });
   }
 }
@@ -60,7 +61,7 @@ void ThreadPool::run_chunks() {
   }
 }
 
-void ThreadPool::worker_loop() {
+void ThreadPool::worker_loop(int index) {
   // Start from the construction-time epoch (0), not a fresh load: a job may
   // already have been published before this thread got scheduled, and it
   // must still be counted as unseen.
@@ -89,7 +90,13 @@ void ThreadPool::worker_loop() {
       spins = 0;
     }
     seen = e;
-    run_chunks();
+    if (stats_on_.load(std::memory_order_relaxed)) {
+      const int64_t t0 = now_ns();
+      run_chunks();
+      busy_[static_cast<size_t>(index) + 1].ns.fetch_add(now_ns() - t0, std::memory_order_relaxed);
+    } else {
+      run_chunks();
+    }
     active_.fetch_sub(1, std::memory_order_acq_rel);
   }
 }
@@ -135,6 +142,7 @@ void ThreadPool::parallel_for(size_t n, size_t grain, FunctionRef<void(size_t, s
 
   run_chunks();
   const int64_t t_own = stats_on_ ? now_ns() : 0;
+  if (stats_on_) busy_[0].ns.fetch_add(t_own - t0, std::memory_order_relaxed);
   // Wait for workers to finish their last chunk (they never block mid-job).
   while (active_.load(std::memory_order_acquire) != 0) cpu_relax();
   fn_ = nullptr;

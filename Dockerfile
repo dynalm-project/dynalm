@@ -18,7 +18,7 @@ COPY dynacore dynacore
 COPY dynalm dynalm
 COPY docs docs
 RUN cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-      -DENABLE_TESTS=OFF -DENABLE_BENCHMARKS=OFF -DDYNALM_STATIC_RUNTIME=ON \
+      -DENABLE_BENCHMARKS=OFF -DDYNALM_STATIC_RUNTIME=ON \
     && cmake --build build \
     && cmake --install build --prefix /opt/dynalm
 

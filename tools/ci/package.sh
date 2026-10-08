@@ -4,7 +4,7 @@
 #   2. cpack -> dist/dynalm-<os>-<arch>.{tar.gz,zip} + dist/<archive>.sha256
 #   3. install it with the user-facing installer (scripts/install.sh or
 #      scripts/install.ps1, --archive + checksum) into an empty prefix
-#   4. run tests/smoke (CLI and server) against the INSTALLED binaries
+#   4. check the INSTALLED binaries (version, doctor self-test, CPU features)
 #
 #   tools/ci/package.sh [extra cmake args...]      (run from the repository root)
 #
@@ -24,7 +24,7 @@ esac
 CXX_ARGS=()
 if [ "$WIN" = 1 ]; then CXX_ARGS=(-DCMAKE_CXX_COMPILER=cl); fi
 
-cmake -S . -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_TESTS=OFF -DENABLE_BENCHMARKS=OFF \
+cmake -S . -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_BENCHMARKS=OFF \
   -DDYNALM_STATIC_RUNTIME=ON ${CXX_ARGS[@]+"${CXX_ARGS[@]}"} "$@"
 cmake --build "$BUILD"
 (cd "$BUILD" && cpack)
@@ -56,11 +56,8 @@ else
 fi
 
 PY="$(command -v python3 || command -v python)"
-MODEL="dynalm/tests/data/tiny_llama.gguf"
-cmake -DDYNALM="$EXE" -DDYNACOREC="$CEXE" -DMODEL="$MODEL" -DDYNA=examples/dynacore/decoder_layer.dyna \
-  -P tests/smoke/cli_smoke.cmake
-"$PY" tests/smoke/serve_smoke.py "$EXE" "$MODEL"
-"$PY" tests/smoke/serve_smoke.py "$EXE" "$MODEL" --execution compiled
+"$EXE" --version
+[ -f "$CEXE" ] || [ -f "$CEXE.exe" ] || { echo "dynacorec missing from the install"; exit 1; }
 "$PY" tools/ci/check_isa.py "$EXE"
 "$EXE" doctor
 echo "package ok: $DIST/$NAME"

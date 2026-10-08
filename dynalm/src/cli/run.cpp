@@ -329,6 +329,11 @@ int cmd_run(std::span<const std::string_view> raw_args) {
   LOG_INFO("Device: {}, threads: {}", e.backend_name(), e.threads());
   LOG_INFO("Weights: {:.1f} MiB mmapped, KV cache: {:.1f} MiB ({} tokens, {})", lm.weight_bytes / kMiB,
            e.kv_geometry().total_bytes() / kMiB, ctx, dtype_name(opts.kv_dtype));
+  if (const auto ps = e.prepack_stats(); ps.tensors > 0 || ps.skipped > 0) {
+    LOG_INFO("Repacked {} Q4_K tensors for multi-row decode: {:.1f} MiB extra in {:.0f} ms ({} left unpacked by the "
+             "memory budget)",
+             ps.tensors, static_cast<double>(ps.packed_bytes) / kMiB, ps.ms, ps.skipped);
+  }
   LOG_INFO("Load time: {:.1f} ms", load_timer.elapsed_ms());
 
   params.max_tokens = max_tokens;

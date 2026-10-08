@@ -60,6 +60,14 @@ uint64_t plan_word(const KernelPlan& p) {
   mix(static_cast<uint64_t>(p.matmul_chunks_per_thread));
   mix(static_cast<uint64_t>(p.int8_decode_max_rows));
   mix(p.int8_ffn_down ? 1 : 0);
+  mix(static_cast<uint64_t>(p.int16_decode_max_rows));
+  mix(p.int16_ffn_down ? 1 : 0);
+  mix(static_cast<uint64_t>(p.int8_superblock_min_rows));
+  mix(static_cast<uint64_t>(p.int8_superblock_max_rows));
+  mix(static_cast<uint64_t>(p.int8_subscale_min_rows));
+  mix(static_cast<uint64_t>(p.q4_repack_min_rows));
+  mix(static_cast<uint64_t>(p.q4_repack_max_rows));
+  mix(static_cast<uint64_t>(p.q4_repack_min_out));
   mix(static_cast<uint64_t>(p.attention_full));
   mix(static_cast<uint64_t>(p.attention_window));
   mix(static_cast<uint64_t>(p.attention_chunk));

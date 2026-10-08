@@ -10,7 +10,7 @@ paged KV caches, grouped-query attention, RoPE, norms. Backends decide **how** i
 kernels, tiles and threads. The IR is not a general compute graph and has no control flow.
 
 Code: `dynacore/include/dynacore/ir/` (`ir.h`, `text.h`, `verifier.h`, `passes.h`,
-`recording_device.h`). Tests: `dynacore/tests/test_ir.cpp` and `dynalm/tests/test_compiled.cpp`.
+`recording_device.h`).
 
 ## Values and types
 
@@ -119,11 +119,10 @@ if (!b.status().ok()) ...  // first typing error, with the op and the reason
 ## Where IR comes from
 
 DynaLM never builds IR by hand. Its `Transformer` issues `Device` ops, and a
-`RecordingDevice` turns that stream into IR (platform-design.md §15). The recording device
+`RecordingDevice` turns that stream into IR . The recording device
 has two modes:
 
 - **Trace mode** builds the graph of one forward pass and times every op
-  (`bench_op_trace`). The op-level profile in
-  [dynacore-optimization.md](dynacore-optimization.md) comes from it.
+  (`bench_op_trace`).
 - **Deferred mode** is the compiled execution path described in
   [dynacore-compiler.md](dynacore-compiler.md).

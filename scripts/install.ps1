@@ -49,7 +49,7 @@ if ($FromSource) {
   $build = Join-Path $Root 'build\install-release'
   $steps = @(
     "call `"$vcvars`" $vsArch >nul",
-    "cmake -S `"$Root`" -B `"$build`" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=cl -DENABLE_TESTS=OFF -DENABLE_BENCHMARKS=OFF -DDYNALM_STATIC_RUNTIME=ON",
+    "cmake -S `"$Root`" -B `"$build`" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=cl -DENABLE_BENCHMARKS=OFF -DDYNALM_STATIC_RUNTIME=ON",
     "cmake --build `"$build`"",
     "cmake --install `"$build`" --prefix `"$Prefix`""
   ) -join ' && '

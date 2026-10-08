@@ -102,6 +102,8 @@ class RecordingDevice final : public Device {
   const std::vector<int64_t>& op_ns() const { return op_ns_; }
   const RecordingStats& stats() const { return stats_; }
   Device& inner() { return inner_; }
+  void prepack_weight(const TensorView& w) override { inner_.prepack_weight(w); }
+  PrepackStats prepack_stats() const override { return inner_.prepack_stats(); }
 
   // Runs everything recorded so far (deferred mode). Call it (or any sync
   // point) before destroying buffers the recorded calls use: the destructor

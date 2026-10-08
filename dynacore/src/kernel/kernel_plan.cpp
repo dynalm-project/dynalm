@@ -29,6 +29,19 @@ const KernelPlan& KernelPlan::defaults() {
     if (const char* c = std::getenv("DYNACORE_MATMUL_CHUNKS")) {
       p.matmul_chunks_per_thread = static_cast<int32_t>(std::max<long>(1, std::strtol(c, nullptr, 10)));
     }
+    if (const char* sb = std::getenv("DYNACORE_INT8_SUPERBLOCK")) {
+      p.int8_superblock_min_rows = static_cast<int32_t>(std::max<long>(0, std::strtol(sb, nullptr, 10)));
+    }
+    if (const char* sx = std::getenv("DYNACORE_INT8_SUBSCALE")) {
+      p.int8_subscale_min_rows = static_cast<int32_t>(std::max<long>(0, std::strtol(sx, nullptr, 10)));
+    }
+    if (const char* rp = std::getenv("DYNACORE_Q4_REPACK_ROWS")) {
+      p.q4_repack_min_rows = static_cast<int32_t>(std::max<long>(0, std::strtol(rp, nullptr, 10)));
+    }
+    if (const char* rm = std::getenv("DYNACORE_Q4_REPACK_MAX_ROWS")) {
+      p.q4_repack_max_rows = static_cast<int32_t>(std::max<long>(0, std::strtol(rm, nullptr, 10)));
+    }
+    if (const char* d = std::getenv("DYNACORE_INT16_FFN_DOWN")) p.int16_ffn_down = std::strtol(d, nullptr, 10) != 0;
     if (const char* g = std::getenv("DYNACORE_ATTN_GROUPED")) p.grouped_attention = std::strtol(g, nullptr, 10) != 0;
     if (const char* kc = std::getenv("DYNACORE_GEMM_KC")) {
       const long v = std::strtol(kc, nullptr, 10);

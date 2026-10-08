@@ -160,6 +160,11 @@ Diagnostics diagnose(const Engine& engine, const EngineStats& a, const EngineSta
     d.pool_region_ms = static_cast<double>(b.pool.region_ns - a.pool.region_ns) * 1e-6;
     d.pool_tail_wait_ms = static_cast<double>(b.pool.tail_wait_ns - a.pool.tail_wait_ns) * 1e-6;
     d.pool_sleeps = static_cast<double>(b.pool.sleeps - a.pool.sleeps);
+    if (d.pool_region_ms > 0 && a.pool.busy_ns.size() == b.pool.busy_ns.size()) {
+      for (size_t t = 0; t < b.pool.busy_ns.size(); ++t) {
+        d.pool_thread_util.push_back(static_cast<double>(b.pool.busy_ns[t] - a.pool.busy_ns[t]) * 1e-6 / d.pool_region_ms);
+      }
+    }
   }
   d.perf = perf;
   d.cpu_mhz = cpu_mhz;
@@ -382,6 +387,11 @@ std::string to_json(const PointResult& r, const std::string& model, const std::s
     pool["region_ms"] = num_or_null(d.pool_region_ms);
     pool["tail_wait_ms"] = num_or_null(d.pool_tail_wait_ms);
     pool["sleeps"] = num_or_null(d.pool_sleeps);
+    if (!d.pool_thread_util.empty()) {
+      json::Array util;
+      for (double u : d.pool_thread_util) util.push_back(u);
+      pool["thread_util"] = std::move(util);
+    }
     g["pool"] = std::move(pool);
     json::Object pc;
     pc["cycles"] = cnt_or_null(d.perf.cycles);

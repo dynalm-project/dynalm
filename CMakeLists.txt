@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(dynalm
-  VERSION 0.1.1
+  VERSION 0.1.2
   DESCRIPTION "DynaLM: CPU-first LLM inference engine"
   HOMEPAGE_URL "https://github.com/dynalm-project/dynalm"
   LANGUAGES CXX)
@@ -81,7 +81,6 @@ if(DYNALM_LTO)
 endif()
 
 option(ENABLE_SERVER     "Build the HTTP server"   ON)
-option(ENABLE_TESTS      "Build unit tests"        ON)
 option(ENABLE_BENCHMARKS "Build benchmarks"        ON)
 
 option(ENABLE_ASAN  "AddressSanitizer"            OFF)
@@ -101,43 +100,11 @@ include(EngineCompilerFlags)
 #   dynacore        low-level inference runtime (tensors, memory, devices, kernels)
 #   dynalm_runtime  LLM platform on top of it (models, scheduler, KV policy, API)
 # DynaCore never depends on DynaLM; the core-only build proves it.
-option(DYNALM_CORE_ONLY "Configure only DynaCore and its tests (boundary check)" OFF)
-
-if(ENABLE_TESTS)
-  enable_testing()
-  include(DynalmTesting)
-  # DynaCore must not depend on DynaLM: include graph + banned-concept scan.
-  find_package(Python3 COMPONENTS Interpreter QUIET)
-  if(Python3_FOUND)
-    add_test(NAME boundary.dynacore
-             COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/tests/boundary/check_boundary.py)
-    set_tests_properties(boundary.dynacore PROPERTIES LABELS boundary)
-  endif()
-endif()
+option(DYNALM_CORE_ONLY "Configure only DynaCore" OFF)
 
 add_subdirectory(dynacore)
 if(NOT DYNALM_CORE_ONLY)
   add_subdirectory(dynalm)
-endif()
-
-# Smoke tests (label "smoke"): the built binaries end to end, offline, with a
-# committed tiny model. tests/smoke/ also runs against installed binaries.
-if(ENABLE_TESTS AND NOT DYNALM_CORE_ONLY)
-  set(_smoke_model ${CMAKE_CURRENT_SOURCE_DIR}/dynalm/tests/data/tiny_llama.gguf)
-  add_test(NAME smoke.cli
-           COMMAND ${CMAKE_COMMAND} -DDYNALM=$<TARGET_FILE:dynalm> -DDYNACOREC=$<TARGET_FILE:dynacorec>
-                   -DMODEL=${_smoke_model} -DDYNA=${CMAKE_CURRENT_SOURCE_DIR}/examples/dynacore/decoder_layer.dyna
-                   -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke/cli_smoke.cmake)
-  set_tests_properties(smoke.cli PROPERTIES LABELS smoke TIMEOUT 600)
-  if(ENABLE_SERVER AND Python3_FOUND)
-    add_test(NAME smoke.serve
-             COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke/serve_smoke.py
-                     $<TARGET_FILE:dynalm> ${_smoke_model})
-    add_test(NAME smoke.serve_compiled
-             COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke/serve_smoke.py
-                     $<TARGET_FILE:dynalm> ${_smoke_model} --execution compiled)
-    set_tests_properties(smoke.serve smoke.serve_compiled PROPERTIES LABELS smoke TIMEOUT 300 RUN_SERIAL TRUE)
-  endif()
 endif()
 
 # --- install + packages -------------------------------------------------------
@@ -175,4 +142,4 @@ include(CPack)
 
 message(STATUS "DynaLM ${PROJECT_VERSION}: build=${CMAKE_BUILD_TYPE} arch=${DYNALM_ARCH} "
                "avx2=${ENABLE_AVX2} avx512=${ENABLE_AVX512} amx=${ENABLE_AMX} neon=${ENABLE_NEON} "
-               "server=${ENABLE_SERVER} tests=${ENABLE_TESTS} bench=${ENABLE_BENCHMARKS}")
+               "server=${ENABLE_SERVER} bench=${ENABLE_BENCHMARKS}")

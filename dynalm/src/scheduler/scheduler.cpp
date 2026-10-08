@@ -1,6 +1,7 @@
 #include "scheduler/scheduler.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <string>
 
 #include "dynacore/base/timer.h"
@@ -35,6 +36,16 @@ Scheduler::Scheduler(Transformer& model, KvBlockPool& kv, const Tokenizer& token
   const int32_t cap = model_.max_batch_tokens();
   config_.decode_token_budget = std::clamp(config_.decode_token_budget, 1, cap - 1);
   config_.prefill_token_budget = std::clamp(config_.prefill_token_budget, 1, cap - config_.decode_token_budget);
+  if (config_.policy == SchedulerPolicy::kThroughputFirst) config_.decode_protect = false;
+  if (config_.policy == SchedulerPolicy::kLatencyFirst) {
+    config_.protected_prefill_min = 16;
+    config_.decode_latency_target = 4.0f;
+  }
+  if (const char* dp = std::getenv("DYNALM_DECODE_PROTECT")) config_.decode_protect = std::strtol(dp, nullptr, 10) != 0;
+  if (const char* dt = std::getenv("DYNALM_DECODE_TARGET")) config_.decode_latency_target = static_cast<float>(std::atof(dt));
+  if (const char* pm = std::getenv("DYNALM_PROTECT_MIN")) config_.protected_prefill_min = static_cast<int32_t>(std::atoi(pm));
+  config_.protected_prefill_min = std::clamp(config_.protected_prefill_min, 1, config_.prefill_token_budget);
+  mixed_prefill_budget_ = config_.prefill_token_budget;
   batch_.reserve(static_cast<size_t>(config_.max_running));
   batch_owner_.reserve(static_cast<size_t>(config_.max_running));
   if (config_.enable_prefix_cache) {
@@ -285,6 +296,11 @@ bool Scheduler::step() {
 
     order.clear();
     for (Entry& e : running_) order.push_back(&e);
+    // Decode-protected prefill (DD-079): smaller prefill share while streams decode.
+    bool any_decode = false;
+    for (const Entry* e : order) any_decode = any_decode || is_decode_row(*e);
+    const int32_t prefill_budget =
+        config_.decode_protect && any_decode ? mixed_prefill_budget_ : config_.prefill_token_budget;
     std::stable_sort(order.begin(), order.end(), [&](const Entry* a, const Entry* b) {
       const bool ad = is_decode_row(*a), bd = is_decode_row(*b);
       if (ad != bd) return ad;
@@ -296,7 +312,7 @@ bool Scheduler::step() {
       if (is_terminal(e->seq->status()) || e->seq->pending() == 0) continue;
       const bool decode = is_decode_row(*e);
       int32_t& used = decode ? decode_rows : prefill_rows;
-      const int32_t budget = decode ? config_.decode_token_budget : config_.prefill_token_budget;
+      const int32_t budget = decode ? config_.decode_token_budget : prefill_budget;
       int32_t n = std::min(e->seq->pending(), budget - used);
       if (!decode && config_.max_prefill_chunk > 0) n = std::min(n, config_.max_prefill_chunk);
       if (n <= 0) continue;
@@ -353,6 +369,7 @@ bool Scheduler::step() {
   if (stats_.last_prefill_rows == 0) {
     ++stats_.steps_decode_only;
     stats_.forward_decode_only_ms += fwd_ms;
+    decode_step_ema_ms_ = decode_step_ema_ms_ == 0 ? fwd_ms : 0.8 * decode_step_ema_ms_ + 0.2 * fwd_ms;
   } else if (stats_.last_decode_rows == 0) {
     ++stats_.steps_prefill_only;
     stats_.forward_prefill_only_ms += fwd_ms;
@@ -360,6 +377,17 @@ bool Scheduler::step() {
     ++stats_.steps_mixed;
     stats_.forward_mixed_ms += fwd_ms;
   }
+  if (config_.decode_protect && stats_.last_prefill_rows > 0 && stats_.last_decode_rows > 0 && decode_step_ema_ms_ > 0) {
+    // Mixed step (DD-079): steer the next mixed step's prefill share toward
+    // decode_latency_target x the decode-only step time.
+    const double target = config_.decode_latency_target * decode_step_ema_ms_;
+    if (fwd_ms > target) {
+      mixed_prefill_budget_ = std::max(config_.protected_prefill_min, mixed_prefill_budget_ / 2);
+    } else if (fwd_ms < 0.5 * target) {
+      mixed_prefill_budget_ = std::min(config_.prefill_token_budget, mixed_prefill_budget_ * 2);
+    }
+  }
+  stats_.mixed_prefill_budget = mixed_prefill_budget_;
   stats_.decode_rows_total += static_cast<uint64_t>(stats_.last_decode_rows);
   stats_.prefill_rows_total += static_cast<uint64_t>(stats_.last_prefill_rows);
   ++stats_.steps;

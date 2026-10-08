@@ -6,9 +6,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 #include "dynacore/cpu/cpu_kernels.h"
+#include "dynacore/hardware/cpu_info.h"
 #include "dynacore/tensor/fp16.h"
 #include "dynacore/quantization/dequant.h"
 #include "dynacore/quantization/quant_formats.h"
@@ -373,6 +375,10 @@ CpuKernels make_cpu_kernels(CpuIsa isa) {
   register_generic_kernels(k);
   if (isa == CpuIsa::kAvx2 || isa == CpuIsa::kAvx512 || isa == CpuIsa::kAmx) {
     register_avx2_kernels(k);  // AVX-512/AMX tiers build on AVX2 until they have their own kernels
+    // AVX-VNNI decode kernel (DD-080) where the CPU has it; opt-in with
+    // DYNACORE_VNNI=1 until measured end to end.
+    const char* v = std::getenv("DYNACORE_VNNI");
+    if (cpu_info().features.avx_vnni && v != nullptr && v[0] == '1') register_avxvnni_kernels(k);
   }
   if (isa == CpuIsa::kNeon) register_neon_kernels(k);
   return k;

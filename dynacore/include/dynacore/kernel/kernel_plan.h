@@ -47,6 +47,44 @@ struct KernelPlan {
   // gated activation) carries the largest outlier channels: with it, Qwen3-4B
   // perplexity rose 5.4%; without it, 0.9% (DD-053).
   bool int8_ffn_down = false;
+  // Matmuls with at most this many rows use int16 activations where the
+  // backend has kernels (DD-076); 0 = never. The model sets it only for the
+  // FFN down projection (see int16_ffn_down), never globally.
+  int32_t int16_decode_max_rows = 0;
+  // Whether the FFN down projection, excluded from int8 (int8_ffn_down), uses
+  // int16 activations up to int8_decode_max_rows rows instead of fp32
+  // (DD-076). Only while int8 decode is on, so --int8-decode 0 keeps fp32
+  // everywhere (batch invariance, DD-031).
+  bool int16_ffn_down = true;
+  // K-quant weights (Q4_K, Q6_K) on the int8 path use super-block activations
+  // (one scale per 256 values, integer accumulation per super-block, DD-075)
+  // for matmuls of at least this many rows; 0 = never. Off by default: +14%
+  // at 4 rows, but it fails the DD-053 accuracy contract (mean KL 0.021 on
+  // Qwen2.5-1.5B, 0.0067 on Qwen3-4B; limit 0.0025). Opt-in for experiments.
+  int32_t int8_superblock_min_rows = 0;
+  // Row limit of the super-block path, which stays ahead of the fp32 expand
+  // path up to ~10 rows (bench_decode_matmul, DD-075); the per-32 path keeps
+  // int8_decode_max_rows. int8_decode_max_rows == 0 still disables int8.
+  int32_t int8_superblock_max_rows = 8;
+  // Sub-scaled activations (DD-077): one unit scale per 256 values and an
+  // integer multiplier per 32-value block, folded into the integer sub-block
+  // scale. For K-quant matmuls of at least this many rows (up to
+  // int8_superblock_max_rows); 0 = never. Takes precedence over super-block.
+  // Default 2: within the DD-053 accuracy contract (mean KL 0.0013 on
+  // Qwen2.5-1.5B and Qwen3-4B) and +16% at 4 users; one row stays on the
+  // per-32 path (memory-bound either way, single-stream outputs unchanged).
+  int32_t int8_subscale_min_rows = 2;
+  // Q4_K matmuls of at least this many rows use the interleaved 8-row copy
+  // made at load (DD-078) when one exists; 0 = never (original layout).
+  int32_t q4_repack_min_rows = 2;
+  // Above the decode row limits, the interleaved copy can also serve prefill
+  // batches up to this many rows for matrices with at least
+  // q4_repack_min_out output rows (enough 8-row groups to fill the threads).
+  // It beats fp32 expand + GEMM there (up to -26% per matmul), but prefill
+  // with it fails the DD-053 perplexity limit on Qwen3-4B (+2.9-3.4%, KL
+  // within limit), so it is opt-in: 0 = decode shapes only (DD-078).
+  int32_t q4_repack_max_rows = 0;
+  int32_t q4_repack_min_out = 1024;
 
   // --- attention ---
   // Separate decisions for full-causal and sliding-window layers: a window
@@ -61,7 +99,7 @@ struct KernelPlan {
   bool grouped_attention = true;
 
   // Defaults, with the tuning overrides DYNACORE_MATMUL_EXPAND_MIN,
-  // DYNACORE_GEMM_KC, DYNACORE_INT8_DECODE_ROWS, DYNACORE_ATTN_GROUPED and DYNACORE_MATMUL_CHUNKS applied (read once per process).
+  // DYNACORE_GEMM_KC, DYNACORE_INT8_DECODE_ROWS, DYNACORE_INT8_SUPERBLOCK, DYNACORE_INT16_FFN_DOWN, DYNACORE_ATTN_GROUPED and DYNACORE_MATMUL_CHUNKS applied (read once per process).
   static const KernelPlan& defaults();
 
   friend bool operator==(const KernelPlan&, const KernelPlan&) = default;

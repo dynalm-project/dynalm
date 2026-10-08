@@ -47,6 +47,5 @@ Key facts:
 - [Supported models and modules](https://github.com/dynalm-project/dynalm/blob/main/docs/dynalm.md)
 - [Architecture](https://github.com/dynalm-project/dynalm/blob/main/docs/architecture.md)
 - [DynaCore runtime](https://github.com/dynalm-project/dynalm/blob/main/docs/dynacore.md)
-- [DynaCore compiler](https://github.com/dynalm-project/dynalm/blob/main/docs/dynacore-compiler.md) and [benchmarks](https://github.com/dynalm-project/dynalm/blob/main/docs/compiler-benchmarks.md)
+- [DynaCore compiler](https://github.com/dynalm-project/dynalm/blob/main/docs/dynacore-compiler.md)
 - [Build from source](https://github.com/dynalm-project/dynalm/blob/main/docs/build.md)
-- [Design decisions](https://github.com/dynalm-project/dynalm/blob/main/docs/design-decisions.md)

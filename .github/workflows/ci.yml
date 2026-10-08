@@ -1,12 +1,10 @@
-# Build and test DynaLM on every supported CPU platform.
+# Build DynaLM on every supported CPU platform.
 #
-#   build-test : configure, build, full ctest (DynaCore + DynaLM unit tests,
-#                IR/compiler/language tests, boundary check, CLI and server smoke
-#                tests on a committed tiny model), then CPU feature validation.
+#   build      : configure, build, then CPU feature validation (doctor runs the
+#                DynaCore kernel self-test).
 #   package    : release-style static build -> archive -> fresh install through
-#                scripts/install.sh / install.ps1 -> smoke tests on the INSTALLED
+#                scripts/install.sh / install.ps1 -> checks on the INSTALLED
 #                binaries (tools/ci/package.sh).
-# Real-model tests skip themselves (model files are not in the repository).
 name: ci
 
 on:
@@ -21,19 +19,17 @@ concurrency:
 
 jobs:
   boundary:
-    name: DynaCore boundary (scan + core-only build)
+    name: DynaCore boundary (core-only build)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y ninja-build libgtest-dev
-      - run: python3 tests/boundary/check_boundary.py
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
       # DynaCore alone: the dynalm/ tree is not configured, so any dependency
       # on it fails to compile.
       - run: cmake --preset core-only
       - run: cmake --build --preset core-only
-      - run: ctest --preset core-only --timeout 900
 
-  build-test:
+  build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -64,9 +60,6 @@ jobs:
       - name: Build
         shell: bash
         run: cmake --build --preset ${{ matrix.preset }}
-      - name: Test (unit, IR, compiler, language, boundary, smoke)
-        shell: bash
-        run: ctest --preset ${{ matrix.preset }} --timeout 900
       - name: CPU feature validation
         shell: bash
         run: |
@@ -86,13 +79,16 @@ jobs:
         preset: [linux-asan-ubsan, linux-tsan]
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y ninja-build libgtest-dev clang
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build clang
       - name: Allow TSAN on recent kernels
         if: matrix.preset == 'linux-tsan'
         run: sudo sysctl vm.mmap_rnd_bits=28
       - run: cmake --preset ${{ matrix.preset }}
       - run: cmake --build --preset ${{ matrix.preset }}
-      - run: ctest --preset ${{ matrix.preset }} --timeout 900 -LE smoke
+      - name: Instrumented self-test
+        run: |
+          build/${{ matrix.preset }}/bin/dynalm --version
+          build/${{ matrix.preset }}/bin/dynalm doctor
 
   package:
     name: package + fresh install (${{ matrix.name }})

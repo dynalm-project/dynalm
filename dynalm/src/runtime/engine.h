@@ -158,6 +158,8 @@ class Engine {
 
   const LoadedModel& model() const { return *model_; }
   std::string backend_name() const { return std::string(compiled_ ? compiled_->name() : backend_->name()); }
+  // Interleaved weight copies made at load (DD-078).
+  Device::PrepackStats prepack_stats() const { return backend_->prepack_stats(); }
   int threads() const { return pool_->size(); }
   const KvGeometry& kv_geometry() const { return kv_->geometry(); }
   // Snapshot taken on the scheduler thread after its latest step.

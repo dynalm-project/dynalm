@@ -90,6 +90,18 @@ struct SchedulerConfig {
   // short prompt is not stuck behind a long one (head-of-line blocking).
   int32_t max_prefill_chunk = 32;
   SchedulerPolicy policy = SchedulerPolicy::kBalanced;
+  // Decode-protected prefill (DD-079): in steps that also carry decode rows,
+  // prefill rows are capped by an adaptive budget so a long prompt does not
+  // stall running streams for a whole large chunk. After each mixed step the
+  // budget halves (down to protected_prefill_min) when the step took longer
+  // than decode_latency_target x the recent decode-only step time, and
+  // doubles (up to prefill_token_budget) when it took under half of that.
+  // Steps without decode rows keep the full budget. Off for kThroughputFirst;
+  // kLatencyFirst uses target 4 and minimum 16. Defaults measured on
+  // Qwen2.5-1.5B (DD-079): ITL p99 -38..-43% at 4-8 users for <= 1.5% tok/s.
+  bool decode_protect = true;
+  int32_t protected_prefill_min = 32;
+  float decode_latency_target = 6.0f;
   // Reuse KV of shared prompt prefixes across requests (DD-029).
   bool enable_prefix_cache = true;
   PrefixCacheKind prefix_cache_kind = PrefixCacheKind::kRadix;
@@ -137,6 +149,7 @@ struct SchedulerStats {
   uint64_t decode_rows_total = 0;
   uint64_t prefill_rows_total = 0;
   uint64_t steps_split_attention = 0;  // planner chose split-K attention (DD-051)
+  int32_t mixed_prefill_budget = 0;    // current decode-protected prefill budget (DD-079)
 };
 
 class Scheduler {
@@ -181,6 +194,10 @@ class Scheduler {
   bool preempt_one(const Entry* keep);
   void retire(Entry& e);
   void emit_final(Entry& e);
+
+  // Decode-protected prefill state (DD-079).
+  double decode_step_ema_ms_ = 0;
+  int32_t mixed_prefill_budget_ = 0;
 
   Transformer& model_;
   KvBlockPool& kv_;

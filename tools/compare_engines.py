@@ -158,6 +158,8 @@ def bench_ollama(args, model, conc, prompts, outputs, results, logs):
 
 
 def report(results: Path, out: Path) -> str:
+    if not results.exists():
+        return "no results (every engine failed; see logs/)\n"
     rows = [json.loads(l) for l in open(results, encoding="utf-8") if l.strip()]
     lines = ["| Model | Engine | Users | Prompt | Output tok/s | TTFT p50 (ms) | ITL p50 (ms) | Mean output tokens | Errors |",
              "|---|---|---|---|---|---|---|---|---|"]
@@ -203,7 +205,7 @@ def main() -> int:
             try:
                 fn(args, model, conc, prompts, outputs, results, logs)
             except Exception as e:  # keep going with the other engines
-                print(f"  {name} failed: {e}", file=sys.stderr, flush=True)
+                print(f"  {name} failed: {e}", flush=True)
     print(report(results, out))
     return 0
 

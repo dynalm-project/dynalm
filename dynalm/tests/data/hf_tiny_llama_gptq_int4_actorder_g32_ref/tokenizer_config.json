@@ -1,8 +1,0 @@
-{
- "bos_token": "<s>",
- "eos_token": "</s>",
- "pad_token": "<pad>",
- "unk_token": "<unk>",
- "add_bos_token": false,
- "chat_template": "{% for m in messages %}<|im_start|>{{ m['role'] }}\n{{ m['content'] }}<|im_end|>\n{% endfor %}{% if add_generation_prompt %}<|im_start|>assistant\n{% endif %}"
-}

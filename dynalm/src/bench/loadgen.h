@@ -82,6 +82,8 @@ struct Diagnostics {
   double queue_wait_mean_ms = 0;
   std::vector<std::pair<std::string, double>> op_ms;  // per forward op (profiling)
   double pool_regions = -1, pool_region_ms = -1, pool_tail_wait_ms = -1, pool_sleeps = -1;
+  // Per-thread busy time / region time over the point (caller = thread 0).
+  std::vector<double> pool_thread_util;
   PerfSample perf;
   double cpu_mhz = -1;
   double est_decode_bw_gbs = -1, peak_bw_gbs = -1;
@@ -111,7 +113,7 @@ std::string make_prompt(const Tokenizer& tokenizer, int32_t tokens, int32_t requ
 PointResult run_point(Target& target, const Tokenizer& tokenizer, const PointConfig& cfg,
                       const RunContext& ctx = {});
 
-// One JSON object (single line) per point, for tools/bench_report.py.
+// One JSON object (single line) per point (JSON lines).
 std::string to_json(const PointResult& r, const std::string& model, const std::string& hardware);
 
 }  // namespace dynalm::bench

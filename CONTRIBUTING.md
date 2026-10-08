@@ -15,33 +15,30 @@ welcome.
   - IQ quantization types;
   - split (sharded) GGUF downloads in `dynalm pull`.
 
-## Building and testing
+## Building
 
 See [docs/build.md](docs/build.md). In short:
 
 ```sh
 cmake --preset linux-release          # or macos-release, msvc-release
 cmake --build --preset linux-release
-ctest --preset linux-release
+build/linux-release/bin/dynalm doctor   # kernel self-test
 ```
 
-CI runs the same suite on Linux x86-64 (gcc, clang, ASAN/UBSAN, TSAN), Linux ARM64, macOS (Apple Silicon)
+CI builds the same presets on Linux x86-64 (gcc, clang, ASAN/UBSAN, TSAN), Linux ARM64, macOS (Apple Silicon)
 and Windows (MSVC). A pull request should keep all of them green.
 
 ## Pull request guidelines
 
 - **Keep changes focused.** One topic per pull request.
-- **Add a test.**
-  - Every fix gets a regression test.
-  - Every new kernel or model is checked against a reference: see `tools/ref_model.py` and the tiny-model
-    fixtures in `dynalm/tests/data`.
+- **Check against a reference.** Every new kernel or model is compared with a reference implementation
+  (see `tools/ref_model.py`) before it is merged.
 - **No fake implementations.** An unsupported feature must fail with a clear error, never silently produce
   wrong output.
 - **Measure performance changes.** A change that claims a speedup includes before and after numbers from
   `benchmarks/` or `dynalm benchmark`.
-- **Record design choices.** Non-obvious choices get a short entry in
-  [docs/design-decisions.md](docs/design-decisions.md) (Decision / Reason / Alternatives / Tradeoffs /
-  Evidence).
+- **Explain design choices.** Non-obvious choices are explained in the pull request (decision, reason,
+  alternatives, tradeoffs, evidence).
 - **Follow the code style.** It follows `.clang-format` (C++20; no exceptions in hot paths; `Status` /
   `Result<T>` for errors).
 

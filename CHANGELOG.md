@@ -2,6 +2,50 @@
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-08
+
+### Removed
+- The unit, smoke and boundary test suites (`tests/`, `dynacore/tests`,
+  `dynalm/tests`) and the googletest dependency. CI now builds every platform
+  and checks the binaries with `dynalm --version`, `dynalm doctor` (DynaCore
+  kernel self-test) and `tools/ci/check_isa.py`; the `core-only` build still
+  guards the DynaCore/DynaLM boundary.
+- Internal design and benchmark documents and the benchmark result files;
+  `tools/compare_engines.{ps1,py}` remains for comparisons with llama.cpp and
+  Ollama.
+
+### Fixed
+- `/show` in chat reports `thinking n/a` for models without a thinking mode.
+
+### Performance: multi-row kernels and latency (DD-078..080)
+- Interleaved Q4_K copy for 2-8-row decode (DD-078): +7.6% at 4 concurrent
+  requests and +13.2% at 8 on Qwen2.5-1.5B; single-request decode unchanged.
+  Memory-guarded at load (`DYNACORE_Q4_REPACK=off|auto|always`, default auto:
+  skip tensors when less than 3 GiB would stay free). Integer prefill through
+  the same kernel is opt-in (`DYNACORE_Q4_REPACK_MAX_ROWS=128`): faster, but
+  it fails the perplexity limit on Qwen3-4B.
+- Decode-protected adaptive prefill (DD-079): ITL p99 -43% at 4 users and -38%
+  at 8 on Qwen2.5-1.5B for <= 1.5% throughput (`--policy throughput` keeps the
+  old behaviour; `DYNALM_DECODE_PROTECT=0` turns it off).
+- AVX-VNNI kernel (DD-080): bit-identical, not faster on Alder Lake; opt-in with
+  `DYNACORE_VNNI=1`.
+- `bench_int8_accuracy` scores prefill-shaped chunks; `bench_decode_matmul`
+  compares original and packed layouts (`BENCH_CHECK`, `BENCH_HEAVY`).
+
+### Performance: concurrent decode (DD-075..077)
+- Sub-scaled int8 activations for 2-8-row K-quant matmuls (DD-077): +16% at 4
+  concurrent requests on Qwen2.5-1.5B and +12.5% on Qwen3-4B (in-process, 3
+  interleaved repeats), within the accuracy contract; single-request decode
+  unchanged. `DYNACORE_INT8_SUBSCALE=0` restores the previous path.
+- int16 activations for the FFN down projection (DD-076), replacing fp32 at
+  1-4 rows with equal accuracy. `DYNACORE_INT16_FFN_DOWN=0` turns it off.
+- Super-block int8 activations (DD-075) are available as an experiment only
+  (`DYNACORE_INT8_SUPERBLOCK`); they fail the accuracy contract.
+- Tools: `tools/compare_engines.{ps1,py}` (DynaLM vs llama.cpp vs Ollama).
+- Benchmarks: per-thread utilization in `dynalm benchmark` diagnostics,
+  `bench_alloc` (allocations per decode step), `BENCH_HOT=1` and an M list
+  for `bench_decode_matmul`, int8/int16 kernel table in `bench_kernels`.
+
 ## [0.1.1] - 2026-10-07
 
 ### Fixed

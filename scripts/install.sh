@@ -80,7 +80,7 @@ if [ "$FROM_SOURCE" = 1 ]; then
   BUILD="$ROOT/build/install-release"
   say "Building DynaLM from source ($PLATFORM)"
   # shellcheck disable=SC2086
-  cmake -S "$ROOT" -B "$BUILD" $GEN -DCMAKE_BUILD_TYPE=Release -DENABLE_TESTS=OFF -DENABLE_BENCHMARKS=OFF \
+  cmake -S "$ROOT" -B "$BUILD" $GEN -DCMAKE_BUILD_TYPE=Release -DENABLE_BENCHMARKS=OFF \
     -DDYNALM_STATIC_RUNTIME=ON
   cmake --build "$BUILD" --parallel "$JOBS"
   cmake --install "$BUILD" --prefix "$PREFIX"

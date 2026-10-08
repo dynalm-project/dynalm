@@ -5,9 +5,12 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <string_view>
 #include <vector>
 
 #include "dynacore/base/fast_exp.h"
+#include "dynacore/base/timer.h"
+#include "dynacore/hardware/cpu_info.h"
 #include "dynacore/quantization/quant_formats.h"
 #include "dynacore/tensor/fp16.h"
 
@@ -97,6 +100,115 @@ void CpuDevice::scatter_add_rows(const TensorView& src, std::span<const int32_t>
   }
 }
 
+void CpuDevice::prepack_weight(const TensorView& w) {
+  // Interleaved Q4_K for multi-row decode (DD-078): only where the kernel
+  // exists and the shape groups into 8 rows of whole super-blocks.
+  if (w.dtype() != DType::kQ4_K || !int8_accelerated_ || k_.dot_q8_sx_x8_q4_K == nullptr) return;
+  if (KernelPlan::defaults().q4_repack_min_rows <= 0 || packed_.count(w.data()) != 0) return;
+  const int64_t n = rows(w), k = cols(w);
+  if (n % 8 != 0 || k % 256 != 0) return;
+  const int64_t row_bytes = dtype_row_bytes(DType::kQ4_K, k), nb = k / 256, groups = n / 8;
+  // Memory control (DD-078): DYNACORE_Q4_REPACK=off | auto (default) | always.
+  // auto packs only while the copies fit a budget taken from the RAM
+  // available at load, so a model that nearly fills memory keeps the
+  // original layout (and the 1-row speed) instead of paging.
+  const char* mode = std::getenv("DYNACORE_Q4_REPACK");
+  const std::string_view m = mode != nullptr ? std::string_view(mode) : std::string_view("auto");
+  if (m == "off" || m == "0") return;
+  const int64_t bytes = groups * nb * static_cast<int64_t>(sizeof(BlockQ4_Kx8));
+  if (m != "always" && m != "1") {
+    // Checked per tensor: packing reads the weights, so the model's own pages
+    // become resident as this runs and available memory falls.
+    constexpr int64_t kReserve = int64_t{3} << 30;
+    if (memory_info().available_bytes - bytes < kReserve) {
+      ++prepack_stats_.skipped;
+      return;
+    }
+  }
+  const int64_t t0 = now_ns();
+  Packed p;
+  p.n = n;
+  p.k = k;
+  p.blocks.resize(static_cast<size_t>(groups * nb));
+  pool_.parallel_for(static_cast<size_t>(groups), 1, [&](size_t begin, size_t end) {
+    for (size_t g = begin; g < end; ++g) {
+      repack_q4_K_x8(w.data(), row_bytes, static_cast<int64_t>(g) * 8, k, p.blocks.data() + static_cast<int64_t>(g) * nb);
+    }
+  });
+  ++prepack_stats_.tensors;
+  prepack_stats_.source_bytes += n * row_bytes;
+  prepack_stats_.packed_bytes += static_cast<int64_t>(p.blocks.size() * sizeof(BlockQ4_Kx8));
+  prepack_stats_.ms += static_cast<double>(now_ns() - t0) * 1e-6;
+  packed_.emplace(w.data(), std::move(p));
+}
+
+void CpuDevice::int8_rows(const Int8Kernel& ik, const std::byte* wbase, int64_t w_row_bytes, const ActBlockQ8* act,
+                          int64_t m, int64_t k, int64_t n0, int64_t n1, const TensorView& y, const float* bias) const {
+  const int64_t nb = k / kActQ8Block;
+  const ActBlockQ8* xr[kDotRowsMax];
+  if (ik.packed != nullptr) {
+    float out[8 * kDotRowsMax];
+    const int64_t sb = k / 256;
+    for (int64_t g = n0 / 8; g < n1 / 8; ++g) {
+      for (int64_t r0 = 0; r0 < m; r0 += kDotRowsMax) {
+        const int mm = static_cast<int>(std::min<int64_t>(kDotRowsMax, m - r0));
+        for (int t = 0; t < mm; ++t) xr[t] = act + (r0 + t) * nb;
+        k_.dot_q8_sx_x8_q4_K(ik.packed + g * sb, xr, mm, k, out);
+        for (int t = 0; t < mm; ++t) {
+          float* yr = row_ptr<float>(y, r0 + t) + 8 * g;
+          for (int i = 0; i < 8; ++i) yr[i] = out[8 * t + i] + (bias ? bias[8 * g + i] : 0.0f);
+        }
+      }
+    }
+    return;
+  }
+  float out[kDotRowsMax];
+  for (int64_t r = n0; r < n1; ++r) {
+    const float br = bias ? bias[r] : 0.0f;
+    for (int64_t r0 = 0; r0 < m; r0 += kDotRowsMax) {
+      const int mm = static_cast<int>(std::min<int64_t>(kDotRowsMax, m - r0));
+      for (int t = 0; t < mm; ++t) xr[t] = act + (r0 + t) * nb;
+      ik.dot(wbase + r * w_row_bytes, xr, mm, k, out);
+      for (int t = 0; t < mm; ++t) row_ptr<float>(y, r0 + t)[r] = out[t] + br;
+    }
+  }
+}
+
+const BlockQ4_Kx8* CpuDevice::find_packed(const void* w, int64_t n, int64_t k) const {
+  const auto it = packed_.find(w);
+  return it != packed_.end() && it->second.n == n && it->second.k == k ? it->second.blocks.data() : nullptr;
+}
+
+CpuDevice::Int8Kernel CpuDevice::int8_kernel(DType wt, int64_t m, int64_t k, const void* w, int64_t n) const {
+  if (plan_.int8_decode_max_rows <= 0 || !int8_accelerated_ || k % kActQ8Block != 0) return {};
+  // Super-block family (K-quants, k a multiple of 256): up to
+  // max(int8_decode_max_rows, int8_superblock_max_rows) rows.
+  const bool sb_rows = k % 256 == 0 && m <= std::max(plan_.int8_decode_max_rows, plan_.int8_superblock_max_rows);
+  // Prefill-sized batches on a large Q4_K matrix with an interleaved copy
+  // (DD-078): the packed kernel beats fp32 expand up to q4_repack_max_rows.
+  if (!sb_rows && wt == DType::kQ4_K && w != nullptr && k % 256 == 0 && m <= plan_.q4_repack_max_rows &&
+      n >= plan_.q4_repack_min_out && plan_.q4_repack_min_rows > 0 && plan_.int8_subscale_min_rows > 0 &&
+      m >= plan_.int8_subscale_min_rows && k_.quantize_act_sx != nullptr) {
+    if (const BlockQ4_Kx8* pk = find_packed(w, n, k)) {
+      return {k_.quantize_act_sx, k_.dot_q8_sx_rows_for(wt), ActFormat::kSubscaled, pk};
+    }
+  }
+  if (sb_rows && plan_.int8_subscale_min_rows > 0 && m >= plan_.int8_subscale_min_rows && k_.quantize_act_sx) {
+    if (const DotQ8RowsFn sx = k_.dot_q8_sx_rows_for(wt)) {
+      Int8Kernel ik{k_.quantize_act_sx, sx, ActFormat::kSubscaled};
+      if (wt == DType::kQ4_K && w != nullptr && plan_.q4_repack_min_rows > 0 && m >= plan_.q4_repack_min_rows) {
+        ik.packed = find_packed(w, n, k);
+      }
+      return ik;
+    }
+  }
+  if (sb_rows && plan_.int8_superblock_min_rows > 0 && m >= plan_.int8_superblock_min_rows && k_.quantize_act_sb) {
+    if (const DotQ8RowsFn sb = k_.dot_q8_sb_rows_for(wt)) return {k_.quantize_act_sb, sb, ActFormat::kSuperblock};
+  }
+  if (m > plan_.int8_decode_max_rows) return {};
+  return {k_.quantize_act, k_.dot_q8_rows_for(wt), ActFormat::kPer32};
+}
+
 void CpuDevice::matmul_many(std::span<const MatmulJob> jobs) {
   // Grouped execution (P11, DD-060): every job's output rows are cut into
   // chunks of 16 and all chunks of all jobs run in ONE parallel region; each
@@ -115,6 +227,7 @@ void CpuDevice::matmul_many(std::span<const MatmulJob> jobs) {
     Path path;
     int64_t act_offset;       // into act_q8_ (int8 path)
     bool shares_act = false;  // reuses an earlier job's quantized activations
+    Int8Kernel int8{};
   };
   thread_local std::vector<JobPlan> plans;
   thread_local std::vector<size_t> first_chunk;  // prefix sums of per-job chunk counts
@@ -127,15 +240,15 @@ void CpuDevice::matmul_many(std::span<const MatmulJob> jobs) {
     // Rows may be strided (MoE slices of a wider buffer): quantization works
     // row by row and the GEMM tile takes a row stride, so neither needs dense x.
     JobPlan p{Path::kFused, 0, false};
-    if (m <= plan_.int8_decode_max_rows && int8_accelerated_ && k % kActQ8Block == 0 &&
-        k_.dot_q8_rows_for(wt) != nullptr) {
-      p = {Path::kInt8, act_blocks};
-      // Jobs reading the same activations (Q/K/V, gate/up) share one quantized copy.
+    if (const Int8Kernel ik = int8_kernel(wt, m, k, j.w.data(), rows(j.w)); ik.dot != nullptr) {
+      p = {Path::kInt8, act_blocks, false, ik};
+      // Jobs reading the same activations (Q/K/V, gate/up) share one quantized
+      // copy when they also use the same activation format.
       bool shared = false;
       for (size_t prev = 0; prev < plans.size() && !shared; ++prev) {
         const MatmulJob& pj = jobs[prev];
-        if (plans[prev].path == Path::kInt8 && pj.x.data() == j.x.data() && rows(pj.x) == m && cols(pj.x) == k &&
-            pj.x.stride(0) == j.x.stride(0)) {
+        if (plans[prev].path == Path::kInt8 && plans[prev].int8.format == ik.format &&
+            pj.x.data() == j.x.data() && rows(pj.x) == m && cols(pj.x) == k && pj.x.stride(0) == j.x.stride(0)) {
           p.act_offset = plans[prev].act_offset;
           p.shares_act = true;
           shared = true;
@@ -154,7 +267,7 @@ void CpuDevice::matmul_many(std::span<const MatmulJob> jobs) {
     if (plans[ji].path != Path::kInt8 || plans[ji].shares_act) continue;
     const int64_t m = rows(jobs[ji].x), k = cols(jobs[ji].x), nb = k / kActQ8Block;
     for (int64_t r = 0; r < m; ++r) {
-      k_.quantize_act(row_ptr<const float>(jobs[ji].x, r), act_q8_.data() + plans[ji].act_offset + r * nb, k);
+      plans[ji].int8.quantize(row_ptr<const float>(jobs[ji].x, r), act_q8_.data() + plans[ji].act_offset + r * nb, k);
     }
   }
   const size_t total = first_chunk.back();
@@ -173,18 +286,9 @@ void CpuDevice::matmul_many(std::span<const MatmulJob> jobs) {
       const int64_t n0 = static_cast<int64_t>(c - offsets[ji]) * kChunk, n1 = std::min(n, n0 + kChunk);
       switch (job_plans[ji].path) {
         case Path::kInt8: {
-          const DotQ8RowsFn dot_rows = k_.dot_q8_rows_for(wt);
-          const int64_t nb = k / kActQ8Block;
-          const ActBlockQ8* xr[kDotRowsMax];
-          float out[kDotRowsMax];
-          for (int64_t r = n0; r < n1; ++r) {
-            for (int64_t r0 = 0; r0 < m; r0 += kDotRowsMax) {
-              const int mm = static_cast<int>(std::min<int64_t>(kDotRowsMax, m - r0));
-              for (int t = 0; t < mm; ++t) xr[t] = act + job_plans[ji].act_offset + (r0 + t) * nb;
-              dot_rows(wbase + r * w_row_bytes, xr, mm, k, out);
-              for (int t = 0; t < mm; ++t) row_ptr<float>(j.y, r0 + t)[r] = out[t];
-            }
-          }
+          // Chunks start at multiples of kChunk (16), so packed groups align.
+          int8_rows(job_plans[ji].int8, wbase, w_row_bytes, act + job_plans[ji].act_offset, m, k, n0, n1, j.y,
+                    nullptr);
           break;
         }
         case Path::kFused: {
@@ -237,23 +341,40 @@ void CpuDevice::matmul(const TensorView& x, const TensorView& w, const TensorVie
   // where this tier accelerates it, and only as the planner allows.
   // Rows are quantized one by one, so strided x (MoE slices) is fine and gets
   // the same path as in matmul_many.
-  if (m <= plan_.int8_decode_max_rows && int8_accelerated_ && k % kActQ8Block == 0) {
-    if (const DotQ8RowsFn dot_rows = k_.dot_q8_rows_for(wt)) {
+  if (const Int8Kernel ik = int8_kernel(wt, m, k, w.data(), n); ik.dot != nullptr) {
+    const int64_t nb = k / kActQ8Block;
+    act_q8_.resize(static_cast<size_t>(m * nb));
+    for (int64_t r = 0; r < m; ++r) ik.quantize(row_ptr<const float>(x, r), act_q8_.data() + r * nb, k);
+    const ActBlockQ8* act = act_q8_.data();
+    // Work items: weight rows, or groups of 8 rows for the packed copy.
+    const int64_t unit = ik.packed != nullptr ? 8 : 1, items = n / unit;
+    pool_.parallel_for(static_cast<size_t>(items),
+                       grain_for(static_cast<size_t>(items), pool_.size(), unit == 1 ? 4 : 1, plan_.matmul_chunks_per_thread),
+                       [&](size_t begin, size_t end) {
+      int8_rows(ik, wbase, w_row_bytes, act, m, k, static_cast<int64_t>(begin) * unit, static_cast<int64_t>(end) * unit, y, b);
+    });
+    return;
+  }
+
+  // int16 activations (DD-076): inputs too outlier-heavy for int8 (the FFN
+  // down projection), when the plan asks for it.
+  if (m <= plan_.int16_decode_max_rows && int8_accelerated_ && k % kActQ8Block == 0 && k_.quantize_act16 != nullptr) {
+    if (const DotQ16RowsFn dot16 = k_.dot_q16_rows_for(wt)) {
       const int64_t nb = k / kActQ8Block;
-      act_q8_.resize(static_cast<size_t>(m * nb));
-      for (int64_t r = 0; r < m; ++r) k_.quantize_act(row_ptr<const float>(x, r), act_q8_.data() + r * nb, k);
-      const ActBlockQ8* act = act_q8_.data();
+      act_q16_.resize(static_cast<size_t>(m * nb));
+      for (int64_t r = 0; r < m; ++r) k_.quantize_act16(row_ptr<const float>(x, r), act_q16_.data() + r * nb, k);
+      const ActBlockQ16* act = act_q16_.data();
       pool_.parallel_for(static_cast<size_t>(n), grain_for(static_cast<size_t>(n), pool_.size(), 4, plan_.matmul_chunks_per_thread),
                          [&](size_t begin, size_t end) {
         float out[kDotRowsMax];
-        const ActBlockQ8* xr[kDotRowsMax];
+        const ActBlockQ16* xr[kDotRowsMax];
         for (size_t j = begin; j < end; ++j) {
           const std::byte* src = wbase + static_cast<int64_t>(j) * w_row_bytes;
           const float bj = b ? b[j] : 0.0f;
           for (int64_t r0 = 0; r0 < m; r0 += kDotRowsMax) {
             const int mm = static_cast<int>(std::min<int64_t>(kDotRowsMax, m - r0));
             for (int t = 0; t < mm; ++t) xr[t] = act + (r0 + t) * nb;
-            dot_rows(src, xr, mm, k, out);
+            dot16(src, xr, mm, k, out);
             for (int t = 0; t < mm; ++t) row_ptr<float>(y, r0 + t)[j] = out[t] + bj;
           }
         }
@@ -704,22 +825,43 @@ void CpuDevice::act_mul(Activation act, const TensorView& gate, const TensorView
 void CpuDevice::matmul_gated(Activation act, const TensorView& x, const TensorView& w_gate, const TensorView& w_up,
                              const TensorView& out, const TensorView& gate_scratch, const TensorView& up_scratch) {
   const int64_t m = rows(x), k = cols(x), n = rows(w_gate);
-  const DotQ8RowsFn dot_gate = k_.dot_q8_rows_for(w_gate.dtype());
-  const DotQ8RowsFn dot_up = k_.dot_q8_rows_for(w_up.dtype());
-  // Fused only where both projections take the int8 decode path (DD-053);
-  // otherwise the unfused sequence (GEMM paths amortize differently).
-  if (!(m <= plan_.int8_decode_max_rows && int8_accelerated_ && k % kActQ8Block == 0 && dot_gate && dot_up &&
-        rows(w_up) == n)) {
+  const Int8Kernel ig = int8_kernel(w_gate.dtype(), m, k, w_gate.data(), n), iu = int8_kernel(w_up.dtype(), m, k, w_up.data(), rows(w_up));
+  const DotQ8RowsFn dot_gate = ig.dot, dot_up = iu.dot;
+  // Fused only where both projections take the int8 decode path (DD-053) with
+  // one activation format; otherwise the unfused sequence.
+  if (!(dot_gate && dot_up && ig.format == iu.format && rows(w_up) == n)) {
     Device::matmul_gated(act, x, w_gate, w_up, out, gate_scratch, up_scratch);
     return;
   }
   const int64_t nb = k / kActQ8Block;
   act_q8_.resize(static_cast<size_t>(m * nb));
-  for (int64_t r = 0; r < m; ++r) k_.quantize_act(row_ptr<const float>(x, r), act_q8_.data() + r * nb, k);
+  for (int64_t r = 0; r < m; ++r) ig.quantize(row_ptr<const float>(x, r), act_q8_.data() + r * nb, k);
   const ActBlockQ8* actq = act_q8_.data();
   const int64_t g_row = dtype_row_bytes(w_gate.dtype(), k), u_row = dtype_row_bytes(w_up.dtype(), k);
   const auto* gbase = static_cast<const std::byte*>(w_gate.data());
   const auto* ubase = static_cast<const std::byte*>(w_up.data());
+  if (ig.packed != nullptr && iu.packed != nullptr) {
+    // Interleaved copies (DD-078): 8 output channels per work item.
+    const int64_t groups = n / 8, sb = k / 256;
+    pool_.parallel_for(static_cast<size_t>(groups), grain_for(static_cast<size_t>(groups), pool_.size(), 1, plan_.matmul_chunks_per_thread),
+                       [&](size_t begin, size_t end) {
+      float g[8 * kDotRowsMax], u[8 * kDotRowsMax];
+      const ActBlockQ8* xr[kDotRowsMax];
+      for (size_t gi = begin; gi < end; ++gi) {
+        for (int64_t r0 = 0; r0 < m; r0 += kDotRowsMax) {
+          const int mm = static_cast<int>(std::min<int64_t>(kDotRowsMax, m - r0));
+          for (int t = 0; t < mm; ++t) xr[t] = actq + (r0 + t) * nb;
+          k_.dot_q8_sx_x8_q4_K(ig.packed + static_cast<int64_t>(gi) * sb, xr, mm, k, g);
+          k_.dot_q8_sx_x8_q4_K(iu.packed + static_cast<int64_t>(gi) * sb, xr, mm, k, u);
+          for (int t = 0; t < mm; ++t) {
+            float* o = row_ptr<float>(out, r0 + t) + 8 * static_cast<int64_t>(gi);
+            for (int i = 0; i < 8; ++i) o[i] = apply_act(act, g[8 * t + i]) * u[8 * t + i];
+          }
+        }
+      }
+    });
+    return;
+  }
   pool_.parallel_for(static_cast<size_t>(n), grain_for(static_cast<size_t>(n), pool_.size(), 4, plan_.matmul_chunks_per_thread),
                      [&](size_t begin, size_t end) {
     float g[kDotRowsMax], u[kDotRowsMax];
