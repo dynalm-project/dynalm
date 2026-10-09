@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(dynalm
-  VERSION 0.1.2
+  VERSION 0.1.3
   DESCRIPTION "DynaLM: CPU-first LLM inference engine"
   HOMEPAGE_URL "https://github.com/dynalm-project/dynalm"
   LANGUAGES CXX)

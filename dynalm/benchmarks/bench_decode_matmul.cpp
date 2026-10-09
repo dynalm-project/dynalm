@@ -72,11 +72,13 @@ int main(int argc, char** argv) {
   };
   add("attn_q", TensorRole::kAttnQ, 0);
   add("attn_k", TensorRole::kAttnK, 0);
+  add("attn_v", TensorRole::kAttnV, 0);  // Q6_K in layer 0 of both Q4_K_M test models
   add("attn_out", TensorRole::kAttnOutput, 0);
   add("ffn_gate", TensorRole::kFfnGate, 0);
   add("ffn_up", TensorRole::kFfnUp, 0);
   add("ffn_down", TensorRole::kFfnDown, 0);
   add("ffn_down", TensorRole::kFfnDown, 1);  // Q4_K_M mixes Q4_K / Q6_K across layers
+  add("ffn_down4", TensorRole::kFfnDown, 4);  // a Q4_K down layer in both Q4_K_M test models
   add("lm_head", reg.has(TensorRole::kOutput) ? TensorRole::kOutput : TensorRole::kTokenEmbedding, -1);
 
   ThreadPool pool(threads);
@@ -85,7 +87,7 @@ int main(int argc, char** argv) {
               std::string(be.name()).c_str(), argv[1]);
   // Interleaved copies (DD-078) of every Q4_K tensor, for the "packed" column.
   for (const Case& c : cases) {
-    for (const Tensor* t : c.layers) be.prepack_weight(t->view());
+    for (const Tensor* t : c.layers) be.prepack_weight(t->view(), std::getenv("BENCH_INT16") != nullptr);
   }
   std::printf("%-9s %-6s %-14s %3s | %9s %7s | %9s %7s | %9s %7s | %9s %7s | %s\n", "tensor", "type", "shape", "M",
               "fused ms", "GB/s", "expand ms", "GB/s", "int8 ms", "GB/s", "packed ms", "GB/s", "best");
@@ -117,6 +119,12 @@ int main(int argc, char** argv) {
         kp.expand_min_rows = path == 1 ? 1 : 1 << 30;
         kp.int8_decode_max_rows = path >= 2 ? 64 : 0;
         kp.q4_repack_min_rows = path == 3 ? 1 : 0;
+        // BENCH_INT16=1: column 2 runs int16 activations (the down-projection
+        // path, DD-076) instead of int8.
+        if (path >= 2 && std::getenv("BENCH_INT16")) {  // column 3: int16 on the packed copy (DD-081)
+          kp.int8_decode_max_rows = 0;
+          kp.int16_decode_max_rows = 64;
+        }
         be.set_kernel_plan(kp);
         size_t next = 0;
         // BENCH_HOT=1: always layer 0 (cache-resident weights) instead of

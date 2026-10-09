@@ -1,6 +1,8 @@
 // Phase 17 benchmark: fused dequantize-dot throughput per weight type,
 // generic vs AVX2 tier (one 4096-element row, the decode matmul inner loop).
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <random>
@@ -70,8 +72,8 @@ int main() {
   // the compute cost per 256-value super-block for m = 1..4 activation rows,
   // per-32 activations ("q8") vs super-block activations ("sb").
   if (have_avx2) {
-    std::printf("\nint8/int16 dot rows (single thread, hot cache, ns per super-block):\n%-6s %4s %10s %10s %10s %10s %10s %10s %10s\n",
-                "type", "m", "fp32", "q8", "sb", "sx", "q16", "sx-x8", "x8-vnni");
+    std::printf("\nint8/int16 dot rows (single thread, hot cache, ns per super-block):\n%-6s %4s %10s %10s %10s %10s %10s %10s %10s %10s\n",
+                "type", "m", "fp32", "q8", "sb", "sx", "q16", "sx-x8", "x8-vnni", "q16-x8");
     constexpr int64_t kK = 1536, kRows = 64;
     for (DType t : {DType::kQ4_K, DType::kQ6_K}) {
       const int64_t row_bytes = dtype_row_bytes(t, kK);
@@ -94,6 +96,22 @@ int main() {
       if (t == DType::kQ4_K) {
         packed.resize(static_cast<size_t>(kRows / 8 * kK / 256));
         for (int64_t g = 0; g < kRows / 8; ++g) repack_q4_K_x8(w.data(), row_bytes, 8 * g, kK, packed.data() + g * (kK / 256));
+      }
+      // Interleaved Q6_K copy (DD-082) and an exact check of every packed value.
+      std::vector<BlockQ6_Kx8> packed6;
+      double value_err6 = -1;
+      if (t == DType::kQ6_K) {
+        packed6.resize(static_cast<size_t>(kRows / 8 * kK / 256));
+        for (int64_t g = 0; g < kRows / 8; ++g) repack_q6_K_x8(w.data(), row_bytes, 8 * g, kK, packed6.data() + g * (kK / 256));
+        std::vector<float> ref(static_cast<size_t>(kK));
+        value_err6 = 0;
+        for (int64_t row = 0; row < kRows; ++row) {
+          avx2.dequant_for(t)(w.data() + row * row_bytes, ref.data(), kK);
+          for (int64_t i = 0; i < kK; ++i) {
+            const float v = packed_q6_K_x8_value(packed6.data() + row / 8 * (kK / 256), static_cast<int>(row % 8), i);
+            value_err6 = std::max(value_err6, static_cast<double>(std::abs(v - ref[static_cast<size_t>(i)])));
+          }
+        }
       }
       const ActBlockQ16* p16[4] = {a16.data(), a16.data() + kK / 32, a16.data() + 2 * kK / 32,
                                    a16.data() + 3 * kK / 32};
@@ -140,8 +158,38 @@ int main() {
           }, opt);
           x8 = r8.p50 / sbs;
         }
-        std::printf("%-6s %4d %10.1f %10.1f %10.1f %10.1f %10.1f %10.1f %10.1f\n", std::string(dtype_name(t)).c_str(), m,
-                    f.p50 / sbs, q.p50 / sbs, s.p50 / sbs, x2.p50 / sbs, h.p50 / sbs, x8, x8v);
+        // int16 on the interleaved layout (DD-081), with a correctness check
+        // against the row kernel: max |difference| / max |output|.
+        double x16 = 0, err16 = 0;
+        const auto q16x8 = t == DType::kQ4_K ? avx2.dot_q16_x8_q4_K : avx2.dot_q16_x8_q6_K;
+        const std::byte* pk = t == DType::kQ4_K ? reinterpret_cast<const std::byte*>(packed.data())
+                                                : reinterpret_cast<const std::byte*>(packed6.data());
+        const size_t group_bytes = (t == DType::kQ4_K ? sizeof(BlockQ4_Kx8) : sizeof(BlockQ6_Kx8)) * (kK / 256);
+        if ((!packed.empty() || !packed6.empty()) && q16x8 != nullptr) {
+          float o8[32], o1[4];
+          const auto r16 = bench::run([&] {
+            for (int64_t g = 0; g < kRows / 8; ++g) q16x8(pk + g * group_bytes, p16, m, kK, o8);
+            bench::do_not_optimize(o8[0]);
+          }, opt);
+          x16 = r16.p50 / sbs;
+          double dmax = 0, ymax = 0;
+          for (int64_t g = 0; g < kRows / 8; ++g) {
+            q16x8(pk + g * group_bytes, p16, m, kK, o8);
+            for (int i = 0; i < 8; ++i) {
+              avx2.dot_q16_rows_for(t)(w.data() + (8 * g + i) * row_bytes, p16, m, kK, o1);
+              for (int r = 0; r < m; ++r) {
+                dmax = std::max(dmax, static_cast<double>(std::abs(o1[r] - o8[8 * r + i])));
+                ymax = std::max(ymax, static_cast<double>(std::abs(o1[r])));
+              }
+            }
+          }
+          err16 = ymax > 0 ? dmax / ymax : 0;
+        }
+        std::printf("%-6s %4d %10.1f %10.1f %10.1f %10.1f %10.1f %10.1f %10.1f %10.1f", std::string(dtype_name(t)).c_str(), m,
+                    f.p50 / sbs, q.p50 / sbs, s.p50 / sbs, x2.p50 / sbs, h.p50 / sbs, x8, x8v, x16);
+        if (err16 > 0) std::printf("   (q16-x8 rel err %.1e)", err16);
+        if (value_err6 >= 0 && m == 1) std::printf("   (packed Q6_K values max |diff| %.1e)", value_err6);
+        std::printf("\n");
       }
     }
   }

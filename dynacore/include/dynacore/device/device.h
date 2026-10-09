@@ -70,7 +70,13 @@ class Device {
   // Optional one-time preparation of a matmul weight at model load, such as
   // an interleaved copy for multi-row decode (DD-078). Never on the request
   // path. Backends without such layouts ignore it.
-  virtual void prepack_weight(const TensorView& w) { (void)w; }
+  // `int16_activations`: the weight's matmuls use int16 activations (the FFN
+  // down projection, DD-076), so layouts that only serve that path are worth
+  // building for it (DD-082).
+  virtual void prepack_weight(const TensorView& w, bool int16_activations = false) {
+    (void)w;
+    (void)int16_activations;
+  }
   struct PrepackStats {
     int64_t tensors = 0;
     int64_t source_bytes = 0;

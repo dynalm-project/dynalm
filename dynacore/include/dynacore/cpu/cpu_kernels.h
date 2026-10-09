@@ -134,6 +134,11 @@ struct CpuKernels {
   // r < m (1 <= m <= 4), with sub-scaled activations from quantize_act_sx.
   using DotQ8X8Fn = void (*)(const void* w, const ActBlockQ8* const* x, int m, int64_t n, float* out);
   DotQ8X8Fn dot_q8_sx_x8_q4_K = nullptr;
+  // Same layout with int16 activations (DD-081): out[r * 8 + i] for the 8 rows
+  // of a BlockQ4_Kx8 group, activations from quantize_act16, 1 <= m <= 4.
+  using DotQ16X8Fn = void (*)(const void* w, const ActBlockQ16* const* x, int m, int64_t n, float* out);
+  DotQ16X8Fn dot_q16_x8_q4_K = nullptr;
+  DotQ16X8Fn dot_q16_x8_q6_K = nullptr;  // BlockQ6_Kx8 groups (DD-082)
   // int16 activations (DD-076); null where no tier has a kernel.
   QuantizeAct16Fn quantize_act16 = nullptr;
   std::array<DotQ16RowsFn, static_cast<size_t>(DType::kCount)> dot_q16_rows{};

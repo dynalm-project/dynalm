@@ -100,31 +100,64 @@ void CpuDevice::scatter_add_rows(const TensorView& src, std::span<const int32_t>
   }
 }
 
-void CpuDevice::prepack_weight(const TensorView& w) {
-  // Interleaved Q4_K for multi-row decode (DD-078): only where the kernel
-  // exists and the shape groups into 8 rows of whole super-blocks.
-  if (w.dtype() != DType::kQ4_K || !int8_accelerated_ || k_.dot_q8_sx_x8_q4_K == nullptr) return;
-  if (KernelPlan::defaults().q4_repack_min_rows <= 0 || packed_.count(w.data()) != 0) return;
-  const int64_t n = rows(w), k = cols(w);
-  if (n % 8 != 0 || k % 256 != 0) return;
-  const int64_t row_bytes = dtype_row_bytes(DType::kQ4_K, k), nb = k / 256, groups = n / 8;
+namespace {
+bool q6_packed_enabled();  // defined below (DD-082 opt-in switch)
+}  // namespace
+
+bool CpuDevice::prepack_allowed(int64_t bytes) {
   // Memory control (DD-078): DYNACORE_Q4_REPACK=off | auto (default) | always.
-  // auto packs only while the copies fit a budget taken from the RAM
-  // available at load, so a model that nearly fills memory keeps the
-  // original layout (and the 1-row speed) instead of paging.
+  // auto packs only while at least 3 GiB of RAM stay available, checked per
+  // tensor: packing reads the weights, so the model's own pages become
+  // resident as this runs and available memory falls.
   const char* mode = std::getenv("DYNACORE_Q4_REPACK");
   const std::string_view m = mode != nullptr ? std::string_view(mode) : std::string_view("auto");
-  if (m == "off" || m == "0") return;
-  const int64_t bytes = groups * nb * static_cast<int64_t>(sizeof(BlockQ4_Kx8));
+  if (m == "off" || m == "0") return false;
   if (m != "always" && m != "1") {
-    // Checked per tensor: packing reads the weights, so the model's own pages
-    // become resident as this runs and available memory falls.
     constexpr int64_t kReserve = int64_t{3} << 30;
     if (memory_info().available_bytes - bytes < kReserve) {
       ++prepack_stats_.skipped;
-      return;
+      return false;
     }
   }
+  return true;
+}
+
+void CpuDevice::prepack_weight(const TensorView& w, bool int16_activations) {
+  if (!int8_accelerated_ || KernelPlan::defaults().q4_repack_min_rows <= 0) return;
+  const int64_t n = rows(w), k = cols(w);
+  if (n % 8 != 0 || k % 256 != 0) return;
+  // Interleaved Q6_K, only for int16-activation weights (DD-082): its only
+  // kernel is the int16 one.
+  if (w.dtype() == DType::kQ6_K) {
+    if (!int16_activations || !q6_packed_enabled() || k_.dot_q16_x8_q6_K == nullptr || packed6_.count(w.data()) != 0) {
+      return;
+    }
+    const int64_t row_bytes = dtype_row_bytes(DType::kQ6_K, k), nb = k / 256, groups = n / 8;
+    const int64_t bytes = groups * nb * static_cast<int64_t>(sizeof(BlockQ6_Kx8));
+    if (!prepack_allowed(bytes)) return;
+    const int64_t t0 = now_ns();
+    Packed6 p;
+    p.n = n;
+    p.k = k;
+    p.blocks.resize(static_cast<size_t>(groups * nb));
+    pool_.parallel_for(static_cast<size_t>(groups), 1, [&](size_t begin, size_t end) {
+      for (size_t g = begin; g < end; ++g) {
+        repack_q6_K_x8(w.data(), row_bytes, static_cast<int64_t>(g) * 8, k, p.blocks.data() + static_cast<int64_t>(g) * nb);
+      }
+    });
+    ++prepack_stats_.tensors;
+    prepack_stats_.source_bytes += n * row_bytes;
+    prepack_stats_.packed_bytes += bytes;
+    prepack_stats_.ms += static_cast<double>(now_ns() - t0) * 1e-6;
+    packed6_.emplace(w.data(), std::move(p));
+    return;
+  }
+  // Interleaved Q4_K for multi-row decode (DD-078): only where the kernel
+  // exists and the shape groups into 8 rows of whole super-blocks.
+  if (w.dtype() != DType::kQ4_K || k_.dot_q8_sx_x8_q4_K == nullptr || packed_.count(w.data()) != 0) return;
+  const int64_t row_bytes = dtype_row_bytes(DType::kQ4_K, k), nb = k / 256, groups = n / 8;
+  const int64_t bytes = groups * nb * static_cast<int64_t>(sizeof(BlockQ4_Kx8));
+  if (!prepack_allowed(bytes)) return;
   const int64_t t0 = now_ns();
   Packed p;
   p.n = n;
@@ -172,6 +205,32 @@ void CpuDevice::int8_rows(const Int8Kernel& ik, const std::byte* wbase, int64_t 
       for (int t = 0; t < mm; ++t) row_ptr<float>(y, r0 + t)[r] = out[t] + br;
     }
   }
+}
+
+namespace {
+// DYNACORE_Q16_PACKED=0 keeps int16 matmuls on the row kernel (A/B switch).
+// Packed Q6_K int16 (DD-082) is opt-in: DYNACORE_Q6_PACKED=1. It saves ~2% of
+// a 4-user decode step but did not move end-to-end tok/s outside noise, so by
+// default nothing is packed for it and int16 Q6_K stays on the row kernel.
+bool q6_packed_enabled() {
+  static const bool on = [] {
+    const char* v = std::getenv("DYNACORE_Q6_PACKED");
+    return v != nullptr && v[0] == '1';
+  }();
+  return on;
+}
+bool q16_packed_enabled() {
+  static const bool on = [] {
+    const char* v = std::getenv("DYNACORE_Q16_PACKED");
+    return !(v != nullptr && v[0] == '0');
+  }();
+  return on;
+}
+}  // namespace
+
+const BlockQ6_Kx8* CpuDevice::find_packed6(const void* w, int64_t n, int64_t k) const {
+  const auto it = packed6_.find(w);
+  return it != packed6_.end() && it->second.n == n && it->second.k == k ? it->second.blocks.data() : nullptr;
 }
 
 const BlockQ4_Kx8* CpuDevice::find_packed(const void* w, int64_t n, int64_t k) const {
@@ -357,7 +416,48 @@ void CpuDevice::matmul(const TensorView& x, const TensorView& w, const TensorVie
   }
 
   // int16 activations (DD-076): inputs too outlier-heavy for int8 (the FFN
-  // down projection), when the plan asks for it.
+  // down projection), when the plan asks for it. A Q4_K weight with an
+  // interleaved copy uses it (DD-081) up to int8_superblock_max_rows rows: it
+  // stays ahead of fp32 expand there, the row kernel only up to 4.
+  const bool try16 = plan_.int16_decode_max_rows > 0 && plan_.q4_repack_min_rows > 0 &&
+                     m >= plan_.q4_repack_min_rows && q16_packed_enabled();
+  const void* packed16 = nullptr;
+  CpuKernels::DotQ16X8Fn dot16x8 = nullptr;
+  size_t group16_bytes = 0;
+  if (try16 && wt == DType::kQ4_K && k_.dot_q16_x8_q4_K != nullptr) {
+    packed16 = find_packed(w.data(), n, k);
+    dot16x8 = k_.dot_q16_x8_q4_K;
+    group16_bytes = sizeof(BlockQ4_Kx8) * static_cast<size_t>(k / 256);
+  } else if (try16 && wt == DType::kQ6_K && k_.dot_q16_x8_q6_K != nullptr && q6_packed_enabled()) {
+    packed16 = find_packed6(w.data(), n, k);
+    dot16x8 = k_.dot_q16_x8_q6_K;
+    group16_bytes = sizeof(BlockQ6_Kx8) * static_cast<size_t>(k / 256);
+  }
+  if (packed16 != nullptr && m <= std::max(plan_.int16_decode_max_rows, plan_.int8_superblock_max_rows) &&
+      int8_accelerated_ && k % 256 == 0 && k_.quantize_act16 != nullptr) {
+    const int64_t nb = k / kActQ8Block;
+    act_q16_.resize(static_cast<size_t>(m * nb));
+    for (int64_t r = 0; r < m; ++r) k_.quantize_act16(row_ptr<const float>(x, r), act_q16_.data() + r * nb, k);
+    const ActBlockQ16* act = act_q16_.data();
+    const int64_t groups = n / 8;
+    pool_.parallel_for(static_cast<size_t>(groups), grain_for(static_cast<size_t>(groups), pool_.size(), 1, plan_.matmul_chunks_per_thread),
+                       [&](size_t begin, size_t end) {
+      float out[8 * kDotRowsMax];
+      const ActBlockQ16* xr[kDotRowsMax];
+      for (size_t g = begin; g < end; ++g) {
+        for (int64_t r0 = 0; r0 < m; r0 += kDotRowsMax) {
+          const int mm = static_cast<int>(std::min<int64_t>(kDotRowsMax, m - r0));
+          for (int t = 0; t < mm; ++t) xr[t] = act + (r0 + t) * nb;
+          dot16x8(static_cast<const std::byte*>(packed16) + g * group16_bytes, xr, mm, k, out);
+          for (int t = 0; t < mm; ++t) {
+            float* yr = row_ptr<float>(y, r0 + t) + 8 * static_cast<int64_t>(g);
+            for (int i = 0; i < 8; ++i) yr[i] = out[8 * t + i] + (b ? b[8 * g + i] : 0.0f);
+          }
+        }
+      }
+    });
+    return;
+  }
   if (m <= plan_.int16_decode_max_rows && int8_accelerated_ && k % kActQ8Block == 0 && k_.quantize_act16 != nullptr) {
     if (const DotQ16RowsFn dot16 = k_.dot_q16_rows_for(wt)) {
       const int64_t nb = k / kActQ8Block;

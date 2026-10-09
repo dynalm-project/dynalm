@@ -48,6 +48,8 @@ Result<std::unique_ptr<Transformer>> Transformer::create(const ModelConfig& conf
     for (const TensorView* w : {&L.wq, &L.wk, &L.wv, &L.wqkv, &L.wo, &L.w_gate, &L.w_up, &L.w_gate_up}) {
       if (w->data() != nullptr) backend.prepack_weight(*w);
     }
+    // The down projection runs with int16 activations (DD-076).
+    if (L.w_down.data() != nullptr) backend.prepack_weight(L.w_down, /*int16_activations=*/true);
   }
   if (t->lm_head_.data() != nullptr) backend.prepack_weight(t->lm_head_);
   t->planner_ = std::make_unique<BatchPlanner>(config, HardwareProfile::detect(backend.parallelism(), backend.name()));

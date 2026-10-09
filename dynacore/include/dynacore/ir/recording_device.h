@@ -102,7 +102,9 @@ class RecordingDevice final : public Device {
   const std::vector<int64_t>& op_ns() const { return op_ns_; }
   const RecordingStats& stats() const { return stats_; }
   Device& inner() { return inner_; }
-  void prepack_weight(const TensorView& w) override { inner_.prepack_weight(w); }
+  void prepack_weight(const TensorView& w, bool int16_activations = false) override {
+    inner_.prepack_weight(w, int16_activations);
+  }
   PrepackStats prepack_stats() const override { return inner_.prepack_stats(); }
 
   // Runs everything recorded so far (deferred mode). Call it (or any sync

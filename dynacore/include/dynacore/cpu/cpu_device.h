@@ -29,7 +29,7 @@ class CpuDevice final : public Device {
   void copy(void* dst, const void* src, size_t bytes) override;
   void synchronize() override {}
   bool supports_weight_type(DType type) const override;
-  void prepack_weight(const TensorView& w) override;
+  void prepack_weight(const TensorView& w, bool int16_activations = false) override;
   PrepackStats prepack_stats() const override { return prepack_stats_; }
   void set_kernel_plan(const KernelPlan& plan) override { plan_ = plan; }
   int32_t parallelism() const override { return pool_.size(); }
@@ -101,6 +101,16 @@ class CpuDevice final : public Device {
   };
   // The interleaved copy of the weight at `w` with exactly n x k elements.
   const BlockQ4_Kx8* find_packed(const void* w, int64_t n, int64_t k) const;
+  // Interleaved Q6_K copies for the int16 path (DD-082).
+  struct Packed6 {
+    std::vector<BlockQ6_Kx8> blocks;
+    int64_t n = 0, k = 0;
+  };
+  std::unordered_map<const void*, Packed6> packed6_;
+  const BlockQ6_Kx8* find_packed6(const void* w, int64_t n, int64_t k) const;
+  // The DD-078 memory guard: false (and counted as skipped) when packing
+  // `bytes` more would leave too little RAM, or packing is off.
+  bool prepack_allowed(int64_t bytes);
   std::unordered_map<const void*, Packed> packed_;
   PrepackStats prepack_stats_;
 

@@ -2,7 +2,21 @@
 
 ## [Unreleased]
 
-## [0.1.2] - 2026-10-08
+## [0.1.3] - 2026-10-09
+
+### Performance: repacked multi-row decode (DD-081..082)
+- Repacked Q4_K layout with int16 activations (`dot_q16_x8_q4_K`, DD-081) for
+  multi-row decode on FFN down projections.
+- Repacked Q6_K x8 layout (`BlockQ6_Kx8`, `repack_q6_K_x8`, `dot_q16_x8_q6_K`,
+  DD-082) with int16 activations, completing packed multi-row decode for
+  mixed Q4_K/Q6_K architectures (such as Q4_K_M).
+- Automatic prepacking of down projections with int16 activations in
+  `Transformer::create`.
+- `bench_decode_matmul` supports `BENCH_INT16` benchmarking across original and
+  repacked K-quant layers.
+
+### Removed
+- Removed deprecated `examples/dynacore/decoder_layer.dyna`.
 
 ### Removed
 - The unit, smoke and boundary test suites (`tests/`, `dynacore/tests`,

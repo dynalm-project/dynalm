@@ -1110,6 +1110,159 @@ void dot_x8_sx_q4_K(const void* w, const ActBlockQ8* const* xin, int m, int64_t 
   }
 }
 
+// --- Interleaved Q4_K x 8 rows with int16 activations (DD-081) --------------
+// The FFN down projection keeps int16 activations (int8 breaks the accuracy
+// contract there, DD-053/DD-076). On the BlockQ4_Kx8 layout each 4-value chunk
+// of 8 rows widens to two int16 vectors (rows 0-3, rows 4-7) shared by every
+// activation row; one 64-bit broadcast of the activation's 4 values feeds two
+// madd. A 32-value sub-block accumulates exactly in int32 (|lane| <= 8 * 2 *
+// 15 * 32767 < 7.9e6, exact in float after the pair add), then one hadd +
+// permute puts the 8 rows in order for one float multiply-add with the
+// sub-block scale and the activation block's scale.
+template <int M>
+void dot_x8_q16_q4_K_m(const BlockQ4_Kx8* w, const ActBlockQ16* const* x, int64_t n, float* out) {
+  const __m256i low4 = _mm256_set1_epi8(0x0F);
+  const __m256i row_order = _mm256_setr_epi32(0, 1, 4, 5, 2, 3, 6, 7);
+  __m256 acc[M];
+  for (int r = 0; r < M; ++r) acc[r] = _mm256_setzero_ps();
+  for (int64_t i = 0; i < n / kQK_K; ++i) {
+    const BlockQ4_Kx8& p = w[i];
+    const __m256 dv = _mm256_loadu_ps(p.d), dminv = _mm256_loadu_ps(p.dmin);
+    for (int jp = 0; jp < 4; ++jp) {
+      // Widened codes: [chunk][0: rows 0-3, 1: rows 4-7] for both sub-blocks.
+      __m256i wl[8][2], wh[8][2];
+      for (int c = 0; c < 8; ++c) {
+        const __m256i q = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p.qs[jp][c]));
+        const __m256i lo = _mm256_and_si256(q, low4);
+        const __m256i hi = _mm256_and_si256(_mm256_srli_epi16(q, 4), low4);
+        wl[c][0] = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(lo));
+        wl[c][1] = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(lo, 1));
+        wh[c][0] = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(hi));
+        wh[c][1] = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(hi, 1));
+      }
+      const int j0 = 2 * jp, j1 = 2 * jp + 1;
+      auto scale_f = [&](int j) {
+        return _mm256_mul_ps(dv, _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(p.sc[j])))));
+      };
+      auto min_f = [&](int j) {
+        return _mm256_mul_ps(dminv, _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(p.mn[j])))));
+      };
+      const __m256 ds0 = scale_f(j0), ds1 = scale_f(j1), dm0 = min_f(j0), dm1 = min_f(j1);
+      for (int r = 0; r < M; ++r) {
+        const ActBlockQ16& a0 = x[r][i * 8 + j0];
+        const ActBlockQ16& a1 = x[r][i * 8 + j1];
+        __m256i s0a = _mm256_setzero_si256(), s0b = _mm256_setzero_si256();
+        __m256i s1a = _mm256_setzero_si256(), s1b = _mm256_setzero_si256();
+        for (int c = 0; c < 8; ++c) {
+          int64_t b0, b1;
+          std::memcpy(&b0, a0.q + 4 * c, 8);
+          std::memcpy(&b1, a1.q + 4 * c, 8);
+          const __m256i x0 = _mm256_set1_epi64x(b0), x1 = _mm256_set1_epi64x(b1);
+          s0a = _mm256_add_epi32(s0a, _mm256_madd_epi16(wl[c][0], x0));
+          s0b = _mm256_add_epi32(s0b, _mm256_madd_epi16(wl[c][1], x0));
+          s1a = _mm256_add_epi32(s1a, _mm256_madd_epi16(wh[c][0], x1));
+          s1b = _mm256_add_epi32(s1b, _mm256_madd_epi16(wh[c][1], x1));
+        }
+        const __m256i r0 = _mm256_permutevar8x32_epi32(_mm256_hadd_epi32(s0a, s0b), row_order);
+        const __m256i r1 = _mm256_permutevar8x32_epi32(_mm256_hadd_epi32(s1a, s1b), row_order);
+        acc[r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(r0), _mm256_mul_ps(ds0, _mm256_set1_ps(a0.d)), acc[r]);
+        acc[r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(r1), _mm256_mul_ps(ds1, _mm256_set1_ps(a1.d)), acc[r]);
+        acc[r] = _mm256_fnmadd_ps(dm0, _mm256_set1_ps(a0.d * static_cast<float>(a0.sum)), acc[r]);
+        acc[r] = _mm256_fnmadd_ps(dm1, _mm256_set1_ps(a1.d * static_cast<float>(a1.sum)), acc[r]);
+      }
+    }
+  }
+  for (int r = 0; r < M; ++r) _mm256_storeu_ps(out + 8 * r, acc[r]);
+}
+
+void dot_x8_q16_q4_K(const void* w, const ActBlockQ16* const* x, int m, int64_t n, float* out) {
+  const auto* pw = static_cast<const BlockQ4_Kx8*>(w);
+  switch (m) {
+    case 1: dot_x8_q16_q4_K_m<1>(pw, x, n, out); break;
+    case 2: dot_x8_q16_q4_K_m<2>(pw, x, n, out); break;
+    case 3: dot_x8_q16_q4_K_m<3>(pw, x, n, out); break;
+    default: dot_x8_q16_q4_K_m<4>(pw, x, n, out); break;
+  }
+}
+
+// --- Interleaved Q6_K x 8 rows with int16 activations (DD-082) --------------
+// Per 4-value chunk of a sub-block pair: 32 bytes of low nibbles (sub-block A
+// low, B high) and 16 bytes of 2-bit high planes, rebuilt to signed codes
+// (q - 32) once and widened to int16 for every activation row. Each 16-value
+// half of a sub-block (one Q6_K scale) accumulates exactly in int32 (|lane|
+// after the pair add <= 2 * 4 * 2 * 32 * 32767 < 2^24, exact in float) and
+// takes one float multiply-add with d * scale * the activation block scale.
+template <int M>
+void dot_x8_q16_q6_K_m(const BlockQ6_Kx8* w, const ActBlockQ16* const* x, int64_t n, float* out) {
+  const __m256i low4 = _mm256_set1_epi8(0x0F), three = _mm256_set1_epi8(3), k32 = _mm256_set1_epi8(32);
+  const __m128i low4h = _mm_set1_epi8(0x0F);
+  const __m256i row_order = _mm256_setr_epi32(0, 1, 4, 5, 2, 3, 6, 7);
+  __m256 acc[M];
+  for (int r = 0; r < M; ++r) acc[r] = _mm256_setzero_ps();
+  for (int64_t i = 0; i < n / kQK_K; ++i) {
+    const BlockQ6_Kx8& p = w[i];
+    const __m256 dv = _mm256_loadu_ps(p.d);
+    for (int pp = 0; pp < 4; ++pp) {
+      // Signed codes widened to int16: [chunk][A rows 0-3, A rows 4-7, B rows 0-3, B rows 4-7].
+      __m256i wq[8][4];
+      for (int c = 0; c < 8; ++c) {
+        const __m256i q = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p.ql[pp][c]));
+        const __m128i hb = _mm_loadu_si128(reinterpret_cast<const __m128i*>(p.qh[pp][c]));
+        const __m256i h = _mm256_set_m128i(_mm_and_si128(_mm_srli_epi16(hb, 4), low4h), _mm_and_si128(hb, low4h));
+        const __m256i a = _mm256_sub_epi8(
+            _mm256_or_si256(_mm256_and_si256(q, low4), _mm256_slli_epi16(_mm256_and_si256(h, three), 4)), k32);
+        const __m256i b = _mm256_sub_epi8(
+            _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(q, 4), low4),
+                            _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(h, 2), three), 4)),
+            k32);
+        wq[c][0] = _mm256_cvtepi8_epi16(_mm256_castsi256_si128(a));
+        wq[c][1] = _mm256_cvtepi8_epi16(_mm256_extracti128_si256(a, 1));
+        wq[c][2] = _mm256_cvtepi8_epi16(_mm256_castsi256_si128(b));
+        wq[c][3] = _mm256_cvtepi8_epi16(_mm256_extracti128_si256(b, 1));
+      }
+      // d * scale for the 4 sixteen-value groups of this pair (A low, A high, B low, B high).
+      __m256 ds[4];
+      for (int g = 0; g < 4; ++g) {
+        ds[g] = _mm256_mul_ps(dv, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(
+                                      _mm_loadl_epi64(reinterpret_cast<const __m128i*>(p.sc[4 * pp + g])))));
+      }
+      for (int r = 0; r < M; ++r) {
+        for (int s = 0; s < 2; ++s) {  // sub-block A (s = 0) or B (s = 1)
+          const ActBlockQ16& a = x[r][i * 8 + 2 * pp + s];
+          __m256i lo_a = _mm256_setzero_si256(), lo_b = _mm256_setzero_si256();
+          __m256i hi_a = _mm256_setzero_si256(), hi_b = _mm256_setzero_si256();
+          for (int c = 0; c < 4; ++c) {
+            int64_t v0, v1;
+            std::memcpy(&v0, a.q + 4 * c, 8);
+            std::memcpy(&v1, a.q + 16 + 4 * c, 8);
+            const __m256i x0 = _mm256_set1_epi64x(v0), x1 = _mm256_set1_epi64x(v1);
+            lo_a = _mm256_add_epi32(lo_a, _mm256_madd_epi16(wq[c][2 * s], x0));
+            lo_b = _mm256_add_epi32(lo_b, _mm256_madd_epi16(wq[c][2 * s + 1], x0));
+            hi_a = _mm256_add_epi32(hi_a, _mm256_madd_epi16(wq[c + 4][2 * s], x1));
+            hi_b = _mm256_add_epi32(hi_b, _mm256_madd_epi16(wq[c + 4][2 * s + 1], x1));
+          }
+          const __m256i lo = _mm256_permutevar8x32_epi32(_mm256_hadd_epi32(lo_a, lo_b), row_order);
+          const __m256i hi = _mm256_permutevar8x32_epi32(_mm256_hadd_epi32(hi_a, hi_b), row_order);
+          const __m256 xd = _mm256_set1_ps(a.d);
+          acc[r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(lo), _mm256_mul_ps(ds[2 * s], xd), acc[r]);
+          acc[r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(hi), _mm256_mul_ps(ds[2 * s + 1], xd), acc[r]);
+        }
+      }
+    }
+  }
+  for (int r = 0; r < M; ++r) _mm256_storeu_ps(out + 8 * r, acc[r]);
+}
+
+void dot_x8_q16_q6_K(const void* w, const ActBlockQ16* const* x, int m, int64_t n, float* out) {
+  const auto* pw = static_cast<const BlockQ6_Kx8*>(w);
+  switch (m) {
+    case 1: dot_x8_q16_q6_K_m<1>(pw, x, n, out); break;
+    case 2: dot_x8_q16_q6_K_m<2>(pw, x, n, out); break;
+    case 3: dot_x8_q16_q6_K_m<3>(pw, x, n, out); break;
+    default: dot_x8_q16_q6_K_m<4>(pw, x, n, out); break;
+  }
+}
+
 // --- int16 activation path (DD-076) -----------------------------------------
 // Weight codes are widened to int16 and pre-multiplied by their integer
 // sub-block scale (|q * sc| <= 4096 for every format here), so each 32-value
@@ -1316,6 +1469,8 @@ bool register_avx2_kernels(CpuKernels& k) {
   k.dot_q8_sx_rows[static_cast<size_t>(DType::kQ4_K)] = dot_rows_sx_q4_K;
   k.dot_q8_sx_rows[static_cast<size_t>(DType::kQ6_K)] = dot_rows_sx_q6_K;
   k.dot_q8_sx_x8_q4_K = dot_x8_sx_q4_K;
+  k.dot_q16_x8_q4_K = dot_x8_q16_q4_K;
+  k.dot_q16_x8_q6_K = dot_x8_q16_q6_K;
   k.quantize_act16 = quantize_act16;
   k.dot_q16_rows[static_cast<size_t>(DType::kQ8_0)] = dot_rows16_q8_0;
   k.dot_q16_rows[static_cast<size_t>(DType::kQ4_K)] = dot_rows16_q4_K;

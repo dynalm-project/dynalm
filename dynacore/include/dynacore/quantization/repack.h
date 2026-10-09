@@ -33,6 +33,26 @@ struct BlockQ4_Kx8 {
 };
 static_assert(sizeof(BlockQ4_Kx8) == 1216);
 
+// 8 rows x 256 values of Q6_K (DD-082). Value v of row r is
+//   d[r] * sc[v / 16][r] * (q - 32),  q in 0..63,
+// with v in sub-block pair p (v / 64), sub-block A = 2p or B = 2p + 1 of it,
+// position 4 * c + t in the sub-block (c in 0..7, t in 0..3), and
+//   low 4 bits of q: low nibble (A) or high nibble (B) of ql[p][c][4 * r + t]
+//   high 2 bits:     bits 0-1 (A) or 2-3 (B) of nibble k = 4 * r + t of
+//                    qh[p][c] (k < 16: low nibbles of bytes 0-15; else high
+//                    nibbles of bytes 0-15 for k - 16).
+// 6.6 bits per value, as the source (1696 against 8 x 210 bytes).
+struct BlockQ6_Kx8 {
+  float d[8];
+  int8_t sc[16][8];  // [16-value group][row]
+  uint8_t ql[4][8][32];
+  uint8_t qh[4][8][16];
+};
+static_assert(sizeof(BlockQ6_Kx8) == 1696);
+
+void repack_q6_K_x8(const void* matrix, int64_t row_bytes, int64_t row0, int64_t k, BlockQ6_Kx8* out);
+float packed_q6_K_x8_value(const BlockQ6_Kx8* blocks, int r, int64_t i);
+
 // Packs rows [row0, row0 + 8) of a Q4_K matrix with `k` columns (a multiple
 // of 256) whose rows are `row_bytes` apart: k / 256 blocks into `out`.
 void repack_q4_K_x8(const void* matrix, int64_t row_bytes, int64_t row0, int64_t k, BlockQ4_Kx8* out);
