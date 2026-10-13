@@ -5,8 +5,12 @@
 #include <cassert>
 #include <cmath>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
+#include <map>
+#include <mutex>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 #include "dynacore/base/fast_exp.h"
@@ -22,6 +26,61 @@ namespace {
 // benchmark evidence; relaxed, one increment per call).
 std::atomic<uint64_t> g_packed_rows8_dispatches{0};
 std::atomic<uint64_t> g_int16_prefill_calls{0};  // KernelPlan::int16_prefill_max_rows matmuls (experimental)
+
+// Matmul registry diagnostics (process-wide, relaxed): per kernel id.
+std::atomic<uint64_t> g_mm_calls[kMatmulKernelCount];
+std::atomic<uint64_t> g_mm_rows[kMatmulKernelCount];
+std::atomic<uint64_t> g_mm_macs[kMatmulKernelCount];
+std::atomic<uint64_t> g_mm_ns[kMatmulKernelCount];
+std::atomic<bool> g_mm_timing{[] {
+  const char* v = std::getenv("DYNACORE_MATMUL_TIMING");
+  return v != nullptr && v[0] == '1';
+}()};
+struct MatmulShapeKey {
+  MatmulKernelId id;
+  DType weight;
+  int64_t n, k, m;
+  bool operator<(const MatmulShapeKey& o) const {
+    return std::tie(id, weight, n, k, m) < std::tie(o.id, o.weight, o.n, o.k, o.m);
+  }
+};
+std::mutex g_mm_shape_mu;
+std::map<MatmulShapeKey, std::pair<uint64_t, uint64_t>> g_mm_shapes;  // calls, ns (timing on)
+std::map<MatmulShapeKey, bool> g_mm_explained;                         // explain-once set (under g_mm_shape_mu)
+
+bool matmul_explain_enabled() {
+  static const bool on = [] {
+    const char* v = std::getenv("DYNACORE_MATMUL_EXPLAIN");
+    return v != nullptr && v[0] == '1';
+  }();
+  return on;
+}
+
+// ns < 0: timing off for this call.
+void record_matmul(MatmulKernelId id, const MatmulShape& s, int64_t ns) {
+  const size_t i = static_cast<size_t>(id);
+  g_mm_calls[i].fetch_add(1, std::memory_order_relaxed);
+  g_mm_rows[i].fetch_add(static_cast<uint64_t>(s.m), std::memory_order_relaxed);
+  g_mm_macs[i].fetch_add(static_cast<uint64_t>(s.m) * static_cast<uint64_t>(s.n) * static_cast<uint64_t>(s.k), std::memory_order_relaxed);
+  if (ns >= 0) {
+    g_mm_ns[i].fetch_add(static_cast<uint64_t>(ns), std::memory_order_relaxed);
+    std::lock_guard<std::mutex> lock(g_mm_shape_mu);
+    auto& v = g_mm_shapes[MatmulShapeKey{id, s.weight, s.n, s.k, s.m}];
+    ++v.first;
+    v.second += static_cast<uint64_t>(ns);
+  }
+}
+
+// DYNACORE_MATMUL_EXPLAIN=1: the first call of each (kernel, shape) logs the
+// selection and the higher-priority kernels it passed over.
+void explain_matmul_once(const MatmulShape& s, const MatmulSelection& sel) {
+  {
+    std::lock_guard<std::mutex> lock(g_mm_shape_mu);
+    if (!g_mm_explained.emplace(MatmulShapeKey{sel.id, s.weight, s.n, s.k, s.m}, true).second) return;
+  }
+  std::fprintf(stderr, "dynacore matmul: %s [%lld x %lld] m=%lld -> %s\n", std::string(dtype_name(s.weight)).c_str(),
+               static_cast<long long>(s.n), static_cast<long long>(s.k), static_cast<long long>(s.m), sel.explain().c_str());
+}
 
 // Pointer to row r of a 2-D view (strides are bytes).
 template <typename T>
@@ -190,7 +249,7 @@ void CpuDevice::int8_rows(const Int8Kernel& ik, const std::byte* wbase, int64_t 
   // EXPERIMENTAL (KernelPlan::packed_int8_8rows, off by default): more than
   // 4 rows on an interleaved copy go through 8-row tiles, one pass over each
   // packed group instead of two. Same per-row arithmetic as the 4-row tiles.
-  if (ik.packed != nullptr && plan_.packed_int8_8rows && m > kDotRowsMax && k_.dot_q8_sx_x8_q4_K_rows8 != nullptr) {
+  if (ik.packed != nullptr && ik.rows8 && m > kDotRowsMax && k_.dot_q8_sx_x8_q4_K_rows8 != nullptr) {
     g_packed_rows8_dispatches.fetch_add(1, std::memory_order_relaxed);
     const ActBlockQ8* xr8[kPackedRowsMax];
     float out[8 * kPackedRowsMax];
@@ -268,34 +327,34 @@ const BlockQ4_Kx8* CpuDevice::find_packed(const void* w, int64_t n, int64_t k) c
   return it != packed_.end() && it->second.n == n && it->second.k == k ? it->second.blocks.data() : nullptr;
 }
 
-CpuDevice::Int8Kernel CpuDevice::int8_kernel(DType wt, int64_t m, int64_t k, const void* w, int64_t n) const {
-  if (plan_.int8_decode_max_rows <= 0 || !int8_accelerated_ || k % kActQ8Block != 0) return {};
-  // Super-block family (K-quants, k a multiple of 256): up to
-  // max(int8_decode_max_rows, int8_superblock_max_rows) rows.
-  const bool sb_rows = k % 256 == 0 && m <= std::max(plan_.int8_decode_max_rows, plan_.int8_superblock_max_rows);
-  // Prefill-sized batches on a large Q4_K matrix with an interleaved copy
-  // (DD-078): the packed kernel beats fp32 expand up to q4_repack_max_rows.
-  if (!sb_rows && wt == DType::kQ4_K && w != nullptr && k % 256 == 0 && m <= plan_.q4_repack_max_rows &&
-      n >= plan_.q4_repack_min_out && plan_.q4_repack_min_rows > 0 && plan_.int8_subscale_min_rows > 0 &&
-      m >= plan_.int8_subscale_min_rows && k_.quantize_act_sx != nullptr) {
-    if (const BlockQ4_Kx8* pk = find_packed(w, n, k)) {
-      return {k_.quantize_act_sx, k_.dot_q8_sx_rows_for(wt), ActFormat::kSubscaled, pk};
-    }
-  }
-  if (sb_rows && plan_.int8_subscale_min_rows > 0 && m >= plan_.int8_subscale_min_rows && k_.quantize_act_sx) {
-    if (const DotQ8RowsFn sx = k_.dot_q8_sx_rows_for(wt)) {
-      Int8Kernel ik{k_.quantize_act_sx, sx, ActFormat::kSubscaled};
-      if (wt == DType::kQ4_K && w != nullptr && plan_.q4_repack_min_rows > 0 && m >= plan_.q4_repack_min_rows) {
-        ik.packed = find_packed(w, n, k);
-      }
+CpuDevice::Int8Kernel CpuDevice::int8_from(const MatmulSelection& sel, DType wt, const void* w, int64_t n, int64_t k,
+                                           int64_t m) const {
+  switch (sel.id) {
+    case MatmulKernelId::kInt8PrefillX8: {
+      // Prefill-sized batches on the interleaved copy (DD-078, opt-in); 8-row
+      // tiles as the plan allows (int8_rows).
+      Int8Kernel ik{k_.quantize_act_sx, k_.dot_q8_sx_rows_for(wt), ActFormat::kSubscaled, find_packed(w, n, k)};
+      ik.rows8 = plan_.packed_int8_8rows && m > kDotRowsMax && k_.dot_q8_sx_x8_q4_K_rows8 != nullptr &&
+                 (plan_.matmul_disabled & matmul_kernel_bit(MatmulKernelId::kInt8SubscaledX8Rows8)) == 0;
       return ik;
     }
+    case MatmulKernelId::kInt8SubscaledX8Rows8:
+    case MatmulKernelId::kInt8SubscaledX8: {
+      Int8Kernel ik{k_.quantize_act_sx, k_.dot_q8_sx_rows_for(wt), ActFormat::kSubscaled, find_packed(w, n, k)};
+      ik.rows8 = sel.id == MatmulKernelId::kInt8SubscaledX8Rows8;
+      return ik;
+    }
+    case MatmulKernelId::kInt8Subscaled: return {k_.quantize_act_sx, k_.dot_q8_sx_rows_for(wt), ActFormat::kSubscaled};
+    case MatmulKernelId::kInt8Superblock: return {k_.quantize_act_sb, k_.dot_q8_sb_rows_for(wt), ActFormat::kSuperblock};
+    case MatmulKernelId::kInt8Per32: return {k_.quantize_act, k_.dot_q8_rows_for(wt), ActFormat::kPer32};
+    default: return {};
   }
-  if (sb_rows && plan_.int8_superblock_min_rows > 0 && m >= plan_.int8_superblock_min_rows && k_.quantize_act_sb) {
-    if (const DotQ8RowsFn sb = k_.dot_q8_sb_rows_for(wt)) return {k_.quantize_act_sb, sb, ActFormat::kSuperblock};
-  }
-  if (m > plan_.int8_decode_max_rows) return {};
-  return {k_.quantize_act, k_.dot_q8_rows_for(wt), ActFormat::kPer32};
+}
+
+CpuDevice::Int8Kernel CpuDevice::int8_kernel(DType wt, int64_t m, int64_t k, const void* w, int64_t n) const {
+  // The int8 family of the matmul registry (DD-053 / 075 / 077 / 078).
+  const MatmulShape shape{m, n, k, wt, true};
+  return int8_from(select_matmul_int8(shape, plan_, matmul_caps(wt, w, n, k, m)), wt, w, n, k, m);
 }
 
 void CpuDevice::matmul_many(std::span<const MatmulJob> jobs) {
@@ -329,7 +388,14 @@ void CpuDevice::matmul_many(std::span<const MatmulJob> jobs) {
     // Rows may be strided (MoE slices of a wider buffer): quantization works
     // row by row and the GEMM tile takes a row stride, so neither needs dense x.
     JobPlan p{Path::kFused, 0, false};
-    if (const Int8Kernel ik = int8_kernel(wt, m, k, j.w.data(), rows(j.w)); ik.dot != nullptr) {
+    const MatmulShape shape{m, rows(j.w), k, wt, true};
+    const MatmulSelection s8 = select_matmul_int8(shape, plan_, matmul_caps(wt, j.w.data(), rows(j.w), k, m));
+    const Int8Kernel ik8 = int8_from(s8, wt, j.w.data(), rows(j.w), k, m);
+    record_matmul(ik8.dot != nullptr ? s8.id
+                  : (m >= plan_.expand_min_rows && wt != DType::kF32) ? MatmulKernelId::kF32ExpandGemm
+                                                                      : MatmulKernelId::kF32RowDot,
+                  shape, -1);
+    if (const Int8Kernel& ik = ik8; ik.dot != nullptr) {
       p = {Path::kInt8, act_blocks, false, ik};
       // Jobs reading the same activations (Q/K/V, gate/up) share one quantized
       // copy when they also use the same activation format.
@@ -414,9 +480,121 @@ void CpuDevice::matmul_many(std::span<const MatmulJob> jobs) {
   });
 }
 
+MatmulCaps CpuDevice::matmul_caps(DType wt, const void* w, int64_t n, int64_t k, int64_t m) const {
+  (void)m;
+  MatmulCaps c;
+  c.int8_accelerated = int8_accelerated_;
+  c.packed_q4 = wt == DType::kQ4_K && w != nullptr && find_packed(w, n, k) != nullptr;
+  c.packed_q6 = wt == DType::kQ6_K && w != nullptr && find_packed6(w, n, k) != nullptr;
+  c.q16_packed_enabled = q16_packed_enabled();
+  c.q6_packed_enabled = q6_packed_enabled();
+  c.quantize_act = k_.quantize_act != nullptr;
+  c.quantize_act_sb = k_.quantize_act_sb != nullptr;
+  c.quantize_act_sx = k_.quantize_act_sx != nullptr;
+  c.quantize_act16 = k_.quantize_act16 != nullptr;
+  c.dot_q8_rows = k_.dot_q8_rows_for(wt) != nullptr;
+  c.dot_q8_sb_rows = k_.dot_q8_sb_rows_for(wt) != nullptr;
+  c.dot_q8_sx_rows = k_.dot_q8_sx_rows_for(wt) != nullptr;
+  c.dot_q8_sx_x8_rows8 = k_.dot_q8_sx_x8_q4_K_rows8 != nullptr;
+  c.dot_q16_x8_q4 = k_.dot_q16_x8_q4_K != nullptr;
+  c.dot_q16_x8_q6 = k_.dot_q16_x8_q6_K != nullptr;
+  c.dot_q16_x8_q4_rows8 = k_.dot_q16_x8_q4_K_rows8 != nullptr;
+  c.dot_q16_x8_q6_rows8 = k_.dot_q16_x8_q6_K_rows8 != nullptr;
+  c.dot_q16s_x8_q4_rows8 = k_.dot_q16s_x8_q4_K_rows8 != nullptr;
+  c.split_act16 = k_.split_act16 != nullptr;
+  c.dot_q16_rows = k_.dot_q16_rows_for(wt) != nullptr;
+  return c;
+}
+
+int CpuDevice::external_for(const MatmulShape& s, const void* w) const {
+  for (size_t i = 0; i < external_.size(); ++i) {
+    if (external_[i].eligible(s, w)) return static_cast<int>(i);
+  }
+  return -1;
+}
+
+Status CpuDevice::register_external_matmul(ExternalMatmulKernel kernel) {
+  if (kernel.name.empty()) return InvalidArgument("external matmul kernel needs a name");
+  if (!kernel.eligible || !kernel.run) return InvalidArgument("external matmul kernel '" + kernel.name + "' needs eligible and run");
+  for (const ExternalMatmulKernel& e : external_) {
+    if (e.name == kernel.name) return Status(StatusCode::kAlreadyExists, "external matmul kernel '" + kernel.name + "' already registered");
+  }
+  external_.push_back(std::move(kernel));
+  return Status::Ok();
+}
+
+MatmulSelection CpuDevice::plan_matmul(const TensorView& x, const TensorView& w, bool explain) const {
+  const int64_t m = rows(x), k = cols(x), n = rows(w);
+  const MatmulShape shape{m, n, k, w.dtype(), x.stride(0) == k * static_cast<int64_t>(sizeof(float))};
+  MatmulCaps caps = matmul_caps(w.dtype(), w.data(), n, k, m);
+  caps.external_eligible = plan_.external_matmul && external_for(shape, w.data()) >= 0;
+  return select_matmul(shape, plan_, caps, explain);
+}
+
+std::vector<MatmulKernelStats> CpuDevice::matmul_stats() {
+  std::vector<MatmulKernelStats> out;
+  for (size_t i = 0; i < kMatmulKernelCount; ++i) {
+    out.push_back({static_cast<MatmulKernelId>(i), g_mm_calls[i].load(std::memory_order_relaxed), g_mm_rows[i].load(std::memory_order_relaxed),
+                   g_mm_macs[i].load(std::memory_order_relaxed), g_mm_ns[i].load(std::memory_order_relaxed)});
+  }
+  return out;
+}
+
+std::vector<MatmulShapeStats> CpuDevice::matmul_shape_stats() {
+  std::lock_guard<std::mutex> lock(g_mm_shape_mu);
+  std::vector<MatmulShapeStats> out;
+  out.reserve(g_mm_shapes.size());
+  for (const auto& [key, v] : g_mm_shapes) {
+    out.push_back({key.id, key.weight, key.n, key.k, key.m, v.first, v.second});
+  }
+  return out;
+}
+
+void CpuDevice::reset_matmul_stats() {
+  for (size_t i = 0; i < kMatmulKernelCount; ++i) {
+    g_mm_calls[i].store(0, std::memory_order_relaxed);
+    g_mm_rows[i].store(0, std::memory_order_relaxed);
+    g_mm_macs[i].store(0, std::memory_order_relaxed);
+    g_mm_ns[i].store(0, std::memory_order_relaxed);
+  }
+  std::lock_guard<std::mutex> lock(g_mm_shape_mu);
+  g_mm_shapes.clear();
+}
+
+void CpuDevice::set_matmul_timing(bool on) { g_mm_timing.store(on, std::memory_order_relaxed); }
+bool CpuDevice::matmul_timing() { return g_mm_timing.load(std::memory_order_relaxed); }
+
 void CpuDevice::matmul(const TensorView& x, const TensorView& w, const TensorView* bias, const TensorView& y) {
   const int64_t m = rows(x), k = cols(x), n = rows(w);
   assert(cols(w) == k && cols(y) == n && rows(y) == m);
+  const DType wt = w.dtype();
+  const MatmulShape shape{m, n, k, wt, x.stride(0) == k * static_cast<int64_t>(sizeof(float))};
+  // Unsafe metadata never reaches a kernel (it was a debug-only assert).
+  if (const Status st = validate_matmul_shape(shape); !st.ok() || cols(w) != k || cols(y) != n || rows(y) != m) {
+    std::fprintf(stderr, "dynacore: invalid matmul (x %lld x %lld, w %lld x %lld, y %lld x %lld): %s\n",
+                 static_cast<long long>(m), static_cast<long long>(k), static_cast<long long>(n),
+                 static_cast<long long>(cols(w)), static_cast<long long>(rows(y)), static_cast<long long>(cols(y)),
+                 st.ok() ? "shape mismatch" : st.message().c_str());
+    std::abort();
+  }
+  MatmulCaps caps = matmul_caps(wt, w.data(), n, k, m);
+  int ext = -1;
+  if (plan_.external_matmul && !external_.empty()) {
+    ext = external_for(shape, w.data());
+    caps.external_eligible = ext >= 0;
+  }
+  const bool explain = matmul_explain_enabled();
+  const MatmulSelection sel = select_matmul(shape, plan_, caps, explain);
+  if (explain) explain_matmul_once(shape, sel);
+  const bool timing = g_mm_timing.load(std::memory_order_relaxed);
+  const int64_t t0 = timing ? now_ns() : 0;
+  run_matmul(sel, ext, x, w, bias, y);
+  record_matmul(sel.id, shape, timing ? now_ns() - t0 : -1);
+}
+
+void CpuDevice::run_matmul(const MatmulSelection& sel, int ext, const TensorView& x, const TensorView& w, const TensorView* bias,
+                           const TensorView& y) {
+  const int64_t m = rows(x), k = cols(x), n = rows(w);
   const DType wt = w.dtype();
   const int64_t w_row_bytes = dtype_row_bytes(wt, k);
   const auto* wbase = static_cast<const std::byte*>(w.data());
@@ -425,51 +603,85 @@ void CpuDevice::matmul(const TensorView& x, const TensorView& w, const TensorVie
   const DequantFn dequant = k_.dequant_for(wt);
   const auto dot = k_.dot_f32;
 
-  // Decode-shaped batches: int8 activations + integer dot against the packed
-  // weights, each weight block unpacked once for up to 4 rows (DD-053). Only
-  // where this tier accelerates it, and only as the planner allows.
-  // Rows are quantized one by one, so strided x (MoE slices) is fine and gets
-  // the same path as in matmul_many.
-  if (const Int8Kernel ik = int8_kernel(wt, m, k, w.data(), n); ik.dot != nullptr) {
-    const int64_t nb = k / kActQ8Block;
-    act_q8_.resize(static_cast<size_t>(m * nb));
-    for (int64_t r = 0; r < m; ++r) ik.quantize(row_ptr<const float>(x, r), act_q8_.data() + r * nb, k);
-    const ActBlockQ8* act = act_q8_.data();
-    // Work items: weight rows, or groups of 8 rows for the packed copy.
-    const int64_t unit = ik.packed != nullptr ? 8 : 1, items = n / unit;
-    pool_.parallel_for(static_cast<size_t>(items),
-                       grain_for(static_cast<size_t>(items), pool_.size(), unit == 1 ? 4 : 1, plan_.matmul_chunks_per_thread),
-                       [&](size_t begin, size_t end) {
-      int8_rows(ik, wbase, w_row_bytes, act, m, k, static_cast<int64_t>(begin) * unit, static_cast<int64_t>(end) * unit, y, b);
-    });
-    return;
-  }
-
-  // int16 activations (DD-076): inputs too outlier-heavy for int8 (the FFN
-  // down projection), when the plan asks for it. A Q4_K weight with an
-  // interleaved copy uses it (DD-081) up to int8_superblock_max_rows rows: it
-  // stays ahead of fp32 expand there, the row kernel only up to 4.
-  // EXPERIMENTAL (KernelPlan::int16_prefill_max_rows, off by default):
-  // prefill-sized matmuls (more rows than any decode kernel takes) on an
-  // interleaved copy with enough output rows: int16 activations in 8-row
-  // tiles instead of fp32 expand. Small or unpacked weights keep expand.
-  if (plan_.int16_prefill_max_rows > 0 && m > kPackedRowsMax && m <= plan_.int16_prefill_max_rows &&
-      n >= plan_.q4_repack_min_out && n * k >= plan_.int16_prefill_min_weights && int8_accelerated_ && k % 256 == 0 &&
-      k_.quantize_act16 != nullptr &&
-      q16_packed_enabled()) {
-    const void* pk = nullptr;
-    CpuKernels::DotQ16X8Fn tile = nullptr;
-    size_t group_bytes = 0;
-    if (wt == DType::kQ4_K && k_.dot_q16_x8_q4_K_rows8 != nullptr) {
-      pk = find_packed(w.data(), n, k);
-      tile = k_.dot_q16_x8_q4_K_rows8;
-      group_bytes = sizeof(BlockQ4_Kx8) * static_cast<size_t>(k / 256);
-    } else if (wt == DType::kQ6_K && k_.dot_q16_x8_q6_K_rows8 != nullptr && q6_packed_enabled()) {
-      pk = find_packed6(w.data(), n, k);
-      tile = k_.dot_q16_x8_q6_K_rows8;
-      group_bytes = sizeof(BlockQ6_Kx8) * static_cast<size_t>(k / 256);
+  switch (sel.id) {
+    case MatmulKernelId::kExternal: {
+      external_[static_cast<size_t>(ext)].run(x, w, bias, y);
+      return;
     }
-    if (pk != nullptr) {
+    case MatmulKernelId::kInt8PrefillX8:
+    case MatmulKernelId::kInt8SubscaledX8Rows8:
+    case MatmulKernelId::kInt8SubscaledX8:
+    case MatmulKernelId::kInt8Subscaled:
+    case MatmulKernelId::kInt8Superblock:
+    case MatmulKernelId::kInt8Per32: {
+      // Decode-shaped batches: int8 activations + integer dot against the packed
+      // weights, each weight block unpacked once for up to 4 rows (DD-053).
+      // Rows are quantized one by one, so strided x (MoE slices) is fine and gets
+      // the same path as in matmul_many.
+      const Int8Kernel ik = int8_from(sel, wt, w.data(), n, k, m);
+      const int64_t nb = k / kActQ8Block;
+      act_q8_.resize(static_cast<size_t>(m * nb));
+      for (int64_t r = 0; r < m; ++r) ik.quantize(row_ptr<const float>(x, r), act_q8_.data() + r * nb, k);
+      const ActBlockQ8* act = act_q8_.data();
+      // Work items: weight rows, or groups of 8 rows for the packed copy.
+      const int64_t unit = ik.packed != nullptr ? 8 : 1, items = n / unit;
+      pool_.parallel_for(static_cast<size_t>(items),
+                         grain_for(static_cast<size_t>(items), pool_.size(), unit == 1 ? 4 : 1, plan_.matmul_chunks_per_thread),
+                         [&](size_t begin, size_t end) {
+        int8_rows(ik, wbase, w_row_bytes, act, m, k, static_cast<int64_t>(begin) * unit, static_cast<int64_t>(end) * unit, y, b);
+      });
+      return;
+    }
+    case MatmulKernelId::kInt16SplitPrefillX8: {
+      // Split-byte int16 tiles (DynaLM Next): the same int16 codes as the
+      // int16 prefill tiles below, split q = 256 * hi + lo; bit-identical
+      // results (test_matmul_registry).
+      g_int16_prefill_calls.fetch_add(1, std::memory_order_relaxed);
+      const void* pk = find_packed(w.data(), n, k);
+      const size_t group_bytes = sizeof(BlockQ4_Kx8) * static_cast<size_t>(k / 256);
+      const int64_t nb = k / kActQ8Block;
+      act_q16_.resize(static_cast<size_t>(m * nb));
+      act_q16s_.resize(static_cast<size_t>(m * nb));
+      for (int64_t r = 0; r < m; ++r) k_.quantize_act16(row_ptr<const float>(x, r), act_q16_.data() + r * nb, k);
+      k_.split_act16(act_q16_.data(), act_q16s_.data(), m * nb);
+      const ActBlockQ16S* act = act_q16s_.data();
+      const CpuKernels::DotQ16SX8Fn tile = k_.dot_q16s_x8_q4_K_rows8;
+      const int64_t groups = n / 8;
+      pool_.parallel_for(static_cast<size_t>(groups), grain_for(static_cast<size_t>(groups), pool_.size(), 1, plan_.matmul_chunks_per_thread),
+                         [&](size_t begin, size_t end) {
+        float out[8 * kPackedRowsMax];
+        const ActBlockQ16S* xr[kPackedRowsMax];
+        for (size_t g = begin; g < end; ++g) {
+          for (int64_t r0 = 0; r0 < m; r0 += kPackedRowsMax) {
+            const int mm = static_cast<int>(std::min<int64_t>(kPackedRowsMax, m - r0));
+            for (int t = 0; t < mm; ++t) xr[t] = act + (r0 + t) * nb;
+            tile(static_cast<const std::byte*>(pk) + g * group_bytes, xr, mm, k, out);
+            for (int t = 0; t < mm; ++t) {
+              float* yr = row_ptr<float>(y, r0 + t) + 8 * static_cast<int64_t>(g);
+              for (int i = 0; i < 8; ++i) yr[i] = out[8 * t + i] + (b ? b[8 * g + i] : 0.0f);
+            }
+          }
+        }
+      });
+      return;
+    }
+    case MatmulKernelId::kInt16PrefillX8: {
+      // EXPERIMENTAL (KernelPlan::int16_prefill_max_rows, off by default):
+      // prefill-sized matmuls (more rows than any decode kernel takes) on an
+      // interleaved copy with enough output rows: int16 activations in 8-row
+      // tiles instead of fp32 expand. Small or unpacked weights keep expand.
+      const void* pk = nullptr;
+      CpuKernels::DotQ16X8Fn tile = nullptr;
+      size_t group_bytes = 0;
+      if (wt == DType::kQ4_K) {
+        pk = find_packed(w.data(), n, k);
+        tile = k_.dot_q16_x8_q4_K_rows8;
+        group_bytes = sizeof(BlockQ4_Kx8) * static_cast<size_t>(k / 256);
+      } else {
+        pk = find_packed6(w.data(), n, k);
+        tile = k_.dot_q16_x8_q6_K_rows8;
+        group_bytes = sizeof(BlockQ6_Kx8) * static_cast<size_t>(k / 256);
+      }
       g_int16_prefill_calls.fetch_add(1, std::memory_order_relaxed);
       const int64_t nb = k / kActQ8Block;
       act_q16_.resize(static_cast<size_t>(m * nb));
@@ -494,48 +706,48 @@ void CpuDevice::matmul(const TensorView& x, const TensorView& w, const TensorVie
       });
       return;
     }
-  }
-  const bool try16 = plan_.int16_decode_max_rows > 0 && plan_.q4_repack_min_rows > 0 &&
-                     m >= plan_.q4_repack_min_rows && q16_packed_enabled();
-  const void* packed16 = nullptr;
-  CpuKernels::DotQ16X8Fn dot16x8 = nullptr;
-  size_t group16_bytes = 0;
-  if (try16 && wt == DType::kQ4_K && k_.dot_q16_x8_q4_K != nullptr) {
-    packed16 = find_packed(w.data(), n, k);
-    dot16x8 = k_.dot_q16_x8_q4_K;
-    group16_bytes = sizeof(BlockQ4_Kx8) * static_cast<size_t>(k / 256);
-  } else if (try16 && wt == DType::kQ6_K && k_.dot_q16_x8_q6_K != nullptr && q6_packed_enabled()) {
-    packed16 = find_packed6(w.data(), n, k);
-    dot16x8 = k_.dot_q16_x8_q6_K;
-    group16_bytes = sizeof(BlockQ6_Kx8) * static_cast<size_t>(k / 256);
-  }
-  if (packed16 != nullptr && m <= std::max(plan_.int16_decode_max_rows, plan_.int8_superblock_max_rows) &&
-      int8_accelerated_ && k % 256 == 0 && k_.quantize_act16 != nullptr) {
-    const int64_t nb = k / kActQ8Block;
-    act_q16_.resize(static_cast<size_t>(m * nb));
-    for (int64_t r = 0; r < m; ++r) k_.quantize_act16(row_ptr<const float>(x, r), act_q16_.data() + r * nb, k);
-    const ActBlockQ16* act = act_q16_.data();
-    const int64_t groups = n / 8;
-    pool_.parallel_for(static_cast<size_t>(groups), grain_for(static_cast<size_t>(groups), pool_.size(), 1, plan_.matmul_chunks_per_thread),
-                       [&](size_t begin, size_t end) {
-      float out[8 * kDotRowsMax];
-      const ActBlockQ16* xr[kDotRowsMax];
-      for (size_t g = begin; g < end; ++g) {
-        for (int64_t r0 = 0; r0 < m; r0 += kDotRowsMax) {
-          const int mm = static_cast<int>(std::min<int64_t>(kDotRowsMax, m - r0));
-          for (int t = 0; t < mm; ++t) xr[t] = act + (r0 + t) * nb;
-          dot16x8(static_cast<const std::byte*>(packed16) + g * group16_bytes, xr, mm, k, out);
-          for (int t = 0; t < mm; ++t) {
-            float* yr = row_ptr<float>(y, r0 + t) + 8 * static_cast<int64_t>(g);
-            for (int i = 0; i < 8; ++i) yr[i] = out[8 * t + i] + (b ? b[8 * g + i] : 0.0f);
+    case MatmulKernelId::kInt16X8: {
+      // int16 activations (DD-076): inputs too outlier-heavy for int8 (the FFN
+      // down projection), when the plan asks for it. A Q4_K weight with an
+      // interleaved copy uses it (DD-081) up to int8_superblock_max_rows rows: it
+      // stays ahead of fp32 expand there, the row kernel only up to 4.
+      const void* packed16 = nullptr;
+      CpuKernels::DotQ16X8Fn dot16x8 = nullptr;
+      size_t group16_bytes = 0;
+      if (wt == DType::kQ4_K) {
+        packed16 = find_packed(w.data(), n, k);
+        dot16x8 = k_.dot_q16_x8_q4_K;
+        group16_bytes = sizeof(BlockQ4_Kx8) * static_cast<size_t>(k / 256);
+      } else {
+        packed16 = find_packed6(w.data(), n, k);
+        dot16x8 = k_.dot_q16_x8_q6_K;
+        group16_bytes = sizeof(BlockQ6_Kx8) * static_cast<size_t>(k / 256);
+      }
+      const int64_t nb = k / kActQ8Block;
+      act_q16_.resize(static_cast<size_t>(m * nb));
+      for (int64_t r = 0; r < m; ++r) k_.quantize_act16(row_ptr<const float>(x, r), act_q16_.data() + r * nb, k);
+      const ActBlockQ16* act = act_q16_.data();
+      const int64_t groups = n / 8;
+      pool_.parallel_for(static_cast<size_t>(groups), grain_for(static_cast<size_t>(groups), pool_.size(), 1, plan_.matmul_chunks_per_thread),
+                         [&](size_t begin, size_t end) {
+        float out[8 * kDotRowsMax];
+        const ActBlockQ16* xr[kDotRowsMax];
+        for (size_t g = begin; g < end; ++g) {
+          for (int64_t r0 = 0; r0 < m; r0 += kDotRowsMax) {
+            const int mm = static_cast<int>(std::min<int64_t>(kDotRowsMax, m - r0));
+            for (int t = 0; t < mm; ++t) xr[t] = act + (r0 + t) * nb;
+            dot16x8(static_cast<const std::byte*>(packed16) + g * group16_bytes, xr, mm, k, out);
+            for (int t = 0; t < mm; ++t) {
+              float* yr = row_ptr<float>(y, r0 + t) + 8 * static_cast<int64_t>(g);
+              for (int i = 0; i < 8; ++i) yr[i] = out[8 * t + i] + (b ? b[8 * g + i] : 0.0f);
+            }
           }
         }
-      }
-    });
-    return;
-  }
-  if (m <= plan_.int16_decode_max_rows && int8_accelerated_ && k % kActQ8Block == 0 && k_.quantize_act16 != nullptr) {
-    if (const DotQ16RowsFn dot16 = k_.dot_q16_rows_for(wt)) {
+      });
+      return;
+    }
+    case MatmulKernelId::kInt16Rows: {
+      const DotQ16RowsFn dot16 = k_.dot_q16_rows_for(wt);
       const int64_t nb = k / kActQ8Block;
       act_q16_.resize(static_cast<size_t>(m * nb));
       for (int64_t r = 0; r < m; ++r) k_.quantize_act16(row_ptr<const float>(x, r), act_q16_.data() + r * nb, k);
@@ -557,55 +769,54 @@ void CpuDevice::matmul(const TensorView& x, const TensorView& w, const TensorVie
       });
       return;
     }
+    case MatmulKernelId::kF32ExpandGemm: {
+      // Prefill path: panels of kPanel weight rows are expanded to fp32 once and
+      // multiplied against all activation rows by the register-blocked kernel.
+      constexpr int64_t kPanel = 4;
+      const size_t panels = static_cast<size_t>((n + kPanel - 1) / kPanel);
+      const int64_t y_stride = y.stride(0) / static_cast<int64_t>(sizeof(float));
+      const auto* xp = x.data_as<const float>();
+      auto* yp = y.data_as<float>();
+      // K-blocking (gemm_k_block > 0): slices of gemm_k_block columns, so a slice of
+      // all activation rows stays cache-resident while a thread sweeps its
+      // panels; partial sums accumulate into y. Slices start on multiples of
+      // 256, so every block format dequantizes slice by slice.
+      const int64_t kc = (plan_.gemm_k_block > 0 && plan_.gemm_k_block < k) ? plan_.gemm_k_block : k;
+      pool_.parallel_for(panels, grain_for(panels, pool_.size(), 1, plan_.matmul_chunks_per_thread), [&](size_t begin, size_t end) {
+        thread_local std::vector<float> panel;
+        panel.resize(static_cast<size_t>(kPanel * kc));
+        for (int64_t k0 = 0; k0 < k; k0 += kc) {
+          const int64_t len = std::min(kc, k - k0);
+          for (size_t pi = begin; pi < end; ++pi) {
+            const int64_t j0 = static_cast<int64_t>(pi) * kPanel;
+            const int nr = static_cast<int>(std::min<int64_t>(kPanel, n - j0));
+            for (int r = 0; r < nr; ++r) {
+              dequant(wbase + (j0 + r) * w_row_bytes + dtype_row_bytes(wt, k0), panel.data() + r * len, len);
+            }
+            k_.gemm_panel(panel.data(), nr, xp + k0, k, m, len, yp + j0, y_stride, /*accumulate=*/k0 > 0);
+          }
+        }
+        if (b) {
+          for (size_t pi = begin; pi < end; ++pi) {
+            const int64_t j0 = static_cast<int64_t>(pi) * kPanel;
+            const int nr = static_cast<int>(std::min<int64_t>(kPanel, n - j0));
+            for (int64_t i = 0; i < m; ++i) {
+              for (int r = 0; r < nr; ++r) yp[i * y_stride + j0 + r] += b[j0 + r];
+            }
+          }
+        }
+      });
+      return;
+    }
+    case MatmulKernelId::kF32RowDot:
+    case MatmulKernelId::kCount:
+      break;
   }
 
   // Few activation rows (decode): fused dequantize-dot straight from the
-  // packed weights. Many rows (prefill): expand each weight row once and
+  // packed weights. Many rows with strided x: expand each weight row once and
   // reuse it for every activation row.
   const bool expand = wt != DType::kF32 && m >= plan_.expand_min_rows;
-
-  // Prefill path: panels of kPanel weight rows are expanded to fp32 once and
-  // multiplied against all activation rows by the register-blocked kernel.
-  constexpr int64_t kPanel = 4;
-  const bool x_dense = x.stride(0) == k * static_cast<int64_t>(sizeof(float));
-  const bool f32_panel = wt == DType::kF32 && m >= plan_.expand_min_rows && x_dense;
-  if ((expand || f32_panel) && x_dense) {
-    const size_t panels = static_cast<size_t>((n + kPanel - 1) / kPanel);
-    const int64_t y_stride = y.stride(0) / static_cast<int64_t>(sizeof(float));
-    const auto* xp = x.data_as<const float>();
-    auto* yp = y.data_as<float>();
-    // K-blocking (gemm_k_block > 0): slices of gemm_k_block columns, so a slice of
-    // all activation rows stays cache-resident while a thread sweeps its
-    // panels; partial sums accumulate into y. Slices start on multiples of
-    // 256, so every block format dequantizes slice by slice.
-    const int64_t kc = (plan_.gemm_k_block > 0 && plan_.gemm_k_block < k) ? plan_.gemm_k_block : k;
-    pool_.parallel_for(panels, grain_for(panels, pool_.size(), 1, plan_.matmul_chunks_per_thread), [&](size_t begin, size_t end) {
-      thread_local std::vector<float> panel;
-      panel.resize(static_cast<size_t>(kPanel * kc));
-      for (int64_t k0 = 0; k0 < k; k0 += kc) {
-        const int64_t len = std::min(kc, k - k0);
-        for (size_t pi = begin; pi < end; ++pi) {
-          const int64_t j0 = static_cast<int64_t>(pi) * kPanel;
-          const int nr = static_cast<int>(std::min<int64_t>(kPanel, n - j0));
-          for (int r = 0; r < nr; ++r) {
-            dequant(wbase + (j0 + r) * w_row_bytes + dtype_row_bytes(wt, k0), panel.data() + r * len, len);
-          }
-          k_.gemm_panel(panel.data(), nr, xp + k0, k, m, len, yp + j0, y_stride, /*accumulate=*/k0 > 0);
-        }
-      }
-      if (b) {
-        for (size_t pi = begin; pi < end; ++pi) {
-          const int64_t j0 = static_cast<int64_t>(pi) * kPanel;
-          const int nr = static_cast<int>(std::min<int64_t>(kPanel, n - j0));
-          for (int64_t i = 0; i < m; ++i) {
-            for (int r = 0; r < nr; ++r) yp[i * y_stride + j0 + r] += b[j0 + r];
-          }
-        }
-      }
-    });
-    return;
-  }
-
   pool_.parallel_for(static_cast<size_t>(n), grain_for(static_cast<size_t>(n), pool_.size(), 4, plan_.matmul_chunks_per_thread),
                      [&](size_t begin, size_t end) {
     thread_local std::vector<float> wrow;
@@ -1001,7 +1212,10 @@ void CpuDevice::act_mul(Activation act, const TensorView& gate, const TensorView
 void CpuDevice::matmul_gated(Activation act, const TensorView& x, const TensorView& w_gate, const TensorView& w_up,
                              const TensorView& out, const TensorView& gate_scratch, const TensorView& up_scratch) {
   const int64_t m = rows(x), k = cols(x), n = rows(w_gate);
-  const Int8Kernel ig = int8_kernel(w_gate.dtype(), m, k, w_gate.data(), n), iu = int8_kernel(w_up.dtype(), m, k, w_up.data(), rows(w_up));
+  const MatmulShape sg{m, n, k, w_gate.dtype(), true}, su{m, rows(w_up), k, w_up.dtype(), true};
+  const MatmulSelection selg = select_matmul_int8(sg, plan_, matmul_caps(sg.weight, w_gate.data(), n, k, m));
+  const MatmulSelection selu = select_matmul_int8(su, plan_, matmul_caps(su.weight, w_up.data(), su.n, k, m));
+  const Int8Kernel ig = int8_from(selg, sg.weight, w_gate.data(), n, k, m), iu = int8_from(selu, su.weight, w_up.data(), su.n, k, m);
   const DotQ8RowsFn dot_gate = ig.dot, dot_up = iu.dot;
   // Fused only where both projections take the int8 decode path (DD-053) with
   // one activation format; otherwise the unfused sequence.
@@ -1009,6 +1223,8 @@ void CpuDevice::matmul_gated(Activation act, const TensorView& x, const TensorVi
     Device::matmul_gated(act, x, w_gate, w_up, out, gate_scratch, up_scratch);
     return;
   }
+  record_matmul(selg.id, sg, -1);
+  record_matmul(selu.id, su, -1);
   const int64_t nb = k / kActQ8Block;
   act_q8_.resize(static_cast<size_t>(m * nb));
   for (int64_t r = 0; r < m; ++r) ig.quantize(row_ptr<const float>(x, r), act_q8_.data() + r * nb, k);

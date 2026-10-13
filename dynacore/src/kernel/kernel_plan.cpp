@@ -1,9 +1,11 @@
 #include "dynacore/kernel/kernel_plan.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 
 #include "dynacore/hardware/cpu_info.h"
+#include "dynacore/kernel/matmul_registry.h"
 
 namespace dynacore {
 
@@ -44,6 +46,19 @@ const KernelPlan& KernelPlan::defaults() {
     if (const char* p8 = std::getenv("DYNACORE_PACKED_8ROWS")) p.packed_int8_8rows = std::strtol(p8, nullptr, 10) != 0;
     if (const char* ip = std::getenv("DYNACORE_INT16_PREFILL_ROWS")) {
       p.int16_prefill_max_rows = static_cast<int32_t>(std::max<long>(0, std::strtol(ip, nullptr, 10)));
+    }
+    if (const char* sp = std::getenv("DYNACORE_INT16_PREFILL_SPLIT")) p.int16_prefill_split = std::strtol(sp, nullptr, 10) != 0;
+    if (const char* dw = std::getenv("DYNACORE_DECODE_WIDE_ROWS")) {
+      p.decode_wide_max_rows = static_cast<int32_t>(std::clamp<long>(std::strtol(dw, nullptr, 10), 0, 16));  // tested up to 16
+    }
+    if (const char* w8 = std::getenv("DYNACORE_WIDE_ROWS8")) p.wide_rows8 = std::strtol(w8, nullptr, 10) != 0;
+    if (const char* md = std::getenv("DYNACORE_MATMUL_DISABLE")) {
+      uint32_t mask = 0;
+      if (const Status st = parse_matmul_kernel_list(md, mask); st.ok()) {
+        p.matmul_disabled = mask;
+      } else {
+        std::fprintf(stderr, "dynacore: ignoring DYNACORE_MATMUL_DISABLE: %s\n", st.message().c_str());
+      }
     }
     if (const char* d = std::getenv("DYNACORE_INT16_FFN_DOWN")) p.int16_ffn_down = std::strtol(d, nullptr, 10) != 0;
     if (const char* g = std::getenv("DYNACORE_ATTN_GROUPED")) p.grouped_attention = std::strtol(g, nullptr, 10) != 0;

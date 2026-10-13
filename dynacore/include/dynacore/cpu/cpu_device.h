@@ -3,18 +3,30 @@
 // CPU backend: ops over TensorViews, with the innermost primitives taken
 // from a CpuKernels table selected once for the running CPU (generic / AVX2).
 
+#include <functional>
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
 #include "dynacore/device/device.h"
 #include "dynacore/cpu/cpu_kernels.h"
+#include "dynacore/kernel/matmul_registry.h"
 #include "dynacore/quantization/repack.h"
 #include "dynacore/hardware/isa.h"
 #include "dynacore/execution/thread_pool.h"
 
 namespace dynacore {
 
+// A matmul kernel supplied at run time (DynaKernel extension point,
+// matmul_registry.h): consulted before the built-in kernels only while
+// KernelPlan::external_matmul is set. `eligible` must not touch tensor data;
+// `run` computes y = x . w^T (+ bias) for an eligible call.
+struct ExternalMatmulKernel {
+  std::string name;
+  std::function<bool(const MatmulShape& shape, const void* weight)> eligible;
+  std::function<void(const TensorView& x, const TensorView& w, const TensorView* bias, const TensorView& y)> run;
+};
 
 class CpuDevice final : public Device {
  public:
@@ -39,6 +51,25 @@ class CpuDevice final : public Device {
   // Matmuls run by the experimental int16 prefill path (KernelPlan::int16_prefill_max_rows).
   static uint64_t experimental_int16_prefill_calls();
   const KernelPlan& kernel_plan() const { return plan_; }
+
+  // --- matmul registry (matmul_registry.h) ---
+  // The kernel CpuDevice::matmul would run for x . w^T under the current plan
+  // (no execution; explain = list the passed-over kernels).
+  MatmulSelection plan_matmul(const TensorView& x, const TensorView& w, bool explain = false) const;
+  // Process-wide per-kernel counters: calls, rows (sum of M), MACs (M*N*K);
+  // ns while timing is on. One entry per MatmulKernelId.
+  static std::vector<MatmulKernelStats> matmul_stats();
+  // Per (kernel, weight type, N, K, M) calls and ns, recorded while timing is on.
+  static std::vector<MatmulShapeStats> matmul_shape_stats();
+  static void reset_matmul_stats();
+  // Wall-clock timing per matmul (two clock reads per call). Off by default;
+  // DYNACORE_MATMUL_TIMING=1 turns it on at start-up.
+  static void set_matmul_timing(bool on);
+  static bool matmul_timing();
+  // Registers an external kernel (before serving: not synchronised with
+  // matmul). Fails on an empty or duplicate name or missing functions.
+  Status register_external_matmul(ExternalMatmulKernel kernel);
+  size_t external_matmul_count() const { return external_.size(); }
 
   void embedding(const TensorView& table, std::span<const int32_t> ids, const TensorView& out) override;
   void matmul(const TensorView& x, const TensorView& w, const TensorView* bias, const TensorView& y) override;
@@ -75,6 +106,8 @@ class CpuDevice final : public Device {
   // int8 activations of the current decode matmul (scheduler thread only).
   std::vector<ActBlockQ8> act_q8_;
   std::vector<ActBlockQ16> act_q16_;  // int16 activations (DD-076)
+  std::vector<ActBlockQ16S> act_q16s_;  // split-byte int16 activations (int16_split_prefill_x8)
+  std::vector<ExternalMatmulKernel> external_;
   // True when this tier has SIMD integer-dot kernels; the generic tier's are
   // reference implementations, slower than its fused fp32 path.
   bool int8_accelerated_ = false;  // split-K attention partials (scheduler thread only)
@@ -91,9 +124,20 @@ class CpuDevice final : public Device {
     ActFormat format = ActFormat::kPer32;
     // Interleaved copy of this weight (DD-078), when the plan allows it.
     const BlockQ4_Kx8* packed = nullptr;
+    // 8-row tiles on the interleaved copy (int8_subscaled_x8_rows8).
+    bool rows8 = false;
   };
   // `w` identifies the weight (its data pointer) for the packed-copy lookup.
   Int8Kernel int8_kernel(DType wt, int64_t m, int64_t k, const void* w = nullptr, int64_t n = 0) const;
+  // The int8 kernel a selection names (dot == nullptr when it is not int8).
+  Int8Kernel int8_from(const MatmulSelection& sel, DType wt, const void* w, int64_t n, int64_t k, int64_t m) const;
+  // What this tier offers for one call (registry input).
+  MatmulCaps matmul_caps(DType wt, const void* w, int64_t n, int64_t k, int64_t m) const;
+  // Index of the first eligible external kernel, or -1.
+  int external_for(const MatmulShape& s, const void* w) const;
+  // Executes the selected kernel (ext: external kernel index for kExternal).
+  void run_matmul(const MatmulSelection& sel, int ext, const TensorView& x, const TensorView& w, const TensorView* bias,
+                  const TensorView& y);
   // y[0..m)[n0..n1) = x . w^T for int8 activations `act` (m rows, k / 32
   // blocks each); with ik.packed, n0 and n1 must be multiples of 8.
   void int8_rows(const Int8Kernel& ik, const std::byte* wbase, int64_t w_row_bytes, const ActBlockQ8* act,

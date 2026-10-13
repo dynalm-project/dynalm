@@ -71,6 +71,17 @@ struct ActBlockQ16 {
   int16_t q[32];
 };
 static_assert(sizeof(ActBlockQ16) == 72);
+// int16 activations split into bytes (DynaLM Next, split-byte int16 prefill):
+// q = 256 * hi + lo exactly for every value of an ActBlockQ16 (hi signed, lo
+// unsigned), d and sum unchanged. Lets vpdpbusd compute the exact int16 dot
+// against 4-bit weight codes, which are valid as both u8 and s8 operands.
+struct ActBlockQ16S {
+  float d;
+  int32_t sum;
+  int8_t hi[32];
+  uint8_t lo[32];
+};
+static_assert(sizeof(ActBlockQ16S) == 72);
 using QuantizeAct16Fn = void (*)(const float* x, ActBlockQ16* out, int64_t n);
 using DotQ16RowsFn = void (*)(const void* w, const ActBlockQ16* const* x, int m, int64_t n, float* out);
 
@@ -152,6 +163,15 @@ struct CpuKernels {
   // results are identical). Used by KernelPlan::int16_prefill_max_rows.
   DotQ16X8Fn dot_q16_x8_q4_K_rows8 = nullptr;
   DotQ16X8Fn dot_q16_x8_q6_K_rows8 = nullptr;
+  // Split-byte int16 tiles (DynaLM Next): out[r * 8 + i] for the 8 rows of a
+  // BlockQ4_Kx8 group and r < m (1 <= m <= kPackedRowsMax), activations from
+  // split_act16. The integer sub-block dots equal those of
+  // dot_q16_x8_q4_K_rows8 and the float steps are the same, so results are
+  // bit-identical to it. Null where the tier has no kernel (needs AVX-VNNI).
+  using DotQ16SX8Fn = void (*)(const void* w, const ActBlockQ16S* const* x, int m, int64_t n, float* out);
+  DotQ16SX8Fn dot_q16s_x8_q4_K_rows8 = nullptr;
+  // in[0..nblocks) -> out: hi = q >> 8, lo = q & 0xFF, d and sum copied.
+  void (*split_act16)(const ActBlockQ16* in, ActBlockQ16S* out, int64_t nblocks) = nullptr;
   // int16 activations (DD-076); null where no tier has a kernel.
   QuantizeAct16Fn quantize_act16 = nullptr;
   std::array<DotQ16RowsFn, static_cast<size_t>(DType::kCount)> dot_q16_rows{};
@@ -175,6 +195,10 @@ bool register_avxvnni_kernels(CpuKernels& k);
 // AVX-VNNI (vpdpwssd) versions of the 8-row int16 x8 tiles, bit-identical to
 // the AVX2 ones; false when the tier is not compiled.
 bool register_avxvnni_int16_tiles(CpuKernels& k);
+// AVX-VNNI split-byte int16 tiles (dot_q16s_x8_q4_K_rows8); false when the
+// tier is not compiled. Registration only makes the kernel available; the
+// matmul registry decides when it runs.
+bool register_avxvnni_int16_split(CpuKernels& k);
 // ARM64 NEON tier (Apple Silicon, Graviton, Windows on ARM); false when not compiled in.
 bool register_neon_kernels(CpuKernels& k);
 

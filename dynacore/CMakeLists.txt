@@ -28,6 +28,7 @@ add_library(dynacore STATIC
   src/ir/text.cpp
   src/ir/verifier.cpp
   src/kernel/kernel_plan.cpp
+  src/kernel/matmul_registry.cpp
   src/lang/lang.cpp
   src/memory/host_memory.cpp
   src/memory/mapped_file.cpp
@@ -72,6 +73,9 @@ if(ENABLE_BENCHMARKS)
     target_link_libraries(bench_${_b} PRIVATE dynacore)
     target_include_directories(bench_${_b} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks)
   endforeach()
+  # Single-thread FFN prefill kernel throughput on a pinned CPU (DynaLM Next).
+  add_executable(bench_ffn_kernels benchmarks/bench_ffn_kernels.cpp)
+  target_link_libraries(bench_ffn_kernels PRIVATE dynacore)
   # DynaKernel IR v0 (docs/dynakernel.md): no model files needed.
   add_executable(test_dynakernel tests/test_dynakernel.cpp)
   target_link_libraries(test_dynakernel PRIVATE dynacore)
@@ -85,6 +89,9 @@ if(ENABLE_BENCHMARKS)
   target_link_libraries(test_int16_prefill PRIVATE dynacore)
   add_executable(test_thread_pool tests/test_thread_pool.cpp)
   target_link_libraries(test_thread_pool PRIVATE dynacore)
+  # CPU matmul kernel registry (DynaLM Next): selection, execution, diagnostics.
+  add_executable(test_matmul_registry tests/test_matmul_registry.cpp)
+  target_link_libraries(test_matmul_registry PRIVATE dynacore)
   # Generated C++ backend (docs/dynakernel.md): dkgen writes each unit into
   # the build tree at build time; only tests and benchmarks link them. The
   # AVX2 variant gets AVX2 flags on its generated file only (DD-003).

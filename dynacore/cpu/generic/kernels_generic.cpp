@@ -327,6 +327,19 @@ void dequant_ref(const void* w, float* out, int64_t n) {
   dequantize_row(T, w, out, n);
 }
 
+// Split-byte int16 activations (ActBlockQ16S): q = 256 * hi + lo exactly.
+void split_act16(const ActBlockQ16* in, ActBlockQ16S* out, int64_t nblocks) {
+  for (int64_t b = 0; b < nblocks; ++b) {
+    out[b].d = in[b].d;
+    out[b].sum = in[b].sum;
+    for (int t = 0; t < 32; ++t) {
+      const int q = in[b].q[t];
+      out[b].hi[t] = static_cast<int8_t>(q >> 8);  // arithmetic shift: floor(q / 256)
+      out[b].lo[t] = static_cast<uint8_t>(q & 0xFF);
+    }
+  }
+}
+
 }  // namespace
 
 void register_generic_kernels(CpuKernels& k) {
@@ -336,6 +349,7 @@ void register_generic_kernels(CpuKernels& k) {
   k.dot_f16_f32 = dot_f16_f32;
   k.axpy_f16 = axpy_f16;
   k.gemm_panel = gemm_panel;
+  k.split_act16 = split_act16;
   k.attn_scores_f16 = attn_scores_f16;
   k.attn_accum_f16 = attn_accum_f16;
   k.attn_scores_f32 = attn_scores_f32;
@@ -384,6 +398,9 @@ CpuKernels make_cpu_kernels(CpuIsa isa) {
     // the AVX2 tiles (identical results).
     const char* iv = std::getenv("DYNACORE_INT16_PREFILL_VNNI");
     if (cpu_info().features.avx_vnni && !(iv != nullptr && iv[0] == '0')) register_avxvnni_int16_tiles(k);
+    // Split-byte int16 tiles: available wherever the CPU has AVX-VNNI; the
+    // matmul registry runs them only where its plan enables them.
+    if (cpu_info().features.avx_vnni) register_avxvnni_int16_split(k);
   }
   if (isa == CpuIsa::kNeon) register_neon_kernels(k);
   return k;
