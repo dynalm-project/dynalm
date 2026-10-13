@@ -1,7 +1,9 @@
 # Build DynaLM on every supported CPU platform.
 #
-#   build      : configure, build, then CPU feature validation (doctor runs the
-#                DynaCore kernel self-test).
+#   build      : configure, build, CPU feature validation (doctor runs the
+#                DynaCore kernel self-test), then the model-free test programs
+#                and tool tests (tools/ci/run_tests.sh).
+#   sanitizers : the same tests under ASan+UBSan and TSan (Linux, clang).
 #   package    : release-style static build -> archive -> fresh install through
 #                scripts/install.sh / install.ps1 -> checks on the INSTALLED
 #                binaries (tools/ci/package.sh).
@@ -9,7 +11,7 @@ name: ci
 
 on:
   push:
-    branches: [main, master, "ci/**"]
+    branches: [main, master, "ci/**", "release/**"]
   pull_request:
   workflow_dispatch:
 
@@ -28,6 +30,8 @@ jobs:
       # on it fails to compile.
       - run: cmake --preset core-only
       - run: cmake --build --preset core-only
+      - name: Model-free DynaCore tests
+        run: bash tools/ci/run_tests.sh build/core-only
 
   build:
     name: ${{ matrix.name }}
@@ -69,6 +73,9 @@ jobs:
           "$exe" doctor
           PY="$(command -v python3 || command -v python)"
           "$PY" tools/ci/check_isa.py "$exe"
+      - name: Model-free tests
+        shell: bash
+        run: bash tools/ci/run_tests.sh build/${{ matrix.preset }}
 
   sanitizers:
     name: linux (${{ matrix.preset }})
@@ -89,6 +96,12 @@ jobs:
         run: |
           build/${{ matrix.preset }}/bin/dynalm --version
           build/${{ matrix.preset }}/bin/dynalm doctor
+      - name: Model-free tests (instrumented)
+        env:
+          ASAN_OPTIONS: halt_on_error=1:detect_leaks=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+          TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
+        run: bash tools/ci/run_tests.sh build/${{ matrix.preset }}
 
   package:
     name: package + fresh install (${{ matrix.name }})
