@@ -174,6 +174,8 @@ class Engine {
   // effect at the next scheduler step; the counters keep accumulating.
   void set_profiling(bool on) { want_profiling_.store(on, std::memory_order_relaxed); }
   // Scheduler trace (EngineOptions::scheduler.trace); thread-safe, hands over and clears.
+  // The scheduler configuration in effect (after policy overrides and clamping).
+  const SchedulerConfig& scheduler_config() const { return scheduler_->config(); }
   std::vector<StepTrace> take_step_trace() { return scheduler_->take_step_trace(); }
   std::vector<RequestTrace> take_request_trace() { return scheduler_->take_request_trace(); }
 

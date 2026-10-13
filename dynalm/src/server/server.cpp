@@ -359,6 +359,22 @@ std::string Server::Impl::render_metrics() const {
                dynacore::KernelPlan::defaults().int16_prefill_max_rows, out);
   counter("dynacore_int16_prefill_matmuls_total", "matmuls that used the experimental int16 prefill path",
           dynacore::CpuDevice::experimental_int16_prefill_calls());
+  // Matmul kernel registry: which kernel ran how often (calls, rows).
+  {
+    const std::vector<dynacore::MatmulKernelStats> mm = dynacore::CpuDevice::matmul_stats();
+    out += "# HELP dynacore_matmul_calls_total matmuls per selected kernel (dynacore matmul registry)\n"
+           "# TYPE dynacore_matmul_calls_total counter\n";
+    for (const dynacore::MatmulKernelStats& s : mm) {
+      out += "dynacore_matmul_calls_total{kernel=\"" + std::string(dynacore::matmul_kernel_name(s.id)) + "\"} " +
+             std::to_string(s.calls) + "\n";
+    }
+    out += "# HELP dynacore_matmul_rows_total activation rows per selected kernel\n"
+           "# TYPE dynacore_matmul_rows_total counter\n";
+    for (const dynacore::MatmulKernelStats& s : mm) {
+      out += "dynacore_matmul_rows_total{kernel=\"" + std::string(dynacore::matmul_kernel_name(s.id)) + "\"} " +
+             std::to_string(s.rows) + "\n";
+    }
+  }
   // Experimental solo-prefill chunking (SchedulerConfig::solo_prefill_chunk, --solo-prefill-chunk).
   render_gauge("dynalm_scheduler_solo_prefill_chunk", "Prefill chunk in steps without decode rows (--solo-prefill-chunk; 0 = off)",
                st.scheduler.solo_prefill_chunk, out);

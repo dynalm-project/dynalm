@@ -33,3 +33,6 @@ engine_add_benchmark(test_loadgen_openloop test_loadgen_openloop.cpp)
 # Scheduler test for the experimental prefill order (srpt) and the scheduler trace
 # (test_prefill_priority <model.gguf> [threads]).
 engine_add_benchmark(test_prefill_priority test_prefill_priority.cpp)
+# Model-free planner test: the wide-decode switch applies only to decode-only steps
+# of <= DYNACORE_DECODE_WIDE_ROWS rows (test_batch_planner).
+engine_add_benchmark(test_batch_planner test_batch_planner.cpp)

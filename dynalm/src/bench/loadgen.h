@@ -125,6 +125,13 @@ struct Diagnostics {
   double sample_ms = 0, emit_ms = 0, prefix_insert_ms = 0, tokenize_ms = 0;
   double queue_wait_mean_ms = 0;
   std::vector<std::pair<std::string, double>> op_ms;  // per forward op (profiling)
+  // Matmul kernels that ran during the point (dynacore matmul registry):
+  // name, calls, rows, MACs, ms (ms < 0 unless DYNACORE_MATMUL_TIMING=1).
+  struct MatmulKernelUse {
+    std::string name;
+    double calls = 0, rows = 0, macs = 0, ms = -1;
+  };
+  std::vector<MatmulKernelUse> matmul_kernels;
   double pool_regions = -1, pool_region_ms = -1, pool_tail_wait_ms = -1, pool_sleeps = -1;
   // Per-thread busy time / region time over the point (caller = thread 0).
   std::vector<double> pool_thread_util;

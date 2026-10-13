@@ -14,6 +14,7 @@
 
 #include "api/json.h"
 #include "dynacore/base/timer.h"
+#include "dynacore/cpu/cpu_device.h"
 #include "dynacore/hardware/cpu_info.h"
 #include "dynacore/hardware/process_stats.h"
 #include "dynacore/tensor/dtype.h"
@@ -273,6 +274,7 @@ PointResult run_point(Target& target, const Tokenizer& tokenizer, const PointCon
   }
 
   const EngineStats before = engine ? settled_stats(*engine) : EngineStats{};
+  const std::vector<dynacore::MatmulKernelStats> mm_before = dynacore::CpuDevice::matmul_stats();
   if (engine) {  // drop the warm-up's trace (empty unless the scheduler trace is on)
     (void)engine->take_step_trace();
     (void)engine->take_request_trace();
@@ -444,6 +446,19 @@ PointResult run_point(Target& target, const Tokenizer& tokenizer, const PointCon
       mean_mhz /= static_cast<double>(mhz.size());
     }
     out.diag = diagnose(*engine, before, after, perf, mean_mhz, out.wall_s, cfg, ctx);
+    const std::vector<dynacore::MatmulKernelStats> mm_after = dynacore::CpuDevice::matmul_stats();
+    const bool timed = dynacore::CpuDevice::matmul_timing();
+    for (size_t i = 0; i < mm_after.size() && i < mm_before.size(); ++i) {
+      const uint64_t calls = mm_after[i].calls - mm_before[i].calls;
+      if (calls == 0) continue;
+      Diagnostics::MatmulKernelUse u;
+      u.name = std::string(dynacore::matmul_kernel_name(mm_after[i].id));
+      u.calls = static_cast<double>(calls);
+      u.rows = static_cast<double>(mm_after[i].rows - mm_before[i].rows);
+      u.macs = static_cast<double>(mm_after[i].macs - mm_before[i].macs);
+      u.ms = timed ? static_cast<double>(mm_after[i].ns - mm_before[i].ns) * 1e-6 : -1.0;
+      out.diag.matmul_kernels.push_back(std::move(u));
+    }
   }
   out.t0_ns = t0;
   if (engine) {
@@ -556,6 +571,16 @@ std::string to_json(const PointResult& r, const std::string& model, const std::s
     json::Object ops;
     for (const auto& [name, v] : d.op_ms) ops[name] = v;
     g["op_ms"] = std::move(ops);
+    json::Object mmk;
+    for (const Diagnostics::MatmulKernelUse& u : d.matmul_kernels) {
+      json::Object ko;
+      ko["calls"] = u.calls;
+      ko["rows"] = u.rows;
+      ko["macs"] = u.macs;
+      ko["ms"] = num_or_null(u.ms);
+      mmk[u.name] = std::move(ko);
+    }
+    g["matmul_kernels"] = std::move(mmk);
     json::Object pool;
     pool["regions"] = num_or_null(d.pool_regions);
     pool["region_ms"] = num_or_null(d.pool_region_ms);

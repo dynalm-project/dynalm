@@ -248,6 +248,9 @@ class Scheduler {
 
   bool idle() const;
   const SchedulerStats& stats() const { return stats_; }
+  // The configuration in effect: the requested one after policy overrides,
+  // environment overrides and clamping to the batch (constructor).
+  const SchedulerConfig& config() const { return config_; }
   // nullptr when the prefix cache is disabled.
   const PrefixCache* prefix_cache() const { return prefix_cache_.get(); }
   // Thread-safe: hands over (and clears) the trace recorded so far

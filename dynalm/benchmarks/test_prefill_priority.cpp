@@ -81,6 +81,12 @@ class Fixture {
     tf_ = std::move(tf).value();
   }
 
+  // The configuration a scheduler built from `cfg` reports as in effect.
+  SchedulerConfig effective(const SchedulerConfig& cfg) {
+    Scheduler sched(*tf_, *kv_, *m_.tokenizer, cfg);
+    return sched.config();
+  }
+
   Run run(SchedulerConfig cfg, const std::vector<Spec>& specs) {
     cfg.enable_prefix_cache = false;
     Scheduler sched(*tf_, *kv_, *m_.tokenizer, cfg);
@@ -247,6 +253,22 @@ int main(int argc, char** argv) {
   Fixture fx(**m, pool);
   std::printf("model: %s  threads %d\n", argv[1], threads);
   CHECK(SchedulerConfig{}.prefill_order == PrefillOrder::kFifo && !SchedulerConfig{}.trace);
+
+  // Scheduler::config() reports the budgets in effect (serve logs these):
+  // policy overrides applied, the requested values otherwise.
+  {
+    SchedulerConfig lat;
+    lat.policy = SchedulerPolicy::kLatencyFirst;
+    const SchedulerConfig el = fx.effective(lat);
+    CHECK(el.prefill_token_budget == 32 && el.protected_prefill_min == 16);
+    SchedulerConfig thr;
+    thr.policy = SchedulerPolicy::kThroughputFirst;
+    const SchedulerConfig et = fx.effective(thr);
+    CHECK(et.prefill_token_budget == 128 && !et.decode_protect);
+    const SchedulerConfig eb = fx.effective(SchedulerConfig{});
+    CHECK(eb.prefill_token_budget == SchedulerConfig{}.prefill_token_budget &&
+          eb.decode_token_budget == SchedulerConfig{}.decode_token_budget);
+  }
 
   // A 600-token prompt alone, then two 128-token prompts arrive after step 1.
   const std::vector<Spec> hol = {{1, 600, 2}, {2, 128, 2, 1}, {3, 128, 2, 1}};

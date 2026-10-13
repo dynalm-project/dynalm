@@ -182,9 +182,10 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
            gib(e.weight_bytes()), gib(e.kv_bytes()), gib(mem.available_bytes));
   LOG_INFO("KV cache: {} tokens ({}{})", e.kv_capacity_tokens(), dtype_name(eo.kv_dtype),
            ctx == 0 ? ", auto" : "");
+  // The scheduler's effective budgets: --policy latency / throughput override the requested ones.
+  const SchedulerConfig& sc = e.scheduler_config();
   LOG_INFO("Scheduler: continuous batching, {} policy (prefill budget {}, decode budget {}, max batch {})",
-           scheduler_policy_name(eo.scheduler.policy), eo.scheduler.prefill_token_budget,
-           eo.scheduler.decode_token_budget, eo.max_batch_tokens);
+           scheduler_policy_name(sc.policy), sc.prefill_token_budget, sc.decode_token_budget, eo.max_batch_tokens);
   if (eo.scheduler.solo_prefill_chunk > 0) {
     LOG_INFO("Solo prefill (experimental): chunk and budget {} in steps without decode rows, {}",
              std::min(eo.scheduler.solo_prefill_chunk, eo.max_batch_tokens),  // the scheduler clamps it to the batch
