@@ -12,6 +12,8 @@
 #include "api/json.h"
 #include "api/openai.h"
 #include "dynacore/base/timer.h"
+#include "dynacore/cpu/cpu_device.h"
+#include "dynacore/kernel/kernel_plan.h"
 #include "common/version.h"
 #include "logging/log.h"
 #include "metrics/metrics.h"
@@ -347,6 +349,30 @@ std::string Server::Impl::render_metrics() const {
   render_gauge("dynalm_scheduler_running", "Sequences admitted", st.scheduler.running, out);
   render_gauge("dynalm_scheduler_waiting", "Sequences queued", st.scheduler.waiting, out);
   counter("dynalm_preemptions_total", "Sequences preempted under KV pressure", st.scheduler.preemptions);
+  // Experimental 8-row packed INT8 kernel (KernelPlan::packed_int8_8rows,
+  // DYNACORE_PACKED_8ROWS): read-only evidence of the setting and its use.
+  render_gauge("dynacore_packed_8rows_enabled", "1 when DYNACORE_PACKED_8ROWS turned on the experimental 8-row packed int8 tiles",
+               dynacore::KernelPlan::defaults().packed_int8_8rows ? 1 : 0, out);
+  counter("dynacore_packed_rows8_dispatches_total", "int8_rows calls that used the experimental 8-row packed tiles",
+          dynacore::CpuDevice::experimental_rows8_dispatches());
+  render_gauge("dynacore_int16_prefill_max_rows", "Row limit of the experimental int16 prefill path (DYNACORE_INT16_PREFILL_ROWS; 0 = off)",
+               dynacore::KernelPlan::defaults().int16_prefill_max_rows, out);
+  counter("dynacore_int16_prefill_matmuls_total", "matmuls that used the experimental int16 prefill path",
+          dynacore::CpuDevice::experimental_int16_prefill_calls());
+  // Experimental solo-prefill chunking (SchedulerConfig::solo_prefill_chunk, --solo-prefill-chunk).
+  render_gauge("dynalm_scheduler_solo_prefill_chunk", "Prefill chunk in steps without decode rows (--solo-prefill-chunk; 0 = off)",
+               st.scheduler.solo_prefill_chunk, out);
+  render_gauge("dynalm_scheduler_solo_prefill_split", "1 when the solo-prefill chunk is split across prefilling sequences",
+               st.scheduler.solo_prefill_split ? 1 : 0, out);
+  counter("dynalm_scheduler_solo_prefill_steps_total", "Scheduler steps planned with the solo-prefill chunk and budget",
+          st.scheduler.steps_solo_prefill);
+  render_counter("dynalm_scheduler_solo_prefill_ms_total", "Forward time of solo-prefill steps (ms)",
+                 st.scheduler.forward_solo_prefill_ms, out);
+  render_gauge("dynalm_scheduler_solo_prefill_step_ms_max", "Longest solo-prefill step (ms)",
+               st.scheduler.solo_prefill_step_ms_max, out);
+  counter("dynalm_scheduler_solo_prefill_skipped_total",
+          "Steps without decode rows that kept the regular chunk because several prompts were prefilling",
+          st.scheduler.steps_solo_prefill_skipped);
   render_gauge("dynalm_queue_latency_ms_avg", "Mean submission-to-admission latency",
                st.scheduler.admitted ? st.scheduler.queue_ms_total / static_cast<double>(st.scheduler.admitted) : 0.0, out);
   render_gauge("dynalm_queue_latency_ms_max", "Max submission-to-admission latency", st.scheduler.queue_ms_max, out);

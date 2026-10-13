@@ -7,6 +7,13 @@
 add_library(dynacore STATIC
   src/base/status.cpp
   src/device/device_registry.cpp
+  src/dynakernel/codegen.cpp
+  src/dynakernel/compact_layout.cpp
+  src/dynakernel/generated_backend.cpp
+  src/dynakernel/llvm_ir.cpp
+  src/dynakernel/lower.cpp
+  src/dynakernel/program.cpp
+  src/dynakernel/reference_backend.cpp
   src/execution/thread_pool.cpp
   src/hardware/cpu_info.cpp
   src/hardware/isa.cpp
@@ -65,4 +72,85 @@ if(ENABLE_BENCHMARKS)
     target_link_libraries(bench_${_b} PRIVATE dynacore)
     target_include_directories(bench_${_b} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks)
   endforeach()
+  # DynaKernel IR v0 (docs/dynakernel.md): no model files needed.
+  add_executable(test_dynakernel tests/test_dynakernel.cpp)
+  target_link_libraries(test_dynakernel PRIVATE dynacore)
+  add_executable(test_dynakernel_lowering tests/test_dynakernel_lowering.cpp)
+  target_link_libraries(test_dynakernel_lowering PRIVATE dynacore)
+  add_executable(test_dynakernel_quant tests/test_dynakernel_quant.cpp)
+  target_link_libraries(test_dynakernel_quant PRIVATE dynacore)
+  add_executable(test_packed_8rows tests/test_packed_8rows.cpp)
+  target_link_libraries(test_packed_8rows PRIVATE dynacore)
+  add_executable(test_int16_prefill tests/test_int16_prefill.cpp)
+  target_link_libraries(test_int16_prefill PRIVATE dynacore)
+  add_executable(test_thread_pool tests/test_thread_pool.cpp)
+  target_link_libraries(test_thread_pool PRIVATE dynacore)
+  # Generated C++ backend (docs/dynakernel.md): dkgen writes each unit into
+  # the build tree at build time; only tests and benchmarks link them. The
+  # AVX2 variant gets AVX2 flags on its generated file only (DD-003).
+  add_executable(dkgen tools/dkgen.cpp)
+  target_link_libraries(dkgen PRIVATE dynacore)
+  set(DK_GEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/dynakernel_gen)
+  function(dk_generated_library target set unit)
+    set(_srcs)
+    foreach(_isa scalar avx2)
+      if(_isa STREQUAL "avx2" AND NOT ENABLE_AVX2)
+        continue()
+      endif()
+      set(_suffix "")
+      if(_isa STREQUAL "avx2")
+        set(_suffix "_avx2")
+      endif()
+      set(_out ${DK_GEN_DIR}/dk_generated_${unit}${_suffix}.cpp)
+      add_custom_command(
+        OUTPUT ${_out}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${DK_GEN_DIR}
+        COMMAND dkgen --out ${_out} --set ${set} --isa ${_isa}
+        DEPENDS dkgen
+        COMMENT "dkgen: generating DynaKernel ${unit} kernels (${_isa})"
+        VERBATIM)
+      if(_isa STREQUAL "avx2")
+        engine_set_isa(AVX2 ${_out})
+      endif()
+      list(APPEND _srcs ${_out})
+    endforeach()
+    if(ENABLE_AVX2)
+      # INT8 prototype (sub-scaled activations, interleaved Q4_K): AVX2 only.
+      set(_out ${DK_GEN_DIR}/dk_generated_${unit}_int8_avx2.cpp)
+      add_custom_command(
+        OUTPUT ${_out}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${DK_GEN_DIR}
+        COMMAND dkgen --out ${_out} --set ${set} --isa avx2 --kind int8
+        DEPENDS dkgen
+        COMMENT "dkgen: generating DynaKernel ${unit} int8 kernels (avx2)"
+        VERBATIM)
+      engine_set_isa(AVX2 ${_out})
+      list(APPEND _srcs ${_out})
+    endif()
+    add_library(${target} STATIC ${_srcs})
+    target_compile_definitions(${target} PUBLIC DK_GENERATED_HAS_AVX2=$<BOOL:${ENABLE_AVX2}>)
+    target_link_libraries(${target} PRIVATE dynacore)
+  endfunction()
+  dk_generated_library(dynakernel_generated test q4k)
+  dk_generated_library(dynakernel_generated_bench bench q4k_bench)
+  add_executable(test_dynakernel_codegen tests/test_dynakernel_codegen.cpp)
+  target_link_libraries(test_dynakernel_codegen PRIVATE dynacore dynakernel_generated)
+  add_executable(test_dynakernel_int8gen tests/test_dynakernel_int8gen.cpp)
+  target_link_libraries(test_dynakernel_int8gen PRIVATE dynacore dynakernel_generated)
+  # LLVM native backend (prototype, docs/dynakernel.md): LLVM's C API library
+  # is loaded at run time (DYNACORE_LLVM_C), so this builds without LLVM and
+  # reports kUnsupported when the library is absent. Only tests and
+  # benchmarks link it.
+  add_library(dynakernel_llvm STATIC src/dynakernel/llvm_jit.cpp src/dynakernel/llvm_backend.cpp)
+  target_link_libraries(dynakernel_llvm PUBLIC dynacore PRIVATE ${CMAKE_DL_LIBS})
+  add_executable(test_dynakernel_llvm tests/test_dynakernel_llvm.cpp)
+  target_link_libraries(test_dynakernel_llvm PRIVATE dynacore dynakernel_llvm dynakernel_generated)
+  # Controlled microbenchmark: generated scalar / AVX2 vs reference paths.
+  add_executable(bench_dynakernel_q4k benchmarks/bench_dynakernel_q4k.cpp)
+  target_link_libraries(bench_dynakernel_q4k PRIVATE dynacore dynakernel_generated_bench)
+  target_include_directories(bench_dynakernel_q4k PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks)
+  # LLVM-generated kernels against the reference, DynaCore and generated C++ paths.
+  add_executable(bench_dynakernel_llvm benchmarks/bench_dynakernel_llvm.cpp)
+  target_link_libraries(bench_dynakernel_llvm PRIVATE dynacore dynakernel_llvm dynakernel_generated_bench)
+  target_include_directories(bench_dynakernel_llvm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 endif()

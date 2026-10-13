@@ -123,7 +123,15 @@ void ThreadPool::parallel_for(size_t n, size_t grain, FunctionRef<void(size_t, s
     fn(0, n);
     return;
   }
-  assert(active_.load() == 0 && "parallel_for is not reentrant");
+  // One region at a time (see the header). The exchange makes the check and
+  // the claim one atomic step, so two callers can never both proceed; the
+  // loser runs serially and leaves the winner's job state alone.
+  if (in_region_.exchange(true, std::memory_order_acquire)) {
+    misuse_.fetch_add(1, std::memory_order_relaxed);
+    for (size_t b = 0; b < n; b += grain) fn(b, std::min(b + grain, n));  // same chunk bound as a region
+    return;
+  }
+  assert(active_.load() == 0);
   const int64_t t0 = stats_on_ ? now_ns() : 0;
   fn_ = &fn;
   n_ = n;
@@ -152,6 +160,7 @@ void ThreadPool::parallel_for(size_t n, size_t grain, FunctionRef<void(size_t, s
     stats_.region_ns += t1 - t0;
     stats_.tail_wait_ns += t1 - t_own;
   }
+  in_region_.store(false, std::memory_order_release);
 }
 
 }  // namespace dynacore

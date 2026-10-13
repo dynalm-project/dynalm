@@ -114,6 +114,12 @@ def bench_dynalm(args, model, conc, prompts, outputs, results, logs):
         wait_ready(f"http://127.0.0.1:{port}/health", lambda b: "ok" in b, 300, proc)
         run_bench(args, model, f"http://127.0.0.1:{port}", model.name, conc, prompts, outputs,
                   "DynaLM", results)
+        if args.dynalm_scrape_metrics:
+            # Opt-in: the server's /metrics after the benchmark, before the server stops.
+            body = get(f"http://127.0.0.1:{port}/metrics", timeout=10)
+            path = results.parent / f"dynalm-metrics-{model.stem}-c{conc.replace(',', '_')}-{time.strftime('%Y%m%d-%H%M%S')}.prom"
+            path.write_text(body if body is not None else "# /metrics unavailable\n", encoding="utf-8")
+            print(f"  DynaLM /metrics saved: {path}", flush=True)
     finally:
         stop(proc)
 
@@ -182,6 +188,8 @@ def main() -> int:
     ap.add_argument("--threads", type=int, default=os.cpu_count() or 4)
     ap.add_argument("--ctx", type=int, default=2048, help="context per user")
     ap.add_argument("--requests", type=int, default=0, help="requests per point (0 = benchmark default)")
+    ap.add_argument("--dynalm-scrape-metrics", action="store_true",
+                    help="save DynaLM's /metrics to <out> after its benchmark, before stopping it (default: off)")
     ap.add_argument("--skip", action="append", default=[], choices=["dynalm", "llama.cpp", "ollama"])
     ap.add_argument("--out", default="results/compare")
     args = ap.parse_args()

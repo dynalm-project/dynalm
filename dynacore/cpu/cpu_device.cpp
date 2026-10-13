@@ -1,6 +1,7 @@
 #include "dynacore/cpu/cpu_device.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cmath>
 #include <cstdlib>
@@ -16,6 +17,11 @@
 
 namespace dynacore {
 namespace {
+
+// int8_rows calls that took the experimental 8-row packed path (test and
+// benchmark evidence; relaxed, one increment per call).
+std::atomic<uint64_t> g_packed_rows8_dispatches{0};
+std::atomic<uint64_t> g_int16_prefill_calls{0};  // KernelPlan::int16_prefill_max_rows matmuls (experimental)
 
 // Pointer to row r of a 2-D view (strides are bytes).
 template <typename T>
@@ -175,9 +181,33 @@ void CpuDevice::prepack_weight(const TensorView& w, bool int16_activations) {
   packed_.emplace(w.data(), std::move(p));
 }
 
+uint64_t CpuDevice::experimental_rows8_dispatches() { return g_packed_rows8_dispatches.load(std::memory_order_relaxed); }
+uint64_t CpuDevice::experimental_int16_prefill_calls() { return g_int16_prefill_calls.load(std::memory_order_relaxed); }
+
 void CpuDevice::int8_rows(const Int8Kernel& ik, const std::byte* wbase, int64_t w_row_bytes, const ActBlockQ8* act,
                           int64_t m, int64_t k, int64_t n0, int64_t n1, const TensorView& y, const float* bias) const {
   const int64_t nb = k / kActQ8Block;
+  // EXPERIMENTAL (KernelPlan::packed_int8_8rows, off by default): more than
+  // 4 rows on an interleaved copy go through 8-row tiles, one pass over each
+  // packed group instead of two. Same per-row arithmetic as the 4-row tiles.
+  if (ik.packed != nullptr && plan_.packed_int8_8rows && m > kDotRowsMax && k_.dot_q8_sx_x8_q4_K_rows8 != nullptr) {
+    g_packed_rows8_dispatches.fetch_add(1, std::memory_order_relaxed);
+    const ActBlockQ8* xr8[kPackedRowsMax];
+    float out[8 * kPackedRowsMax];
+    const int64_t sb = k / 256;
+    for (int64_t g = n0 / 8; g < n1 / 8; ++g) {
+      for (int64_t r0 = 0; r0 < m; r0 += kPackedRowsMax) {
+        const int mm = static_cast<int>(std::min<int64_t>(kPackedRowsMax, m - r0));
+        for (int t = 0; t < mm; ++t) xr8[t] = act + (r0 + t) * nb;
+        k_.dot_q8_sx_x8_q4_K_rows8(ik.packed + g * sb, xr8, mm, k, out);
+        for (int t = 0; t < mm; ++t) {
+          float* yr = row_ptr<float>(y, r0 + t) + 8 * g;
+          for (int i = 0; i < 8; ++i) yr[i] = out[8 * t + i] + (bias ? bias[8 * g + i] : 0.0f);
+        }
+      }
+    }
+    return;
+  }
   const ActBlockQ8* xr[kDotRowsMax];
   if (ik.packed != nullptr) {
     float out[8 * kDotRowsMax];
@@ -419,6 +449,52 @@ void CpuDevice::matmul(const TensorView& x, const TensorView& w, const TensorVie
   // down projection), when the plan asks for it. A Q4_K weight with an
   // interleaved copy uses it (DD-081) up to int8_superblock_max_rows rows: it
   // stays ahead of fp32 expand there, the row kernel only up to 4.
+  // EXPERIMENTAL (KernelPlan::int16_prefill_max_rows, off by default):
+  // prefill-sized matmuls (more rows than any decode kernel takes) on an
+  // interleaved copy with enough output rows: int16 activations in 8-row
+  // tiles instead of fp32 expand. Small or unpacked weights keep expand.
+  if (plan_.int16_prefill_max_rows > 0 && m > kPackedRowsMax && m <= plan_.int16_prefill_max_rows &&
+      n >= plan_.q4_repack_min_out && n * k >= plan_.int16_prefill_min_weights && int8_accelerated_ && k % 256 == 0 &&
+      k_.quantize_act16 != nullptr &&
+      q16_packed_enabled()) {
+    const void* pk = nullptr;
+    CpuKernels::DotQ16X8Fn tile = nullptr;
+    size_t group_bytes = 0;
+    if (wt == DType::kQ4_K && k_.dot_q16_x8_q4_K_rows8 != nullptr) {
+      pk = find_packed(w.data(), n, k);
+      tile = k_.dot_q16_x8_q4_K_rows8;
+      group_bytes = sizeof(BlockQ4_Kx8) * static_cast<size_t>(k / 256);
+    } else if (wt == DType::kQ6_K && k_.dot_q16_x8_q6_K_rows8 != nullptr && q6_packed_enabled()) {
+      pk = find_packed6(w.data(), n, k);
+      tile = k_.dot_q16_x8_q6_K_rows8;
+      group_bytes = sizeof(BlockQ6_Kx8) * static_cast<size_t>(k / 256);
+    }
+    if (pk != nullptr) {
+      g_int16_prefill_calls.fetch_add(1, std::memory_order_relaxed);
+      const int64_t nb = k / kActQ8Block;
+      act_q16_.resize(static_cast<size_t>(m * nb));
+      for (int64_t r = 0; r < m; ++r) k_.quantize_act16(row_ptr<const float>(x, r), act_q16_.data() + r * nb, k);
+      const ActBlockQ16* act = act_q16_.data();
+      const int64_t groups = n / 8;
+      pool_.parallel_for(static_cast<size_t>(groups), grain_for(static_cast<size_t>(groups), pool_.size(), 1, plan_.matmul_chunks_per_thread),
+                         [&](size_t begin, size_t end) {
+        float out[8 * kPackedRowsMax];
+        const ActBlockQ16* xr[kPackedRowsMax];
+        for (size_t g = begin; g < end; ++g) {
+          for (int64_t r0 = 0; r0 < m; r0 += kPackedRowsMax) {
+            const int mm = static_cast<int>(std::min<int64_t>(kPackedRowsMax, m - r0));
+            for (int t = 0; t < mm; ++t) xr[t] = act + (r0 + t) * nb;
+            tile(static_cast<const std::byte*>(pk) + g * group_bytes, xr, mm, k, out);
+            for (int t = 0; t < mm; ++t) {
+              float* yr = row_ptr<float>(y, r0 + t) + 8 * static_cast<int64_t>(g);
+              for (int i = 0; i < 8; ++i) yr[i] = out[8 * t + i] + (b ? b[8 * g + i] : 0.0f);
+            }
+          }
+        }
+      });
+      return;
+    }
+  }
   const bool try16 = plan_.int16_decode_max_rows > 0 && plan_.q4_repack_min_rows > 0 &&
                      m >= plan_.q4_repack_min_rows && q16_packed_enabled();
   const void* packed16 = nullptr;

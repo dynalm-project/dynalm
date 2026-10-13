@@ -1,5 +1,6 @@
 // `dynalm serve <model> [options]`: OpenAI-compatible HTTP server.
 
+#include <algorithm>
 #include <atomic>
 #include <charconv>
 #include <chrono>
@@ -30,6 +31,7 @@ constexpr OptionSpec kServeOptions[] = {
     {"model"},        {"host"},        {"port"},           {"model-id"},         {"threads"},
     {"ctx"},          {"batch"},       {"kv"},             {"http-threads"},     {"max-tokens"},
     {"max-active"},   {"request-timeout"}, {"temperature"}, {"backend"}, {"execution"}, {"shutdown-timeout"}, {"disable-admin", false}, {"int8-decode"}, {"policy"},
+    {"solo-prefill-chunk"}, {"solo-prefill-split", false}, {"prefill-order"}, {"prefill-aging-ms"},
 };
 
 void usage() {
@@ -47,6 +49,11 @@ void usage() {
                "                          off makes outputs independent of batching, DD-053)\n"
                "  --policy P              balanced (default) | latency | throughput: first-token wait vs\n"
                "                          smooth streaming under load (DD-061)\n"
+               "  --solo-prefill-chunk N  EXPERIMENTAL: prompt chunk and budget N in scheduler steps\n"
+               "                          without decode rows (0 = off, the default)\n"
+               "  --solo-prefill-split    with --solo-prefill-chunk: split it across waiting prompts\n"
+               "  --prefill-order O       EXPERIMENTAL: fifo (default) | srpt (shortest remaining prompt first)\n"
+               "  --prefill-aging-ms N    with srpt: prompts prefilling longer than N ms go first (default 20000)\n"
                "  --backend cpu           compute backend (GPU backends are not built yet)\n"
                "  --execution MODE        reference (default) | compiled: DynaCore IR + fusion (DD-072)\n"
                "  --max-active N          concurrent requests before 503 (default 64)\n"
@@ -98,6 +105,10 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
     else if (a == "--batch") ok = parse_int_or_auto(value(), batch);
     else if (a == "--int8-decode") ok = parse_int(value(), eo.int8_decode_rows) && eo.int8_decode_rows >= 0;
     else if (a == "--policy") ok = parse_scheduler_policy(value(), eo.scheduler.policy);
+    else if (a == "--solo-prefill-chunk") ok = parse_int(value(), eo.scheduler.solo_prefill_chunk) && eo.scheduler.solo_prefill_chunk >= 0;
+    else if (a == "--solo-prefill-split") eo.scheduler.solo_prefill_split = true;
+    else if (a == "--prefill-order") ok = parse_prefill_order(value(), eo.scheduler.prefill_order);
+    else if (a == "--prefill-aging-ms") ok = parse_int(value(), eo.scheduler.prefill_aging_ms) && eo.scheduler.prefill_aging_ms >= 0;
     else if (a == "--http-threads") ok = parse_int_or_auto(value(), http_threads);
     else if (a == "--max-tokens") ok = parse_int(value(), max_tokens);
     else if (a == "--max-active") ok = parse_int(value(), max_active);
@@ -174,6 +185,11 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
   LOG_INFO("Scheduler: continuous batching, {} policy (prefill budget {}, decode budget {}, max batch {})",
            scheduler_policy_name(eo.scheduler.policy), eo.scheduler.prefill_token_budget,
            eo.scheduler.decode_token_budget, eo.max_batch_tokens);
+  if (eo.scheduler.solo_prefill_chunk > 0) {
+    LOG_INFO("Solo prefill (experimental): chunk and budget {} in steps without decode rows, {}",
+             std::min(eo.scheduler.solo_prefill_chunk, eo.max_batch_tokens),  // the scheduler clamps it to the batch
+             eo.scheduler.solo_prefill_split ? "split across prompts" : "FIFO");
+  }
   LOG_INFO("Prefix cache: {}", eo.scheduler.enable_prefix_cache ? "enabled (radix)" : "disabled");
 
   Server server(e, so);

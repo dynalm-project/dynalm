@@ -173,6 +173,9 @@ class Engine {
   // Per-op forward timing and thread-pool accounting (benchmarks). Takes
   // effect at the next scheduler step; the counters keep accumulating.
   void set_profiling(bool on) { want_profiling_.store(on, std::memory_order_relaxed); }
+  // Scheduler trace (EngineOptions::scheduler.trace); thread-safe, hands over and clears.
+  std::vector<StepTrace> take_step_trace() { return scheduler_->take_step_trace(); }
+  std::vector<RequestTrace> take_request_trace() { return scheduler_->take_request_trace(); }
 
  private:
   Engine() = default;

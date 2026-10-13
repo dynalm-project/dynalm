@@ -41,6 +41,10 @@ const KernelPlan& KernelPlan::defaults() {
     if (const char* rm = std::getenv("DYNACORE_Q4_REPACK_MAX_ROWS")) {
       p.q4_repack_max_rows = static_cast<int32_t>(std::max<long>(0, std::strtol(rm, nullptr, 10)));
     }
+    if (const char* p8 = std::getenv("DYNACORE_PACKED_8ROWS")) p.packed_int8_8rows = std::strtol(p8, nullptr, 10) != 0;
+    if (const char* ip = std::getenv("DYNACORE_INT16_PREFILL_ROWS")) {
+      p.int16_prefill_max_rows = static_cast<int32_t>(std::max<long>(0, std::strtol(ip, nullptr, 10)));
+    }
     if (const char* d = std::getenv("DYNACORE_INT16_FFN_DOWN")) p.int16_ffn_down = std::strtol(d, nullptr, 10) != 0;
     if (const char* g = std::getenv("DYNACORE_ATTN_GROUPED")) p.grouped_attention = std::strtol(g, nullptr, 10) != 0;
     if (const char* kc = std::getenv("DYNACORE_GEMM_KC")) {

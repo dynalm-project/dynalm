@@ -379,6 +379,11 @@ CpuKernels make_cpu_kernels(CpuIsa isa) {
     // DYNACORE_VNNI=1 until measured end to end.
     const char* v = std::getenv("DYNACORE_VNNI");
     if (cpu_info().features.avx_vnni && v != nullptr && v[0] == '1') register_avxvnni_kernels(k);
+    // The 8-row int16 tiles (used only by the opt-in int16 prefill path) take
+    // vpdpwssd where the CPU has AVX-VNNI; DYNACORE_INT16_PREFILL_VNNI=0 keeps
+    // the AVX2 tiles (identical results).
+    const char* iv = std::getenv("DYNACORE_INT16_PREFILL_VNNI");
+    if (cpu_info().features.avx_vnni && !(iv != nullptr && iv[0] == '0')) register_avxvnni_int16_tiles(k);
   }
   if (isa == CpuIsa::kNeon) register_neon_kernels(k);
   return k;

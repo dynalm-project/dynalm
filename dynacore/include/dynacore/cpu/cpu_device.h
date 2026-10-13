@@ -33,6 +33,11 @@ class CpuDevice final : public Device {
   PrepackStats prepack_stats() const override { return prepack_stats_; }
   void set_kernel_plan(const KernelPlan& plan) override { plan_ = plan; }
   int32_t parallelism() const override { return pool_.size(); }
+  // Process-wide count of int8_rows calls that used the experimental 8-row
+  // packed Q4_K path (KernelPlan::packed_int8_8rows); 0 while it is off.
+  static uint64_t experimental_rows8_dispatches();
+  // Matmuls run by the experimental int16 prefill path (KernelPlan::int16_prefill_max_rows).
+  static uint64_t experimental_int16_prefill_calls();
   const KernelPlan& kernel_plan() const { return plan_; }
 
   void embedding(const TensorView& table, std::span<const int32_t> ids, const TensorView& out) override;
