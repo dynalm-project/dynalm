@@ -162,6 +162,19 @@ def main():
         finally:
             stop_own(proc)
 
+    # 4. Empty tuning variables are ignored, not read as 0 (an empty
+    #    DYNALM_PROTECT_MIN / DYNALM_DECODE_TARGET once collapsed the mixed-step
+    #    prefill budget to one row: 4 users then ran one at a time).
+    out = logs / "empty-env-bench.jsonl"
+    env = dict(os.environ, DYNALM_PROTECT_MIN="", DYNALM_DECODE_TARGET="", DYNALM_DECODE_PROTECT="",
+               DYNACORE_INT8_DECODE_ROWS="", DYNACORE_WIDE_ROWS8="")
+    r = subprocess.run([exe, "benchmark", a.model, "-t", str(a.threads), "--concurrency", "4", "--prompt", "128", "--output", "32",
+                        "--requests", "8", "-c", "4096", "--out", str(out)], capture_output=True, text=True, env=env, timeout=600)
+    ok = r.returncode == 0 and out.exists()
+    j = json.loads(out.read_text(encoding="utf-8").splitlines()[0]) if ok else {}
+    rows = (j.get("diag") or {}).get("mean_decode_rows", 0)
+    check(ok and rows > 2.5, f"empty tuning variables are ignored: 4 users decode together (mean decode rows {rows:.2f})")
+
     print(f"{checks - len(failures)} of {checks} smoke checks passed")
     if failures:
         print("failed: " + "; ".join(failures))

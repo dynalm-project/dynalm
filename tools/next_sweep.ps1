@@ -84,7 +84,16 @@ function Sha($path) {
   return $hashCache[$full]
 }
 function Free-GB { [math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB, 2) }
-function Conflicts { @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(dynalm|llama.*|ollama.*|bench_.*|test_.*)$' }) }
+# Other inference work: dynalm, llama.cpp, benchmark/test programs, and an Ollama
+# model runner (`ollama runner ...`, a loaded model). The idle Ollama desktop app
+# and server are not counted: they use no CPU, and the quiet check below still
+# catches any load they cause.
+function Conflicts {
+  $p = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(dynalm|llama.*|bench_.*|test_.*)$' })
+  $runners = @(Get-CimInstance Win32_Process -Filter "Name='ollama.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -match '\brunner\b' } | ForEach-Object { [pscustomobject]@{ Name = "ollama runner"; Id = $_.ProcessId } })
+  return @($p + $runners)
+}
 function Wait-Resources {
   $t0 = Get-Date
   while ($true) {
@@ -170,7 +179,14 @@ foreach ($r in $sel) {
   $logFile = Join-Path $Out "$($r.id).log"
   & $r.exe @($r.args) 2>&1 | Tee-Object -FilePath $logFile | Select-Object -Last 8 | ForEach-Object { Write-Host "  $_" }
   $code = $LASTEXITCODE
-  foreach ($k in $r.env.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
+  # Restore: a variable that was unset before the run is removed. Passing $null to
+  # SetEnvironmentVariable from PowerShell leaves it set to an empty string, which
+  # leaked into later runs (an empty DYNALM_PROTECT_MIN starved prefill).
+  foreach ($k in $r.env.Keys) {
+    if ($null -eq $saved[$k]) { Remove-Item "Env:$k" -ErrorAction SilentlyContinue } else { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
+  }
+  $left = @($r.env.Keys | Where-Object { $null -eq $saved[$_] -and $null -ne [Environment]::GetEnvironmentVariable($_) })
+  if ($left.Count -gt 0) { throw "environment not restored after $($r.id): $($left -join ', ')" }
   $t1 = Get-Date
   $rec = [ordered]@{
     id = $r.id; start = $t0.ToString("s"); end = $t1.ToString("s"); seconds = [math]::Round(($t1 - $t0).TotalSeconds, 1)

@@ -26,6 +26,7 @@
 #include <thread>
 #include <vector>
 
+#include "dynacore/base/env.h"
 #include "dynacore/cpu/cpu_device.h"
 #include "dynacore/cpu/cpu_kernels.h"
 #include "dynacore/hardware/cpu_info.h"
@@ -563,6 +564,27 @@ void test_generic_fallback() {
   std::printf("  generic tier: %d matmuls with every accelerated path requested fall back to fp32, correct\n", runs);
 }
 
+// Environment helpers (dynacore/base/env.h): empty = unset; whole-string numbers only.
+void test_env_helpers() {
+  long l = 7;
+  double d = 7;
+  CHECK(!parse_env_long(nullptr, l) && !parse_env_long("", l) && !parse_env_long("abc", l) && !parse_env_long("16x", l) && l == 7);
+  CHECK(parse_env_long("16", l) && l == 16 && parse_env_long("-3", l) && l == -3 && parse_env_long("0", l) && l == 0);
+  CHECK(!parse_env_long("99999999999999999999999", l));
+  CHECK(!parse_env_double("", d) && !parse_env_double("3.0x", d) && !parse_env_double("x", d) && d == 7);
+  CHECK(parse_env_double("3", d) && d == 3.0 && parse_env_double("0.5", d) && d == 0.5);
+  set_env("DYNACORE_TEST_ENV_HELPER", "16");
+  CHECK(env_value("DYNACORE_TEST_ENV_HELPER") != nullptr && std::string(env_value("DYNACORE_TEST_ENV_HELPER")) == "16");
+  set_env("DYNACORE_TEST_ENV_HELPER", "");  // unsets on Windows; empty value on POSIX: both read as unset
+  CHECK(env_value("DYNACORE_TEST_ENV_HELPER") == nullptr);
+  CHECK(env_value("DYNACORE_TEST_ENV_NEVER_SET") == nullptr);
+#if !defined(_WIN32)
+  setenv("DYNACORE_TEST_ENV_HELPER", "", 1);  // an explicitly empty value
+  CHECK(std::getenv("DYNACORE_TEST_ENV_HELPER") != nullptr && env_value("DYNACORE_TEST_ENV_HELPER") == nullptr);
+#endif
+  std::printf("  environment helpers: empty = unset, whole-string numbers only\n");
+}
+
 // ---------------------------------------------------------------------------
 // 4. Diagnostics.
 void test_diagnostics() {
@@ -770,12 +792,14 @@ int main() {
     std::printf("matmul registry tests: no AVX2; selection tests only\n");
     test_legacy_equivalence();
     test_validation();
+    test_env_helpers();
     test_generic_fallback();
     std::printf("all matmul registry tests passed (%d checks)\n", q4kref::g_checks);
     return 0;
   }
   test_legacy_equivalence();
   test_validation();
+  test_env_helpers();
   test_diagnostics();
   test_execution();
   test_split_identity();

@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <string>
 
+#include "dynacore/base/env.h"
 #include "dynacore/base/timer.h"
 #include "logging/log.h"
 #include "sampling/sampler.h"
@@ -52,9 +53,32 @@ Scheduler::Scheduler(Transformer& model, KvBlockPool& kv, const Tokenizer& token
     config_.protected_prefill_min = 16;
     config_.decode_latency_target = 4.0f;
   }
-  if (const char* dp = std::getenv("DYNALM_DECODE_PROTECT")) config_.decode_protect = std::strtol(dp, nullptr, 10) != 0;
-  if (const char* dt = std::getenv("DYNALM_DECODE_TARGET")) config_.decode_latency_target = static_cast<float>(std::atof(dt));
-  if (const char* pm = std::getenv("DYNALM_PROTECT_MIN")) config_.protected_prefill_min = static_cast<int32_t>(std::atoi(pm));
+  // Environment overrides; empty or invalid values are ignored (with a warning)
+  // instead of being read as 0, which would collapse the mixed-step prefill
+  // budget to one row (a target of 0 halves it on every mixed step).
+  long lv = 0;
+  double dv = 0;
+  if (const char* dp = dynacore::env_value("DYNALM_DECODE_PROTECT")) {
+    if (dynacore::parse_env_long(dp, lv)) {
+      config_.decode_protect = lv != 0;
+    } else {
+      LOG_WARN("ignoring DYNALM_DECODE_PROTECT='{}' (expected 0 or 1)", dp);
+    }
+  }
+  if (const char* dt = dynacore::env_value("DYNALM_DECODE_TARGET")) {
+    if (dynacore::parse_env_double(dt, dv) && dv > 0) {
+      config_.decode_latency_target = static_cast<float>(dv);
+    } else {
+      LOG_WARN("ignoring DYNALM_DECODE_TARGET='{}' (expected a number > 0)", dt);
+    }
+  }
+  if (const char* pm = dynacore::env_value("DYNALM_PROTECT_MIN")) {
+    if (dynacore::parse_env_long(pm, lv) && lv >= 1) {
+      config_.protected_prefill_min = static_cast<int32_t>(lv);
+    } else {
+      LOG_WARN("ignoring DYNALM_PROTECT_MIN='{}' (expected an integer >= 1)", pm);
+    }
+  }
   config_.protected_prefill_min = std::clamp(config_.protected_prefill_min, 1, config_.prefill_token_budget);
   // A step without decode rows carries prefill rows only: the solo chunk may use the whole batch.
   config_.solo_prefill_chunk = std::clamp(config_.solo_prefill_chunk, 0, cap);
