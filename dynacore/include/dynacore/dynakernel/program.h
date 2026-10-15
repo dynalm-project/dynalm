@@ -142,6 +142,16 @@ int64_t natural_alignment(DType t);
 
 // --- builder ----------------------------------------------------------------------
 
+// Options of ProgramBuilder::matmul / matmul_into. At namespace scope: as a
+// nested struct with default member initializers it cannot be the `= {}`
+// default argument of its enclosing class's members (GCC and Clang reject it;
+// CWG 1397).
+struct MatMulOptions {
+  ActFormat act = ActFormat::kAuto;
+  AccumType accum = AccumType::kF32;
+  std::string name;
+};
+
 // Typed construction of well-formed programs: dense row-major values, result
 // values sized from the operands. Mistakes still go through verify() in
 // finish(), which returns the verified program or the first diagnostic.
@@ -153,11 +163,7 @@ class ProgramBuilder {
   // Any value with an explicit layout (strided views, rank 1).
   ValueId value(std::string name, ValueRole role, TensorLayout layout, int64_t alignment = 0);
 
-  struct MatMulOptions {
-    ActFormat act = ActFormat::kAuto;
-    AccumType accum = AccumType::kF32;
-    std::string name;
-  };
+  using MatMulOptions = dk::MatMulOptions;
   // y = x . w^T (+ bias) into a new dense fp32 [M, N] result value.
   ValueId matmul(ValueId x, ValueId w, ValueId bias = kNoValue, MatMulOptions opts = {});
   // The same into an existing destination (e.g. a strided result value).
