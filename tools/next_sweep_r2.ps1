@@ -1,4 +1,4 @@
-# Release campaign runs (results\dynalm-release-*\campaign\plan.md); dot-sourced by next_sweep.ps1.
+# Release campaign runs (results\dynalm-release-*\campaign\plan.md; stage R3: tail-campaign\plan.md); dot-sourced by next_sweep.ps1.
 # One invocation = one measurement session (-Session N); arm order rotates with the session.
 # Executables: DYNALM_BASE_EXE (reference build) and DYNALM_CAND_EXE (candidate build) must be set.
 if (-not $env:DYNALM_BASE_EXE -or -not $env:DYNALM_CAND_EXE) { throw "set DYNALM_BASE_EXE and DYNALM_CAND_EXE" }
@@ -20,6 +20,8 @@ $Campaign = @{
   "sw"    = @{ exe = $CandExe; env = ($split + @{ DYNACORE_DECODE_WIDE_ROWS = "16" }); args = @() }
   "lat"   = @{ exe = $CandExe; env = @{}; args = @("--policy", "latency") }
   "pm16"  = @{ exe = $CandExe; env = @{ DYNALM_PROTECT_MIN = "16"; DYNALM_DECODE_TARGET = "3" }; args = @() }
+  "slat"  = @{ exe = $CandExe; env = $split; args = @("--policy", "latency") }
+  "spm16" = @{ exe = $CandExe; env = ($split + @{ DYNALM_PROTECT_MIN = "16"; DYNALM_DECODE_TARGET = "3" }); args = @() }
 }
 function Rotate([string[]]$a, [int]$by) { $n = $a.Count; 0..($n - 1) | ForEach-Object { $a[($_ + $by) % $n] } }
 $s = $Session
@@ -37,6 +39,15 @@ $wl = @(
   @{ id = "TL-q3"; model = $Q3; arms = @("rc", "lat", "pm16"); rounds = 2
      args = @("--concurrency", "4", "--prompt", "128", "--output", "64", "--requests", "16", "--warmup-requests", "1", "-c", "8192") }
 )
+if ($TailFollowUp) {
+  # Stage R3: split-byte prefill (cheaper prompt rows in mixed steps) alone and with the latency settings.
+  $wl = @(
+    @{ id = "TS-q15"; model = $Q15; arms = @("rc", "split", "slat", "spm16"); rounds = 2
+       args = @("--concurrency", "4", "--prompt", "128", "--output", "128", "--requests", "16", "--warmup-requests", "1", "-c", "8192") },
+    @{ id = "TS-q3"; model = $Q3; arms = @("rc", "split", "slat", "spm16"); rounds = 2
+       args = @("--concurrency", "4", "--prompt", "128", "--output", "64", "--requests", "16", "--warmup-requests", "1", "-c", "8192") }
+  )
+}
 foreach ($w in $wl) {
   for ($r = 1; $r -le $w.rounds; $r++) {
     $order = Rotate $w.arms ($s - 1 + ($r - 1))

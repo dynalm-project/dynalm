@@ -8,7 +8,7 @@
 #
 #   pwsh -NoProfile -Command "& 'tools\next_sweep.ps1' -Stage N3 -Out results\dynalm-next\phase3\raw [-Only id,id] [-Resume] [-List]"
 param(
-  [Parameter(Mandatory = $true)][ValidateSet("N3", "N4", "R1", "R2")][string[]]$Stage,
+  [Parameter(Mandatory = $true)][ValidateSet("N3", "N4", "R1", "R2", "R3")][string[]]$Stage,
   [Parameter(Mandatory = $true)][string]$Out,
   [string[]]$Only = @(),
   [switch]$Resume,
@@ -16,7 +16,7 @@ param(
   [int]$IdleSeconds = 60,
   [double]$QuietPct = 10,
   [int]$Threads = 10,
-  # Measurement session number (stage R2): arm order rotates with it.
+  # Measurement session number (stages R2, R3): arm order rotates with it.
   [int]$Session = 1
 )
 $ErrorActionPreference = "Stop"
@@ -63,7 +63,12 @@ if ($Stage -contains "R1") {
   . (Join-Path $PSScriptRoot "next_sweep_r1.ps1")  # release-candidate runs, declared in results\dynalm-next\release-rc-*\benchmark_plan.md
 }
 if ($Stage -contains "R2") {
+  $TailFollowUp = $false
   . (Join-Path $PSScriptRoot "next_sweep_r2.ps1")  # release campaign sessions, declared in results\dynalm-release-*\campaign\plan.md
+}
+if ($Stage -contains "R3") {
+  $TailFollowUp = $true
+  . (Join-Path $PSScriptRoot "next_sweep_r2.ps1")  # tail-latency follow-up sessions, declared in results\dynalm-release-*\tail-campaign\plan.md
 }
 
 $sel = if ($Only.Count -gt 0) { $runs | Where-Object { $Only -contains $_.id } } else { $runs }
