@@ -52,6 +52,32 @@ in this repository.
 - The `core-only` preset builds DynaCore without `dynalm/`, so any dependency of DynaCore on
   DynaLM fails to compile; the CI job `boundary` runs it.
 
+## Test executables
+
+With `ENABLE_BENCHMARKS=ON` (the default in every preset), the build also produces
+self-checking test programs. Each exits non-zero on the first failed check and prints
+`all ... tests passed (N checks)` otherwise. They are not registered with CTest.
+
+`bash tools/ci/run_tests.sh build/<preset>` runs every model-free test program and the tool
+tests; CI runs it on every platform and under the sanitizers. Tests whose kernels the CPU lacks
+(AVX2 / AVX-VNNI) skip themselves.
+
+| Test | Location | Needs |
+|---|---|---|
+| `test_matmul_registry` | `build/<preset>/dynacore/` | nothing: matmul kernel selection against the pre-registry dispatch, every kernel's numerics, bit-identity of the split-byte and wide-decode paths, generic-tier fallback, diagnostics, external kernels |
+| `test_int16_prefill`, `test_packed_8rows`, `test_thread_pool`, `test_dynakernel*` | `build/<preset>/dynacore/` | nothing |
+| `test_batch_planner` | `build/<preset>/dynalm/benchmarks/` | nothing: the wide-decode switch applies only to decode-only steps of ≤ N rows and selects the integer decode kernels |
+| `python tools/test_bench_analyze.py` | — | Python 3: the paired A/B analyzer ([benchmarking.md](benchmarking.md)) |
+| `test_loadgen_openloop`, `test_prefill_priority`, `test_solo_prefill` | `build/<preset>/dynalm/benchmarks/` | a GGUF model as the first argument (for example `models/qwen2.5-1.5b-instruct-q4_k_m.gguf`) |
+| `python tools/test_compare_engines.py` | — | Python 3: checks of the engine-comparison report (no servers) |
+| `python tools/ci/smoke_api.py <dynalm> <model.gguf>` | — | a model: CLI errors, `serve` start, the OpenAI-compatible endpoints, malformed requests, `/metrics`, graceful shutdown |
+
+Accuracy of activation-quantized paths is checked with
+`build/<preset>/dynalm/benchmarks/bench_int8_accuracy <model.gguf> [threads]` against the DD-053
+contract (perplexity change ≤ +1%, mean KL ≤ 0.0025). Set `BENCH_PREFILL_ONLY=1
+BENCH_PREFILL_CHUNKS=32,64` for the prefill paths, with the path's environment switches set
+(see [dynacore.md](dynacore.md)).
+
 ## Platforms
 
 | Platform | Kernels | Verified by |

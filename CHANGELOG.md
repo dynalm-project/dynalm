@@ -2,6 +2,155 @@
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-10-15
+
+Default behaviour is unchanged from 0.1.3: with no new environment variables set, the same
+kernels run and greedy output tokens are identical (verified against the 0.1.3-based reference
+build).
+
+### CPU matmul kernel registry (DynaCore)
+- `CpuDevice::matmul` now asks an explicit registry (`dynacore/kernel/matmul_registry.h`)
+  which kernel runs. Selection is deterministic: shape, `KernelPlan` and CPU tier only. The
+  priority order is the one of the previous dispatch: `test_matmul_registry` checks 554,190
+  selections against a copy of it.
+- **Diagnostics:**
+  - `DYNACORE_MATMUL_EXPLAIN=1` logs each kernel choice and why higher-priority kernels were
+    not eligible;
+  - `DYNACORE_MATMUL_TIMING=1` adds time per kernel and shape;
+  - `/metrics` adds `dynacore_matmul_calls_total{kernel}` and `dynacore_matmul_rows_total{kernel}`;
+  - `dynalm benchmark` JSON adds `diag.matmul_kernels`.
+- `DYNACORE_MATMUL_DISABLE=name,...|all-accelerated` removes kernels from selection;
+  `all-accelerated` leaves the fp32 reference arithmetic.
+- A matmul with invalid shape metadata now stops with an error message instead of reaching a
+  kernel (it was a debug-only assert). The DynaIR verifier applies the same shape check.
+- Extension point for external kernels (`CpuDevice::register_external_matmul`), used only when
+  `KernelPlan::external_matmul` is set; nothing registers one by default.
+
+### Experimental CPU features (opt-in; off by default)
+- **Split-byte int16 prefill:** `DYNACORE_INT16_PREFILL_ROWS=64 DYNACORE_INT16_PREFILL_SPLIT=1`
+  (AVX-VNNI). It computes the opt-in int16 prefill path's exact integer dot products with
+  `vpdpbusd` on split activation bytes.
+  - **Accuracy:** bit-identical to that path in tests and in greedy tokens. DD-053 on
+    Qwen2.5-1.5B (perplexity +0.003% / +0.005%) and Qwen3-4B (−0.012% / −0.003%), mean
+    KL ≤ 0.000001.
+  - **Measured** on an i7-1255U (2P+8E, 15 W), Q4_K_M models, 10 threads, paired runs with
+    predeclared gates, each against the default:
+
+  | workload | change | verdict |
+  |---|---|---|
+  | Qwen3-4B, single 2048-token prompt | TTFT −13.6% | reliable PASS |
+  | Qwen2.5-1.5B, single 2048-token prompt | TTFT −11 to −13% | baseline varied 2.3%, inconclusive by rule |
+  | Qwen2.5-1.5B open loop (Poisson 0.15 req/s, mixed 128 / 2048-token prompts) | output tok/s +2%, short-request TTFT p95 −21%, E2E p99 −12%, ITL p99 −13% | PASS |
+  | 16 concurrent 128-token requests | output tok/s +17%, TPOT −15% | PASS |
+  | same, ITL p99 | one round +3.3% | inconclusive |
+  | Qwen2.5-1.5B, 4 users, 512-token prompts (release campaign, 3 sessions) | TTFT −14.5% (every pair −13.9 to −15.5%), output tok/s +11.9% | inconclusive by rule (baseline ITL p99 varied 13%) |
+  | Qwen2.5-1.5B, 4 users, 128-token prompts | output tok/s +4.3% | PASS (no regression) |
+  | 4 users, with `--policy latency` (both models, 6 pairs each) | ITL p99 −48%, TTFT −11 to −15%, output tok/s +5 to +7% | inconclusive by rule (baseline tok/s varied 9–10%) |
+
+  - These figures hold for this machine and these workloads only; they are not a general
+    guarantee.
+  - On E-cores the AVX-VNNI unit runs integer dot products at half the fp32 FMA rate, which
+    caps the gain.
+- **Wide decode:** `DYNACORE_DECODE_WIDE_ROWS=16`.
+  - In decode-only steps of 9–16 rows, the batch planner keeps the int8 / int16 decode kernels
+    instead of fp32. Each row gets the arithmetic it gets at ≤ 8 rows today (bit-identical per
+    row, tested). The value is clamped to 0..16.
+  - Above 8 rows it uses the 8-row int8 tiles, so each packed weight group is read once per
+    8 rows instead of once per 4. `DYNACORE_WIDE_ROWS8=0` keeps the 4-row tiles.
+  - Release campaign (3 sessions, gates declared in advance), Qwen2.5-1.5B:
+    - output tok/s +11.0% at 12 users and +11.9% at 16 users (PASS);
+    - together with split-byte prefill: +19.7% and +22.5% (PASS);
+    - but at 12 users TTFT p50 rose 45% (FAIL; mean TTFT about +7% in a traced run). This is
+      why wide decode stays opt-in.
+  - Qwen3-4B moved the same way (+4 to +5% tok/s alone, +14 to +19% with split), but those
+    results are inconclusive: the baseline varied too much on this machine.
+  - The 8-row tiles make decode steps 2–4% faster than the 4-row tiles.
+  - It has no effect at 8 or fewer concurrent requests.
+- **Tail latency at a few users:**
+  - Split-byte prefill together with `--policy latency` cut ITL p99 by about 48% at 4 users,
+    without the TTFT and throughput cost that `--policy latency` has on its own (+13 to +16%
+    TTFT, −6 to −10% tok/s).
+  - The verdict is inconclusive by the campaign's rule, so this remains an experimental
+    combination, not a default.
+
+### Also new since 0.1.3 (experimental, opt-in)
+- **CPU kernels:**
+  - int16 prefill tiles for 9–N-row matmuls on large Q4_K weights: `DYNACORE_INT16_PREFILL_ROWS`,
+    using `vpdpwssd` on AVX-VNNI CPUs (`DYNACORE_INT16_PREFILL_VNNI=0` for the AVX2 tiles);
+  - interleaved Q6_K for int16 activations: `DYNACORE_Q6_PACKED=1`;
+  - 8-row int8 tiles for 5–8 decode rows: `DYNACORE_PACKED_8ROWS=1`.
+  - Results are identical to the paths they replace, or within the DD-053 contract. All are off
+    by default.
+- **Scheduler:**
+  - `--solo-prefill-chunk N` / `--solo-prefill-split`: a larger prompt chunk in steps without
+    decode rows;
+  - `--prefill-order fifo|srpt` with `--prefill-aging-ms`: shortest-remaining-prompt first.
+    Known defect: after aging, a long prompt takes the whole mixed-step budget, so keep FIFO
+    (the default) for latency-sensitive use;
+  - `--step-trace FILE` (benchmark): per-step and per-request scheduler trace (queue, prefill
+    and decode times, rows per step).
+- **Load generator** (`dynalm benchmark`):
+  - open-loop arrivals: `--arrival-rate`, `--seed`, `--arrival-trace`, `--prompt-mix`;
+  - per-request logs: `--request-log`;
+  - uncounted full-size warm-up: `--warmup-requests`;
+  - per-prompt-length latency percentiles.
+- **Thread pool:** a parallel region requested while another is in flight (reentrant or from a
+  second thread) is detected, run serially on the caller and counted (`misuse_count()`),
+  instead of racing on the running region's state.
+- **DynaKernel prototype** (`dynacore/dynakernel/`, `dkgen`; LLVM backend loaded at run time
+  through `DYNACORE_LLVM_C`): kernel IR, lowering, generated C++ and LLVM backends for
+  experiments. It is not linked into `dynalm` and is not a production acceleration.
+
+### Tools
+- `tools/compare_engines.{ps1,py}`:
+  - `-DynalmExe` / `--dynalm` selects the exact executable under test. Its path, version and
+    SHA-256 are recorded in `manifest.json`, `report.md` and every result row. It is never
+    replaced by a local build.
+  - The tool no longer stops processes it did not start. Busy ports fail that engine's
+    preflight, and Ollama runs as the script's own server on port 11435.
+  - Ollama gets the same per-user context.
+  - The report shows the prompt length each engine reported. Ollama 0.40.1 wraps
+    `/v1/completions` prompts in its chat template (128 → 157 tokens on Qwen2.5) and ignored
+    the raw `TEMPLATE` requested by the script.
+  - Rows below 95% of the requested output tokens are marked not comparable and are not ranked.
+    Ollama ignores `ignore_eos`, and Qwen2.5 stops early there: mean 13–74 tokens for a
+    128-token target.
+- New:
+  - `tools/next_sweep.ps1`: paired benchmark runner. It records a quiet check, git state and
+    per-run hashes.
+  - `tools/bench_analyze.py`: paired analysis with predeclared gates. It counts runs, points,
+    pairs and gate evaluations separately, and reports session-level stability and bootstrap
+    intervals.
+  - `docs/benchmarking.md`: the supported ways to benchmark.
+  - Tool tests: `tools/test_compare_engines.py`, `tools/test_bench_analyze.py`.
+  - `tools/ci/smoke_api.py`: CLI and HTTP API smoke test against a model.
+  - `dynacore/benchmarks/bench_ffn_kernels.cpp`: per-core kernel rates.
+
+### CI
+- The model-free test programs and the tool tests now run in CI (`tools/ci/run_tests.sh`).
+  Covered jobs: Windows (MSVC), Linux (GCC, Clang, ARM64), macOS (ARM64, x86-64 under
+  Rosetta), the core-only boundary build, and the ASan+UBSan and TSan builds.
+- Pushes to `release/**` branches run CI.
+- New model-free test `test_batch_planner` (wide-decode planning).
+
+### Fixed
+- An empty tuning environment variable (for example `DYNALM_PROTECT_MIN=`) was read as 0.
+  For `DYNALM_PROTECT_MIN` and `DYNALM_DECODE_TARGET` that cut the prompt rows of a mixed step
+  to one: at 4 concurrent users TTFT rose from about 2 s to about 20 s. Empty values are now
+  ignored for all `DYNACORE_*` planner variables. `DYNALM_DECODE_PROTECT`, `DYNALM_DECODE_TARGET`
+  and `DYNALM_PROTECT_MIN` are validated: invalid values are ignored, with a warning in the log.
+  The benchmark runner (`tools/next_sweep.ps1`) also restored unset variables as empty strings;
+  it now removes them and checks the environment after each run.
+- `test_dynakernel_quant` could fail intermittently. After releasing a packed weight, it packed
+  new weights on the same backend, which by design refuses an address it released earlier. When
+  the heap reused the freed buffer, the test failed. The accuracy section now uses its own
+  backend.
+- `dynalm serve` logged the requested scheduler budgets, not the ones in effect, with
+  `--policy latency|throughput`.
+- Packages now include `THIRD_PARTY_LICENSES.md` with the cpp-httplib MIT license text, which
+  is compiled into `dynalm`.
+- `NOTICE` no longer describes GoogleTest as a current build dependency.
+
 ## [0.1.3] - 2026-10-09
 
 ### Performance: repacked multi-row decode (DD-081..082)

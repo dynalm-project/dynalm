@@ -5,9 +5,11 @@ This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 
 Third-party components (not stored in this repository; fetched at build time):
 - cpp-httplib v0.18.3 (MIT License), https://github.com/yhirose/cpp-httplib
-  Used by the HTTP server; the exact header is verified by SHA-256.
+  Used by the HTTP server; the exact header is verified by SHA-256. Its license text is in
+  THIRD_PARTY_LICENSES.md, installed next to this file.
 - GoogleTest v1.15.2 (BSD 3-Clause License), https://github.com/google/googletest
-  Used only to build the tests.
+  Used only to build the test suites of releases up to 0.1.2; the current build no longer
+  fetches it.
 
 Test data: dynalm/tests/data/granite31_chat_template.jinja is the chat template of IBM
 Granite 3.1 (Apache License 2.0). The tiny models under dynalm/tests/data are generated

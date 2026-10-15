@@ -276,7 +276,7 @@ Asks the running server to finish its current requests and exit.
 | `POST /v1/completions` | Plain text completion |
 | `GET /v1/models` | The served model |
 | `GET /health` | `200` when ready, `503` while draining |
-| `GET /metrics` | Prometheus metrics (requests, TTFT, inter-token latency, tokens) |
+| `GET /metrics` | Prometheus metrics (requests, TTFT, inter-token latency, tokens; matmul calls and rows per CPU kernel: `dynacore_matmul_calls_total{kernel=...}`, `dynacore_matmul_rows_total{kernel=...}`) |
 | `POST /admin/shutdown` | Graceful stop (loopback only; what `dynalm stop` calls) |
 
 ```sh

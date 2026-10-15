@@ -234,7 +234,7 @@ Results from 2026-10-10 on the i7-1255U (MSVC 19.44, Release). Two repetitions p
 
 Correction (2026-10-10): the int8 figures in this table were first reported from a misparsed CSV. The `numerics` label "int8 act, …" contains a comma, so those rows shifted one column and p10 was read as p50. The fp32 rows were unaffected. The values above are re-derived from the same raw files with comma-aware parsing, and the CSV writer now quotes text fields.
 
-Raw outputs: `D:\cpu-llama-snapshots\bench-dynakernel-q4k-*.txt|csv` and `bench-dk-*.txt|csv`.
+Raw outputs: `bench-dynakernel-q4k-*.txt|csv` and `bench-dk-*.txt|csv` from the development machine (kept locally, not distributed).
 
 **Conclusion:** the generated AVX2 kernel is a large step over the scalar kernel. It does not beat the existing hand-written fp32 paths, which are as fast or faster for every M, and it is far slower than the int8 paths. That gap is the activation-precision choice, not codegen.
 

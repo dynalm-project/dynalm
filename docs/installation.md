@@ -49,7 +49,7 @@ What the installers do:
 | `SHA256SUMS` | SHA-256 of every archive | |
 
 - **Layout:** `bin/dynalm`, `bin/dynacorec`, and `share/doc/dynalm/` (README, LICENSE,
-  NOTICE, CHANGELOG, docs).
+  NOTICE, THIRD_PARTY_LICENSES, CHANGELOG, docs).
 - **Self-contained:** the C/C++ runtime is linked statically, so no Visual C++
   redistributable and no libstdc++ version requirement.
 - **CPU tiers:** a CPU without AVX2 runs the generic kernels; nothing fails. `dynalm doctor`
@@ -107,6 +107,11 @@ Building, presets and tests: [build.md](build.md).
   - It also runs a DynaCore kernel self-test. `Status: Ready` means all of this checked out.
 - **Force the portable kernels:** `DYNACORE_ISA=generic dynalm ...`, to rule out a SIMD
   problem.
+- **Which matmul kernels run:** `DYNACORE_MATMUL_EXPLAIN=1 dynalm ...` logs each kernel choice
+  and why faster kernels were not eligible. `DYNACORE_MATMUL_DISABLE=all-accelerated` runs the
+  fp32 reference arithmetic. The `dynacore_matmul_calls_total` counters in `GET /metrics`
+  show the same per kernel. Details and the opt-in experimental CPU features:
+  [dynacore.md](dynacore.md#matmul-kernel-registry).
 - **Windows Smart App Control:** it can block executables that are not signed ("An
   Application Control policy has blocked this file"). Official signing is not in place yet.
 - **macOS:** archives downloaded with `curl` (as the installer does) are not quarantined. If
