@@ -78,8 +78,8 @@ Matmul build(int64_t m, int64_t n, int64_t k, bool bias, ActFormat act = ActForm
   return r;
 }
 
-Bindings bind(const Matmul& mm, const Weight& w, const std::vector<float>& x, int64_t ldx,
-              const std::vector<float>& bias, std::vector<float>& y, int64_t ldy, int64_t m) {
+Bindings bind_mm(const Matmul& mm, const Weight& w, const std::vector<float>& x, int64_t ldx,
+                 const std::vector<float>& bias, std::vector<float>& y, int64_t ldy, int64_t m) {
   Bindings bi;
   bi.bind(mm.x, view2(x.data(), DType::kF32, m, w.k, ldx), static_cast<int64_t>(x.size() * 4));
   bi.bind(mm.w, view2(w.blocks.data(), DType::kQ4_K, w.n, w.k));
@@ -128,7 +128,7 @@ void test_tier_rules() {
     return;
   }
   CHECK(be.runnable().code() == StatusCode::kUnsupported);
-  const Status s = be.run(mm.p, bind(mm, w, x, 1280, none, y, 24, 2));
+  const Status s = be.run(mm.p, bind_mm(mm, w, x, 1280, none, y, 24, 2));
   CHECK(s.code() == StatusCode::kUnsupported);
   CHECK(std::all_of(y.begin(), y.end(), [](float v) { return v == -4.0f; }));
   uint64_t calls = 0;
@@ -158,7 +158,7 @@ void test_execution_proof() {
   uint64_t others0 = 0;
   for (const GeneratedInt8Kernel& k : table()) others0 += &k == g ? 0 : k.calls();
   const uint64_t c0 = g->calls();
-  CHECK(be.run(mm.p, bind(mm, w, x, 1280, none, y, 24, 2)).ok());
+  CHECK(be.run(mm.p, bind_mm(mm, w, x, 1280, none, y, 24, 2)).ok());
   CHECK(g->calls() - c0 == 3);  // 3 groups of 8 rows, grain 1
   uint64_t others1 = 0;
   for (const GeneratedInt8Kernel& k : table()) others1 += &k == g ? 0 : k.calls();
@@ -172,7 +172,7 @@ void test_execution_proof() {
   GeneratedInt8Backend stubbed(pool, swapped);
   CHECK(stubbed.prepack_weight(wview(w)).ok());
   std::vector<float> ys(48, 0.0f);
-  CHECK(stubbed.run(mm.p, bind(mm, w, x, 1280, none, ys, 24, 2)).ok());
+  CHECK(stubbed.run(mm.p, bind_mm(mm, w, x, 1280, none, ys, 24, 2)).ok());
   CHECK(std::all_of(ys.begin(), ys.end(), [](float v) { return v == 777.0f; }));
   CHECK(be.target().backend == "generated-int8" && be.target().int8_dot);
   std::printf("  execution proof: %s ran 3 group chunks, no other kernel ran; a stubbed entry is what executes\n",
@@ -199,11 +199,11 @@ void test_accuracy_vs_reference() {
     const Matmul mm = build(s.m, s.n, s.k, s.bias);
     CHECK(gen.prepack_weight(wview(w)).ok());
     std::vector<float> yg(static_cast<size_t>(s.m * s.n));
-    CHECK(gen.run(mm.p, bind(mm, w, x, s.k, bias, yg, s.n, s.m)).ok());
+    CHECK(gen.run(mm.p, bind_mm(mm, w, x, s.k, bias, yg, s.n, s.m)).ok());
     q4kref::check_bound(w, x, s.k, bp, yg.data(), s.n, s.m, Path::kInt8Subscale, s_gen);
     // Reference auto contract: M = 1 per-32 (other activation format), M >= 2 sub-scaled rows.
     std::vector<float> yr(yg.size());
-    CHECK(ref.run(mm.p, bind(mm, w, x, s.k, bias, yr, s.n, s.m)).ok());
+    CHECK(ref.run(mm.p, bind_mm(mm, w, x, s.k, bias, yr, s.n, s.m)).ok());
     if (s.m == 1) {
       q4kref::check_bound(w, x, s.k, bp, yr.data(), s.n, s.m, Path::kInt8Per32, s_ref_per32);
     } else {
@@ -213,7 +213,7 @@ void test_accuracy_vs_reference() {
       // Reference packed sub-scaled (same codes, same layout, different kernel).
       CHECK(ref_pk.prepack_weight(wview(w)).ok());
       std::vector<float> yp(yg.size());
-      CHECK(ref_pk.run(mm.p, bind(mm, w, x, s.k, bias, yp, s.n, s.m)).ok());
+      CHECK(ref_pk.run(mm.p, bind_mm(mm, w, x, s.k, bias, yp, s.n, s.m)).ok());
       q4kref::check_bound(w, x, s.k, bp, yp.data(), s.n, s.m, Path::kInt8Subscale, s_ref_pk);
       same_pk += yg == yp;
       ++n_pk;
@@ -244,8 +244,8 @@ void test_strides_threads_bias() {
   ThreadPool p1(1), p4(4);
   GeneratedInt8Backend b1(p1, table()), b4(p4, table());
   CHECK(b1.prepack_weight(wview(w)).ok() && b4.prepack_weight(wview(w)).ok());
-  CHECK(b1.run(mm.p, bind(mm, w, x, ldx, bias, y1, ldy, m)).ok());
-  CHECK(b4.run(mm.p, bind(mm, w, x, ldx, bias, y4, ldy, m)).ok());
+  CHECK(b1.run(mm.p, bind_mm(mm, w, x, ldx, bias, y1, ldy, m)).ok());
+  CHECK(b4.run(mm.p, bind_mm(mm, w, x, ldx, bias, y4, ldy, m)).ok());
   CHECK(y1 == y4);
   for (int64_t i = 0; i < m; ++i) {
     for (int64_t j = 24; j < ldy; ++j) CHECK(y1[static_cast<size_t>(i * ldy + j)] == -7.0f);
@@ -276,7 +276,7 @@ void test_rejections_and_packing() {
   }
   const Matmul mm = build(2, 24, 1280, false);
   // Not prepacked: refused, nothing written.
-  Status s = be.run(mm.p, bind(mm, w, x, 1280, none, y, 24, 2));
+  Status s = be.run(mm.p, bind_mm(mm, w, x, 1280, none, y, 24, 2));
   CHECK(s.code() == StatusCode::kInvalidArgument && s.message().find("not prepacked") != std::string::npos && untouched());
   // Prepack validation.
   const Weight odd = q4kref::make_weight(12, 256, 302);
@@ -287,20 +287,20 @@ void test_rejections_and_packing() {
   CHECK(be.prepack_weight(TensorView()).status().code() == StatusCode::kInvalidArgument);
   CHECK(be.prepack_weight(wview(w), 24 * 5 * 144).ok());
   CHECK(be.prepack_weight(view2(w.blocks.data(), DType::kQ4_K, 8, 1280 * 3)).status().code() == StatusCode::kInvalidArgument);
-  CHECK(be.run(mm.p, bind(mm, w, x, 1280, none, y, 24, 2)).ok() && !untouched());
+  CHECK(be.run(mm.p, bind_mm(mm, w, x, 1280, none, y, 24, 2)).ok() && !untouched());
   // Stale source: refused; restoring the bytes makes it valid again.
   Weight& mw = const_cast<Weight&>(w);
   const uint8_t saved = mw.blocks[3].qs[7];
   mw.blocks[3].qs[7] ^= 0x5A;
   std::fill(y.begin(), y.end(), -1.0f);
-  s = be.run(mm.p, bind(mm, w, x, 1280, none, y, 24, 2));
+  s = be.run(mm.p, bind_mm(mm, w, x, 1280, none, y, 24, 2));
   CHECK(s.message().find("changed since prepack_weight") != std::string::npos && untouched());
   mw.blocks[3].qs[7] = saved;
-  CHECK(be.run(mm.p, bind(mm, w, x, 1280, none, y, 24, 2)).ok());
+  CHECK(be.run(mm.p, bind_mm(mm, w, x, 1280, none, y, 24, 2)).ok());
   // Released: the copy is gone; the weight must be packed again.
   CHECK(be.release_packed(w.blocks.data()) && be.packed_count() == 0 && !be.release_packed(w.blocks.data()));
   std::fill(y.begin(), y.end(), -1.0f);
-  CHECK(be.run(mm.p, bind(mm, w, x, 1280, none, y, 24, 2)).message().find("not prepacked") != std::string::npos &&
+  CHECK(be.run(mm.p, bind_mm(mm, w, x, 1280, none, y, 24, 2)).message().find("not prepacked") != std::string::npos &&
         untouched());
   CHECK(be.prepack_weight(wview(w)).ok());  // owned copies: a released address can be packed again
   std::printf("  rejections and packing: f32 contract, M 9, N 33, missing shape, q6_K, unpacked, stale, released; "

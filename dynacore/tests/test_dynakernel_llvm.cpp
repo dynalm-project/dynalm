@@ -106,8 +106,8 @@ Matmul build(int64_t m, int64_t n, int64_t k, bool bias, ActFormat act = ActForm
   return r;
 }
 
-Bindings bind(const Matmul& mm, const Weight& w, const std::vector<float>& x, int64_t ldx,
-              const std::vector<float>& bias, std::vector<float>& y, int64_t ldy, int64_t m) {
+Bindings bind_mm(const Matmul& mm, const Weight& w, const std::vector<float>& x, int64_t ldx,
+                 const std::vector<float>& bias, std::vector<float>& y, int64_t ldy, int64_t m) {
   Bindings bi;
   bi.bind(mm.x, view2(x.data(), DType::kF32, m, w.k, ldx), static_cast<int64_t>(x.size() * 4));
   bi.bind(mm.w, view2(w.blocks.data(), DType::kQ4_K, w.n, w.k));
@@ -186,11 +186,11 @@ void test_fallback() {
     if (r.ok()) continue;
     std::vector<float> y(48, -4.0f), none;
     CHECK(be.check(mm.p).code() == StatusCode::kUnsupported);
-    CHECK(be.run(mm.p, bind(mm, w, x, 1280, none, y, 24, 2)).code() == StatusCode::kUnsupported);
+    CHECK(be.run(mm.p, bind_mm(mm, w, x, 1280, none, y, 24, 2)).code() == StatusCode::kUnsupported);
     CHECK(std::all_of(y.begin(), y.end(), [](float v) { return v == -4.0f; }));
     CHECK(be.compiled().empty());
     ReferenceBackend ref(pool, this_isa());
-    CHECK(ref.run(mm.p, bind(mm, w, x, 1280, none, y, 24, 2)).ok());
+    CHECK(ref.run(mm.p, bind_mm(mm, w, x, 1280, none, y, 24, 2)).ok());
     Stats st;
     q4kref::check_bound(w, x, 1280, nullptr, y.data(), 24, 2, this_isa() == CpuIsa::kAvx2 ? Path::kInt8Subscale : Path::kFp32,
                         st);
@@ -312,8 +312,8 @@ void test_exactness() {
       const Matmul mm = build(s.m, s.n, s.k, s.bias);
       CHECK(gen.prepack_weight(wview(w)).ok() && be.prepack_weight(wview(w)).ok());
       std::vector<float> yg(static_cast<size_t>(s.m * s.n)), yl(yg.size(), std::nanf(""));
-      CHECK(gen.run(mm.p, bind(mm, w, x, s.k, bias, yg, s.n, s.m)).ok());
-      CHECK(be.run(mm.p, bind(mm, w, x, s.k, bias, yl, s.n, s.m)).ok());
+      CHECK(gen.run(mm.p, bind_mm(mm, w, x, s.k, bias, yg, s.n, s.m)).ok());
+      CHECK(be.run(mm.p, bind_mm(mm, w, x, s.k, bias, yl, s.n, s.m)).ok());
       q4kref::check_bound(w, x, s.k, s.bias ? bias.data() : nullptr, yl.data(), s.n, s.m, Path::kInt8Subscale, st);
       CHECK(std::memcmp(yg.data(), yl.data(), yg.size() * sizeof(float)) == 0);
       same += 1;
@@ -389,19 +389,19 @@ void test_contract() {
   const Matmul mm = build(2, 24, 1280, false);
   CHECK(be.prepare(mm.p).ok() && be.compiled().size() == 1 && be.prepare(mm.p).ok() && be.compiled().size() == 1);
   // Not prepacked: refused, nothing written.
-  Status s = be.run(mm.p, bind(mm, w, x, 1280, none, y, 24, 2));
+  Status s = be.run(mm.p, bind_mm(mm, w, x, 1280, none, y, 24, 2));
   CHECK(s.code() == StatusCode::kInvalidArgument && contains(s.message(), "not prepacked") && untouched());
   CHECK(be.prepack_weight(wview(w)).ok());
   const GeneratedInt8Kernel* g = be.find(mm.p.ops()[0]);
   CHECK(g != nullptr && std::string(g->symbol) == "dk_llvm_q4k_sx8_avx2_m2_n24_k1280_b0");
   const uint64_t c0 = g->calls();
-  CHECK(be.run(mm.p, bind(mm, w, x, 1280, none, y, 24, 2)).ok() && !untouched());
+  CHECK(be.run(mm.p, bind_mm(mm, w, x, 1280, none, y, 24, 2)).ok() && !untouched());
   CHECK(g->calls() - c0 == 3);  // 3 groups of 8 rows, grain 1: counted by the native code
   // Stale source: refused.
   Weight& mw = const_cast<Weight&>(w);
   mw.blocks[2].qs[5] ^= 0x33;
   std::fill(y.begin(), y.end(), -1.0f);
-  CHECK(contains(be.run(mm.p, bind(mm, w, x, 1280, none, y, 24, 2)).message(), "changed since prepack_weight") && untouched());
+  CHECK(contains(be.run(mm.p, bind_mm(mm, w, x, 1280, none, y, 24, 2)).message(), "changed since prepack_weight") && untouched());
   mw.blocks[2].qs[5] ^= 0x33;
   CHECK(be.target().backend == "llvm-int8" && be.target().isa == "avx2" && be.target().int8_dot);
   // Compiled shape, run() fast path (no prepare): the executor still enforces
@@ -409,11 +409,11 @@ void test_contract() {
   std::fill(y.begin(), y.end(), -1.0f);
   const Matmul mf = build(2, 24, 1280, false, ActFormat::kF32);
   CHECK(be.find(mf.p.ops()[0]) != nullptr);
-  CHECK(be.run(mf.p, bind(mf, w, x, 1280, none, y, 24, 2)).code() == StatusCode::kUnsupported && untouched());
+  CHECK(be.run(mf.p, bind_mm(mf, w, x, 1280, none, y, 24, 2)).code() == StatusCode::kUnsupported && untouched());
   {
     Program bad = mm.p;
     bad.add_value(Value{kNoValue, "dangling", ValueRole::kResult, *TensorLayout::contiguous(DType::kF32, TensorShape{2, 24})});
-    CHECK(be.run(bad, bind(mm, w, x, 1280, none, y, 24, 2)).code() != StatusCode::kOk && untouched());
+    CHECK(be.run(bad, bind_mm(mm, w, x, 1280, none, y, 24, 2)).code() != StatusCode::kOk && untouched());
   }
   // Strided x / y, bias, explicit int8 contract; 1 and 4 threads identical.
   const int64_t m = 5, ldx = 1300, ldy = 40;
@@ -425,7 +425,7 @@ void test_contract() {
   ThreadPool p1(1), p4(4);
   LlvmInt8Backend b1(p1), b4(p4);
   CHECK(b1.prepack_weight(wview(w)).ok() && b4.prepack_weight(wview(w)).ok());
-  CHECK(b1.run(ms.p, bind(ms, w, xs, ldx, bias, y1, ldy, m)).ok() && b4.run(ms.p, bind(ms, w, xs, ldx, bias, y4, ldy, m)).ok());
+  CHECK(b1.run(ms.p, bind_mm(ms, w, xs, ldx, bias, y1, ldy, m)).ok() && b4.run(ms.p, bind_mm(ms, w, xs, ldx, bias, y4, ldy, m)).ok());
   CHECK(y1 == y4);
   for (int64_t i = 0; i < m; ++i) {
     for (int64_t j = 24; j < ldy; ++j) CHECK(y1[static_cast<size_t>(i * ldy + j)] == -7.0f);
@@ -459,9 +459,9 @@ void test_lifetime() {
   auto cycle = [&](std::vector<float>& y) {
     LlvmInt8Backend be(pool);
     CHECK(be.prepack_weight(wview(w)).ok());
-    CHECK(be.run(a.p, bind(a, w, x, 768, none, y, 16, 4)).ok());
+    CHECK(be.run(a.p, bind_mm(a, w, x, 768, none, y, 16, 4)).ok());
     std::vector<float> y1(16);
-    CHECK(be.run(b.p, bind(b, w, x, 768, none, y1, 16, 1)).ok());
+    CHECK(be.run(b.p, bind_mm(b, w, x, 768, none, y1, 16, 1)).ok());
     CHECK(be.compiled().size() == 2 && LlvmJit::live_instances() == live0 + 1);
   };
   cycle(ref);  // warm-up: LLVM's one-time allocations
@@ -506,7 +506,7 @@ void test_parallel_quant() {
       LlvmInt8Backend be(pool);
       CHECK(be.prepack_weight(wview(w)).ok());
       RunOptions serial;
-      CHECK(be.run(mm.p, bind(mm, w, x, sh.ldx, bias, y_serial, sh.n, sh.m), serial).ok());
+      CHECK(be.run(mm.p, bind_mm(mm, w, x, sh.ldx, bias, y_serial, sh.n, sh.m), serial).ok());
       Stats st;
       q4kref::check_bound(w, x, sh.ldx, sh.bias ? bias.data() : nullptr, y_serial.data(), sh.n, sh.m, Path::kInt8Subscale, st);
       GeneratedInt8Backend gen(pool, gen_table());
@@ -519,11 +519,11 @@ void test_parallel_quant() {
         const uint64_t misuse0 = pool.misuse_count();
         for (int rep = 0; rep < 5; ++rep) {
           std::vector<float> y(y_serial.size(), std::nanf(""));
-          CHECK(be.run(mm.p, bind(mm, w, x, sh.ldx, bias, y, sh.n, sh.m), par).ok());
+          CHECK(be.run(mm.p, bind_mm(mm, w, x, sh.ldx, bias, y, sh.n, sh.m), par).ok());
           CHECK(std::memcmp(y.data(), y_serial.data(), y.size() * sizeof(float)) == 0);
           if (has_gen) {
             std::vector<float> yg(y_serial.size(), std::nanf(""));
-            CHECK(gen.run(mm.p, bind(mm, w, x, sh.ldx, bias, yg, sh.n, sh.m), par).ok());
+            CHECK(gen.run(mm.p, bind_mm(mm, w, x, sh.ldx, bias, yg, sh.n, sh.m), par).ok());
             CHECK(std::memcmp(yg.data(), y_serial.data(), yg.size() * sizeof(float)) == 0);
           }
           ++cases;
@@ -550,7 +550,7 @@ void test_concurrent_callers() {
   {
     ThreadPool pool(1);
     LlvmInt8Backend be(pool);
-    CHECK(be.prepack_weight(wview(w)).ok() && be.run(mm.p, bind(mm, w, x, 2304, none, y_ref, 64, 8)).ok());
+    CHECK(be.prepack_weight(wview(w)).ok() && be.run(mm.p, bind_mm(mm, w, x, 2304, none, y_ref, 64, 8)).ok());
   }
   RunOptions par;
   par.experimental_parallel_quant = true;
@@ -566,7 +566,7 @@ void test_concurrent_callers() {
         if (!be.prepack_weight(wview(w)).ok()) ++bad[static_cast<size_t>(t)];
         for (int i = 0; i < kIters; ++i) {
           std::vector<float> y(y_ref.size());
-          const Status s = be.run(mm.p, bind(mm, w, x, 2304, none, y, 64, 8), par);
+          const Status s = be.run(mm.p, bind_mm(mm, w, x, 2304, none, y, 64, 8), par);
           if (!s.ok() || y != y_ref) ++bad[static_cast<size_t>(t)];
         }
       });
@@ -584,7 +584,7 @@ void test_concurrent_callers() {
     auto caller = [&](LlvmInt8Backend& be, int id) {
       for (int i = 0; i < kIters; ++i) {
         std::vector<float> y(y_ref.size());
-        const Status s = be.run(mm.p, bind(mm, w, x, 2304, none, y, 64, 8), par);
+        const Status s = be.run(mm.p, bind_mm(mm, w, x, 2304, none, y, 64, 8), par);
         if (s.ok()) ++ok[static_cast<size_t>(id)];
         else if (s.code() == StatusCode::kInternal && contains(s.message(), "thread pool contract")) ++rep[static_cast<size_t>(id)];
         else ++wrong[static_cast<size_t>(id)];
@@ -762,14 +762,14 @@ void test_layout_exactness() {
       std::vector<float> bias(static_cast<size_t>(sp.n), -0.75f);
       const Matmul mm = build(sp.m, sp.n, sp.k, sp.bias);
       std::vector<float> y0(static_cast<size_t>(sp.m * sp.n));
-      CHECK(base.prepack_weight(wview(w)).ok() && base.run(mm.p, bind(mm, w, x, sp.k, bias, y0, sp.n, sp.m)).ok());
+      CHECK(base.prepack_weight(wview(w)).ok() && base.run(mm.p, bind_mm(mm, w, x, sp.k, bias, y0, sp.n, sp.m)).ok());
       Stats st;
       q4kref::check_bound(w, x, sp.k, sp.bias ? bias.data() : nullptr, y0.data(), sp.n, sp.m, Path::kInt8Subscale, st);
       for (auto& be : lay) {
         std::vector<float> y(y0.size(), std::nanf(""));
         auto pw = be->prepack_weight(wview(w));
         CHECK(pw.ok() && pw->packed_bytes == (sp.n / 8) * (sp.k / 256) * packed_layout_info(be->options().layout).block_bytes);
-        CHECK(be->run(mm.p, bind(mm, w, x, sp.k, bias, y, sp.n, sp.m)).ok());
+        CHECK(be->run(mm.p, bind_mm(mm, w, x, sp.k, bias, y, sp.n, sp.m)).ok());
         CHECK(std::memcmp(y.data(), y0.data(), y.size() * sizeof(float)) == 0);
         ++cases;
       }
@@ -799,11 +799,11 @@ void test_layout_rules() {
   const std::vector<float> x = q4kref::make_x(3, 1280, 1280, 4101);
   std::vector<float> bias(24, 1.0f), y(72, -1.0f);
   const Matmul mm = build(3, 24, 1280, true);
-  CHECK(be.prepack_weight(wview(w)).ok() && be.run(mm.p, bind(mm, w, x, 1280, bias, y, 24, 3)).ok());
+  CHECK(be.prepack_weight(wview(w)).ok() && be.run(mm.p, bind_mm(mm, w, x, 1280, bias, y, 24, 3)).ok());
   Weight& mw = const_cast<Weight&>(w);
   mw.blocks[1].scales[3] ^= 0x41;
   std::fill(y.begin(), y.end(), -1.0f);
-  CHECK(contains(be.run(mm.p, bind(mm, w, x, 1280, bias, y, 24, 3)).message(), "changed since prepack_weight"));
+  CHECK(contains(be.run(mm.p, bind_mm(mm, w, x, 1280, bias, y, 24, 3)).message(), "changed since prepack_weight"));
   CHECK(std::all_of(y.begin(), y.end(), [](float v) { return v == -1.0f; }));
   mw.blocks[1].scales[3] ^= 0x41;
   CHECK(be.release_packed(w.blocks.data()) && be.packed_count() == 0);
