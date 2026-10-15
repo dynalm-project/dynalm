@@ -24,7 +24,7 @@ using namespace dynacore;
 
 namespace {
 
-int g_checks = 0;
+std::atomic<int> g_checks{0};  // CHECK runs on worker threads too
 
 #define CHECK(cond)                                                                    \
   do {                                                                                 \
@@ -189,6 +189,6 @@ int main() {
   test_reentrant();
   test_concurrent();
   test_backend_reports_shared_pool();
-  std::printf("all thread pool tests passed (%d checks)\n", g_checks);
+  std::printf("all thread pool tests passed (%d checks)\n", g_checks.load());
   return 0;
 }
