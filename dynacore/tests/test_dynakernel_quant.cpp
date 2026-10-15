@@ -778,6 +778,10 @@ void test_packed_kernel() {
   }
   // Accuracy over shapes and edge blocks, vs the independent reference; and
   // against the unpacked sub-scaled kernel (another summation order).
+  // A fresh backend: `be` refuses to pack an address it released above, and
+  // the heap may hand that freed buffer to one of the weights below.
+  ThreadPool pool_acc(4);
+  ReferenceBackend acc(pool_acc, this_isa());
   Stats packed, unpacked;
   int identical = 0, cases = 0;
   ThreadPool pool2(4);
@@ -788,12 +792,12 @@ void test_packed_kernel() {
     for (int64_t n : {8, 24, 64}) {
       keep.push_back(std::make_unique<QWeight>(make_weight(DType::kQ4_K, n, k, seed++)));
       QWeight& w = *keep.back();
-      const auto packed_w = be.prepack_weight(view2(w.data(), DType::kQ4_K, n, k));
+      const auto packed_w = acc.prepack_weight(view2(w.data(), DType::kQ4_K, n, k));
       if (!packed_w.ok()) std::fprintf(stderr, "%s\n", packed_w.status().to_string().c_str());
       CHECK(packed_w.ok());
       for (int64_t m : {2, 3, 4, 5, 8}) {
         const std::vector<float> x = make_x(m, k, seed++);
-        const std::vector<float> yp = run_packed(be, w, x, m), yu = run_packed(plain, w, x, m);
+        const std::vector<float> yp = run_packed(acc, w, x, m), yu = run_packed(plain, w, x, m);
         check_case(w, x, yp, m, Path::kInt8SubscalePacked, packed);
         check_case(w, x, yu, m, Path::kInt8Subscale, unpacked);
         identical += yp == yu;
@@ -812,7 +816,7 @@ void test_packed_kernel() {
           bi.bind(vw, view2(w.data(), DType::kQ4_K, n, k));
           bi.bind(y1, view2(o1.data(), DType::kF32, m, n));
           bi.bind(y2, view2(o2.data(), DType::kF32, m, n));
-          CHECK(be.run(*p, bi, RunOptions{.group_independent = true}).ok());
+          CHECK(acc.run(*p, bi, RunOptions{.group_independent = true}).ok());
           CHECK(o1 == yp && o2 == yp);
         }
       }
@@ -825,7 +829,7 @@ void test_packed_kernel() {
               unpacked.max_rel, unpacked.max_ratio);
   std::printf("  packed vs unpacked sub-scaled: bit-identical in %d/%d cases; grouped packed == single packed\n",
               identical, cases);
-  for (const auto& w : keep) CHECK(be.release_packed(w->data()));
+  for (const auto& w : keep) CHECK(acc.release_packed(w->data()));
   // Defaults untouched: a device that was never asked to prepack has no copies.
   CpuDevice other(pool2, this_isa());
   CHECK(other.prepack_stats().tensors == 0 && plain.packed_weights().empty());
