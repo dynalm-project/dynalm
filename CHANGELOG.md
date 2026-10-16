@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Removed
+- Internal benchmark campaign scripts: `tools/next_sweep*.ps1`, `tools/phase8_sweep.ps1`,
+  `tools/phase9_sweep.ps1`, `tools/pk8_validation.ps1`, `tools/pk8_analyze.py`,
+  `tools/e2e_engines.ps1` and `tools/e2e_engines_analyze.py`. `docs/benchmarking.md` now
+  describes paired runs with `dynalm benchmark` and `tools/bench_analyze.py` directly.
+- Unused fixture generators for the test suites removed in 0.1.3 (`tools/make_tiny_*.py`,
+  `tools/gen_tokenizer_golden.py`) and the dev-container helper (`tools/linux.sh`,
+  `tools/docker/Dockerfile.dev`).
+
 ## [0.1.4] - 2026-10-15
 
 Default behaviour is unchanged from 0.1.3: with no new environment variables set, the same

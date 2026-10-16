@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Paired A/B analysis of `dynalm benchmark` runs (the runs of tools/next_sweep.ps1).
+"""Paired A/B analysis of `dynalm benchmark` runs.
 
   python tools/bench_analyze.py <plan.json> <raw dir> [--out DIR]
 
 Inputs
 - <raw dir>/runs.jsonl: one record per run (id, exit_code, quiet, exe_sha256,
-  env), written by tools/next_sweep.ps1;
+  env), one per benchmark process;
 - <raw dir>/<run id>.jsonl: the benchmark's JSON lines, one per point
   (concurrency x prompt x output);
 - <raw dir>/<run id>.requests.jsonl: per-request log (optional but checked

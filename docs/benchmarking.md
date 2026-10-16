@@ -5,7 +5,7 @@ model they ran.
 
 | question | tool |
 |---|---|
-| Is build / setting B faster than A on this machine? (paired A/B) | `tools/next_sweep.ps1` (runs) + `tools/bench_analyze.py` (analysis) |
+| Is build / setting B faster than A on this machine? (paired A/B) | `dynalm benchmark` (runs) + `tools/bench_analyze.py` (analysis) |
 | How does DynaLM compare with llama.cpp / Ollama? | `tools/compare_engines.ps1` (wraps `tools/compare_engines.py`) |
 
 Both drive the same load generator, `dynalm benchmark`. In-process for A/B runs; over
@@ -18,24 +18,21 @@ kernels ran).
 
 1. **Write the plan first:** arms, workloads, and the gates in a JSON file (format: the
    docstring of `tools/bench_analyze.py`).
-2. **Run each measurement session separately.** Example (stage R2, the 0.1.4 release
-   campaign):
+2. **Run each measurement session separately.** Run `dynalm benchmark` once per arm and round,
+   alternating the arm order between sessions:
 
-   ```powershell
-   $env:DYNALM_BASE_EXE = "C:\path\to\reference\dynalm.exe"
-   $env:DYNALM_CAND_EXE = "C:\path\to\candidate\dynalm.exe"
-   pwsh -NoProfile -Command "& 'tools\next_sweep.ps1' -Stage R2 -Session 1 -Out results\my-campaign\raw -Resume"
+   ```sh
+   dynalm benchmark <model> --concurrency 4 --prompt 512 --output 128 \
+     --out results/my-campaign/raw/<workload>-s1r1-<arm>.jsonl \
+     --request-log results/my-campaign/raw/<workload>-s1r1-<arm>.requests.jsonl
    ```
 
-   - **Before every run, the runner waits for:**
-     - at least 6 GB of free RAM;
-     - no other dynalm, llama.cpp, Ollama, benchmark or test process. It never stops one.
-   - It then idles for 60 s and requires total CPU below 10% for 5 s.
-   - **Recorded per run** in `runs.jsonl`:
-     - executable path and SHA-256, model SHA-256;
-     - git HEAD and dirty-path count;
-     - free RAM, the busiest background processes, power plan and source.
-   - Arm order rotates with the session number.
+   - Add one record per run to `results/my-campaign/raw/runs.jsonl` (id, exit code, quiet
+     check, executable SHA-256, environment; the format is in the `tools/bench_analyze.py`
+     docstring).
+   - Before every run, close other engines, benchmarks and tests, and keep the power source
+     and plan constant.
+
 3. **Analyze:**
 
    ```sh
@@ -97,9 +94,3 @@ powershell -ExecutionPolicy Bypass -File tools\compare_engines.ps1 -DynalmExe C:
 |---|---|
 | `python tools/test_compare_engines.py` | comparability marking, ranking, executable selection, no appending to old results |
 | `python tools/test_bench_analyze.py` | unit counts, invalid runs (exit code, wrong executable, early end, errors), missing metrics, unreliable references, the three gate rules, bootstrap intervals |
-
-## Older scripts
-
-`tools/phase8_sweep.ps1`, `tools/phase9_sweep.ps1`, `tools/pk8_validation.ps1`,
-`tools/e2e_engines.ps1` and their analyzers reproduce the measurements of earlier internal
-phases. They are kept for reproducibility, not for new measurements.
