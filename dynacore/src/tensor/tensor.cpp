@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <limits>
 #include <utility>
 
 namespace dynacore {
@@ -87,6 +88,12 @@ Result<TensorLayout> TensorLayout::contiguous(DType dtype, const TensorShape& sh
   int64_t stride = row;
   for (int i = r - 2; i >= 0; --i) {
     l.strides[i] = stride;
+    // Overflow-checked: shapes come from untrusted files (a zero dimension
+    // elsewhere can make the element count 0 while other dims are huge).
+    // Portable (MSVC has no __builtin_mul_overflow); dims are >= 0 here.
+    if (shape[i] != 0 && stride > std::numeric_limits<int64_t>::max() / shape[i]) {
+      return InvalidArgument("tensor shape " + shape.to_string() + " is too large");
+    }
     stride *= shape[i];
   }
   return l;

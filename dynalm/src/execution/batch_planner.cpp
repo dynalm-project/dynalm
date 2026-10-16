@@ -44,6 +44,11 @@ ExecutionPlan BatchPlanner::plan(std::span<const SeqBatch> seqs) const {
   shape.sliding_window = sliding_window_;
   shape.has_window_layers = has_window_layers_;
   p.kernels = plan_kernels(shape, hw_, base_);
+  // Wide decode (KernelPlan::decode_wide_max_rows, opt-in): decode-only steps
+  // of 9..N rows keep the row-independent int8 / int16 decode kernels.
+  if (p.phase == StepPhase::kDecode && base_.decode_wide_max_rows > 0 && p.rows <= base_.decode_wide_max_rows) {
+    p.kernels.int8_superblock_max_rows = std::max(p.kernels.int8_superblock_max_rows, base_.decode_wide_max_rows);
+  }
   return p;
 }
 

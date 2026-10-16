@@ -2,13 +2,19 @@
 //
 // 8 requests are decoding when a 2048-token prompt arrives. Measures the
 // decoders' inter-token latency while the long prompt is prefilled, and the
-// long request's TTFT, for different prefill budgets / chunk caps.
+// long request's TTFT, for different prefill budgets / chunk caps, and with
+// the experimental solo-prefill chunk (SchedulerConfig::solo_prefill_chunk),
+// which must change nothing here: every step of the window has decode rows.
 //
 // Usage: bench_long_prompt <model.gguf> [threads]
+//   BENCH_LONG_CONFIGS=default,solo-fifo runs only the listed rows, in that order.
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <map>
+#include <string>
+#include <vector>
 
 #include "dynacore/cpu/cpu_device.h"
 #include "bench_harness.h"
@@ -35,16 +41,52 @@ int main(int argc, char** argv) {
   if (!kv.ok() || !tf.ok()) return 1;
 
   std::printf("model: %s  threads %d  long prompt %d  decoders %d\n\n", argv[1], threads, kLong, kDecoders);
-  std::printf("%-22s | %9s %9s %9s | %11s\n", "config", "ITL p50", "ITL p90", "ITL p99", "long TTFT s");
   struct Cfg {
+    const char* key;  // for BENCH_LONG_CONFIGS
     const char* name;
     int32_t budget, chunk;
+    int32_t solo = 0;
+    bool split = false;
   };
-  for (const Cfg& cfg : {Cfg{"unchunked (2048)", kLong, 0}, Cfg{"budget 256 chunk 256", 256, 256},
-                         Cfg{"budget 64 chunk 64", 64, 64}, Cfg{"budget 32 chunk 32", 32, 32}}) {
+  const std::vector<Cfg> all = {Cfg{"unchunked", "unchunked (2048)", kLong, 0},
+                                Cfg{"b256", "budget 256 chunk 256", 256, 256},
+                                Cfg{"b64c64", "budget 64 chunk 64", 64, 64},
+                                Cfg{"b32c32", "budget 32 chunk 32", 32, 32},
+                                Cfg{"default", "budget 64 chunk 32 (default)", 64, 32},
+                                Cfg{"solo-fifo", "default + solo 128 (FIFO)", 64, 32, 128, false},
+                                Cfg{"solo-split", "default + solo 128 (split)", 64, 32, 128, true}};
+  // BENCH_LONG_CONFIGS=key,key,... runs only those rows, in that order (default: all, as listed).
+  std::vector<Cfg> cfgs;
+  if (const char* sel = std::getenv("BENCH_LONG_CONFIGS")) {
+    std::string s(sel);
+    for (size_t pos = 0; pos <= s.size();) {
+      const size_t end = std::min(s.find(',', pos), s.size());
+      const std::string key = s.substr(pos, end - pos);
+      bool found = false;
+      for (const Cfg& cand : all) {
+        if (key == cand.key) {
+          cfgs.push_back(cand);
+          found = true;
+        }
+      }
+      if (!found) {
+        std::fprintf(stderr, "BENCH_LONG_CONFIGS: unknown config '%s' (unchunked, b256, b64c64, b32c32, default, solo-fifo, solo-split)\n",
+                     key.c_str());
+        return 2;
+      }
+      pos = end + 1;
+    }
+    std::printf("configs (BENCH_LONG_CONFIGS): %s\n\n", sel);
+  } else {
+    cfgs = all;
+  }
+  std::printf("%-30s | %9s %9s %9s %9s | %11s | %7s\n", "config", "ITL p50", "ITL p90", "ITL p99", "ITL max", "long TTFT s",
+              "ITL n");
+  for (const Cfg& cfg : cfgs) {
     Scheduler sched(**tf, **kv, *(*m)->tokenizer,
                     SchedulerConfig{.decode_token_budget = 64, .prefill_token_budget = cfg.budget, .max_running = 16,
-                                    .max_prefill_chunk = cfg.chunk});
+                                    .max_prefill_chunk = cfg.chunk, .solo_prefill_chunk = cfg.solo,
+                                    .solo_prefill_split = cfg.split});
     std::map<uint64_t, int64_t> last;
     std::vector<double> itl;
     bool long_started = false, long_done = false;
@@ -80,8 +122,8 @@ int main(int argc, char** argv) {
     while (!long_done) sched.step();
     (void)long_id;
     const auto st = bench::summarize(itl);
-    std::printf("%-22s | %9.1f %9.1f %9.1f | %11.2f\n", cfg.name, st.p50, st.p90, st.p99,
-                static_cast<double>(long_first - long_submit) * 1e-9);
+    std::printf("%-30s | %9.1f %9.1f %9.1f %9.1f | %11.2f | %7zu\n", cfg.name, st.p50, st.p90, st.p99, st.max,
+                static_cast<double>(long_first - long_submit) * 1e-9, st.samples);
     // Drain the remaining decoders (they cancel to keep the run short).
   }
   return 0;

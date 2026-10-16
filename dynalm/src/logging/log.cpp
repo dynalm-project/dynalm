@@ -49,8 +49,21 @@ void write(Level level, std::string_view msg) {
 #else
   localtime_r(&t, &tm);
 #endif
+  // Messages can carry strings from untrusted files (tensor names, model
+  // metadata): control characters are escaped so they cannot drive the
+  // terminal or forge log lines (docs/security.md).
+  std::string clean;
+  clean.reserve(msg.size());
+  for (const char ch : msg) {
+    const auto u = static_cast<unsigned char>(ch);
+    if ((u < 0x20 && u != '\t') || u == 0x7f) {
+      clean += std::format("\\x{:02x}", u);
+    } else {
+      clean += ch;
+    }
+  }
   std::string line = std::format("{:02}:{:02}:{:02}.{:03} [{}] {}\n", tm.tm_hour, tm.tm_min,
-                                 tm.tm_sec, ms, level_name(level), msg);
+                                 tm.tm_sec, ms, level_name(level), clean);
   // One fwrite per line; the mutex also keeps ordering sane across threads.
   static std::mutex mu;
   std::lock_guard<std::mutex> lock(mu);

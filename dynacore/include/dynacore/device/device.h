@@ -26,6 +26,8 @@
 
 namespace dynacore {
 
+class SegmentExecutor;  // dynacore/device/segment.h
+
 // Rows of a batch may belong to different sequences: row r reads/writes the
 // KV of sequence row_seq[r] through kv[row_seq[r]].
 struct AttentionParams {
@@ -87,6 +89,33 @@ class Device {
   virtual PrepackStats prepack_stats() const { return {}; }
   // Independent workers kernels can use (CPU: thread-pool size).
   virtual int32_t parallelism() const { return 1; }
+
+  // KV pool layout (dynacore/attention/paged_kv.h). CPU kernels address the
+  // head-major layout; a GPU device prefers slot-major, which its attention
+  // reads in place. The KV pool is created with the preferred layout and
+  // refused if the device cannot run it.
+  virtual KvLayout preferred_kv_layout() const { return KvLayout::kHeadMajor; }
+  virtual bool supports_kv_layout(KvLayout layout) const { return layout == KvLayout::kHeadMajor; }
+
+  // Whole-segment execution (docs/gpu-backend.md): non-null for devices that
+  // run a recorded step as one unit (dynacore/device/segment.h). Such devices
+  // are driven through a RecordingDevice, never op by op.
+  virtual SegmentExecutor* segment_executor() { return nullptr; }
+  // The first error of an op that cannot return one (the void ops, deferred
+  // execution) since the last call; reading it clears it. Callers check it
+  // after a step's sync point. Devices whose ops cannot fail return Ok.
+  virtual Status take_error() { return Status::Ok(); }
+  // Device memory held by this backend (0 where it is ordinary host memory
+  // the caller already accounts for).
+  struct MemoryStats {
+    int64_t weight_bytes = 0;     // uploaded weights and constant vectors
+    int64_t buffer_bytes = 0;     // allocate(): KV pool, activation scratch
+    int64_t workspace_bytes = 0;  // backend graph workspaces and inputs
+    // Device memory still free, for devices with their own memory (discrete
+    // GPUs); -1 where the device uses host memory (CPU, Metal).
+    int64_t free_bytes = -1;
+  };
+  virtual MemoryStats memory_stats() const { return {}; }
 
   // Whether matmul/embedding accept this weight dtype.
   virtual bool supports_weight_type(DType type) const = 0;

@@ -78,6 +78,42 @@ enum class SchedulerPolicy : uint8_t {
   kThroughputFirst,  // large prompt budget (128): fast admission, burstier streams
 };
 std::string_view scheduler_policy_name(SchedulerPolicy p);
+
+// Order of prompts within the prefill budget of a step (see SchedulerConfig::prefill_order).
+enum class PrefillOrder : uint8_t { kFifo, kShortestRemaining };
+std::string_view prefill_order_name(PrefillOrder o);
+// "fifo" | "srpt"; false if unknown.
+bool parse_prefill_order(std::string_view s, PrefillOrder& out);
+
+// One scheduler step (SchedulerConfig::trace).
+struct StepTraceRow {
+  uint64_t request_id = 0;
+  int32_t rows = 0;
+  int32_t start_pos = 0;  // first position computed in this step
+  bool decode = false;
+};
+struct StepTrace {
+  uint64_t step = 0;
+  int64_t plan_start_ns = 0, forward_start_ns = 0, forward_end_ns = 0;
+  int32_t prefill_rows = 0, decode_rows = 0;
+  int32_t prefill_budget = 0, prefill_chunk = 0;  // as planned (chunk 0 = up to the budget)
+  int32_t prefilling = 0;                          // running sequences with prompt tokens left
+  int32_t waiting = 0;                             // not yet admitted
+  bool solo = false, solo_skipped = false, srpt = false;
+  std::vector<StepTraceRow> rows;                  // what each scheduled sequence computed
+  std::vector<uint64_t> prefill_unserved;          // prefilling sequences that got no rows this step
+};
+// One request's lifecycle (SchedulerConfig::trace), recorded when it retires.
+struct RequestTrace {
+  uint64_t id = 0;
+  int32_t prompt_tokens = 0, generated = 0;
+  int64_t submit_ns = 0, admit_ns = 0, first_scheduled_ns = 0, first_token_ns = 0, finish_ns = 0;
+  int32_t prefill_steps = 0;        // steps in which it computed prompt rows
+  int32_t prefill_unserved_steps = 0;  // steps while prefilling in which it got no rows
+  double prefill_forward_ms = 0;    // forward time of the steps that computed its prompt rows
+  int32_t preemptions = 0;
+  SequenceStatus status = SequenceStatus::kWaiting;
+};
 // "balanced" | "latency" | "throughput"; false if unknown.
 bool parse_scheduler_policy(std::string_view s, SchedulerPolicy& out);
 
@@ -102,6 +138,42 @@ struct SchedulerConfig {
   bool decode_protect = true;
   int32_t protected_prefill_min = 32;
   float decode_latency_target = 6.0f;
+  // EXPERIMENTAL (off by default): in steps with no decode rows and exactly
+  // one sequence prefilling (a lone prompt), prefill uses a chunk of
+  // solo_prefill_chunk rows and a budget of max(prefill_token_budget,
+  // solo_prefill_chunk) instead of max_prefill_chunk and prefill_token_budget.
+  // Fewer, larger prefill matmuls (-9..-11% matmul cost per token at 128 vs 32
+  // rows on the i7-1255U, Phase 8). With two or more prompts prefilling the
+  // step is unchanged (unless solo_prefill_split): giving the whole solo budget
+  // to the oldest prompt made short prompts wait behind long ones (Phase 9 V3,
+  // short-prompt TTFT +29..34%). Steps with decode rows are unchanged:
+  // max_prefill_chunk, and the DD-079 budget, which stays bounded by
+  // prefill_token_budget. 0 = off (every step as before).
+  // `dynalm serve --solo-prefill-chunk N` (DYNALM_SOLO_PREFILL_CHUNK),
+  // `dynalm benchmark --solo-prefill-chunk N`.
+  // -1 = the device's default, resolved by the Engine: 0 (off) on the CPU,
+  // kGpuSoloPrefillChunk on a GPU device (docs/gpu-backend.md).
+  int32_t solo_prefill_chunk = -1;
+  // With solo_prefill_chunk on and several sequences prefilling in a step
+  // with no decode rows: false = no solo chunk in that step (regular chunk and
+  // budget; FIFO order as always); true = split, the solo budget shared, each
+  // sequence up to max(max_prefill_chunk, solo_prefill_chunk / prefilling
+  // sequences).
+  // `--solo-prefill-split` (serve: DYNALM_SOLO_PREFILL_SPLIT).
+  bool solo_prefill_split = false;
+  // EXPERIMENTAL (default kFifo): the order in which prompts share the prefill
+  // budget of a step. kFifo = priority, then admission order (as always).
+  // kShortestRemaining = priority, then fewest prompt tokens still to compute,
+  // so a short prompt that arrives behind a long one is served first; a prompt
+  // prefilling for longer than prefill_aging_ms since admission is served
+  // ahead of the others (FIFO among such prompts), so long prompts cannot
+  // starve. Only the order changes: chunk caps, budgets and DD-079 do not;
+  // each sequence still computes its own tokens in order, a chunk per step.
+  PrefillOrder prefill_order = PrefillOrder::kFifo;
+  int32_t prefill_aging_ms = 20000;
+  // Record a per-step and per-request trace (take_step_trace /
+  // take_request_trace). Statistics only: scheduling is unchanged.
+  bool trace = false;
   // Reuse KV of shared prompt prefixes across requests (DD-029).
   bool enable_prefix_cache = true;
   PrefixCacheKind prefix_cache_kind = PrefixCacheKind::kRadix;
@@ -150,6 +222,14 @@ struct SchedulerStats {
   uint64_t prefill_rows_total = 0;
   uint64_t steps_split_attention = 0;  // planner chose split-K attention (DD-051)
   int32_t mixed_prefill_budget = 0;    // current decode-protected prefill budget (DD-079)
+  int32_t solo_prefill_chunk = 0;      // effective SchedulerConfig::solo_prefill_chunk (0 = off)
+  bool solo_prefill_split = false;     // effective SchedulerConfig::solo_prefill_split
+  uint64_t steps_solo_prefill = 0;     // steps planned with the solo-prefill chunk and budget
+  double forward_solo_prefill_ms = 0;    // forward time of the steps counted in steps_solo_prefill
+  double solo_prefill_step_ms_max = 0;   // longest such step (since the scheduler started)
+  uint64_t steps_solo_prefill_skipped = 0;  // steps without decode rows that kept the regular chunk
+                                            // because several prompts were prefilling (FIFO mode)
+  uint64_t steps_prefill_srpt = 0;  // steps planned in shortest-remaining order with >= 2 prompts prefilling
 };
 
 class Scheduler {
@@ -170,8 +250,15 @@ class Scheduler {
 
   bool idle() const;
   const SchedulerStats& stats() const { return stats_; }
+  // The configuration in effect: the requested one after policy overrides,
+  // environment overrides and clamping to the batch (constructor).
+  const SchedulerConfig& config() const { return config_; }
   // nullptr when the prefix cache is disabled.
   const PrefixCache* prefix_cache() const { return prefix_cache_.get(); }
+  // Thread-safe: hands over (and clears) the trace recorded so far
+  // (empty unless SchedulerConfig::trace).
+  std::vector<StepTrace> take_step_trace();
+  std::vector<RequestTrace> take_request_trace();
 
  private:
   struct Entry {
@@ -186,6 +273,8 @@ class Scheduler {
     uint64_t last_step = 0;   // last step this sequence got decode rows (fairness)
     int32_t cached_blocks = 0;  // full blocks already offered to the prefix cache
     std::unique_ptr<Sampler> sampler;  // null: greedy
+    int64_t admit_ns = 0;       // latest admission (prefill aging)
+    RequestTrace trace;         // filled only with SchedulerConfig::trace
   };
 
   void drain_incoming();
@@ -198,6 +287,10 @@ class Scheduler {
   // Decode-protected prefill state (DD-079).
   double decode_step_ema_ms_ = 0;
   int32_t mixed_prefill_budget_ = 0;
+  // Trace (SchedulerConfig::trace), handed over by take_*_trace from any thread.
+  std::mutex trace_mu_;
+  std::vector<StepTrace> step_trace_;
+  std::vector<RequestTrace> request_trace_;
 
   Transformer& model_;
   KvBlockPool& kv_;

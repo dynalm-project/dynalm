@@ -12,6 +12,8 @@
 #include "api/json.h"
 #include "api/openai.h"
 #include "dynacore/base/timer.h"
+#include "dynacore/cpu/cpu_device.h"
+#include "dynacore/kernel/kernel_plan.h"
 #include "common/version.h"
 #include "logging/log.h"
 #include "metrics/metrics.h"
@@ -36,7 +38,9 @@ std::string_view error_type(int status) {
   switch (status) {
     case 400:
     case 403:
-    case 404: return "invalid_request_error";
+    case 404:
+    case 415: return "invalid_request_error";
+    case 401: return "authentication_error";
     case 503: return "overloaded_error";
     case 504: return "timeout_error";
     default: return "server_error";
@@ -52,7 +56,60 @@ bool is_loopback(const std::string& addr) {
   return addr == "127.0.0.1" || addr == "::1" || addr == "::ffff:127.0.0.1" || addr.starts_with("127.");
 }
 
+// Constant-time string comparison (the length is not secret).
+bool equal_ct(std::string_view a, std::string_view b) {
+  if (a.size() != b.size()) return false;
+  unsigned char diff = 0;
+  for (size_t i = 0; i < a.size(); ++i) diff |= static_cast<unsigned char>(a[i] ^ b[i]);
+  return diff == 0;
+}
+
+// Host header without its port ("[::1]:8000" -> "::1", "localhost:8000" -> "localhost").
+std::string_view host_name(std::string_view h) {
+  if (h.starts_with("[")) {
+    const size_t e = h.find(']');
+    return e == std::string_view::npos ? h : h.substr(1, e - 1);
+  }
+  const size_t c = h.rfind(':');
+  return c == std::string_view::npos ? h : h.substr(0, c);
+}
+
+// Message for an error raised while generating: request errors keep their
+// text, internal ones are reported by category (details are logged).
+std::string client_message(const Status& st) {
+  switch (st.code()) {
+    case StatusCode::kInvalidArgument: return st.message();
+    case StatusCode::kDeadlineExceeded: return "request deadline exceeded";
+    case StatusCode::kResourceExhausted: return "server overloaded";
+    case StatusCode::kCancelled: return "request cancelled";
+    case StatusCode::kUnsupported: return "the request uses a feature this model or device does not support";
+    default: return "internal error";
+  }
+}
+
 }  // namespace
+
+Result<std::string> load_api_key(const std::string& file) {
+  std::string key;
+  if (!file.empty()) {
+    std::FILE* f = std::fopen(file.c_str(), "rb");
+    if (f == nullptr) return NotFound("cannot read the API key file");
+    char buf[512];
+    const size_t n = std::fread(buf, 1, sizeof(buf) - 1, f);
+    std::fclose(f);
+    key.assign(buf, n);
+    if (const size_t eol = key.find_first_of("\r\n"); eol != std::string::npos) key.resize(eol);
+  } else if (const char* env = std::getenv("DYNALM_API_KEY"); env != nullptr) {
+    key = env;
+  }
+  while (!key.empty() && (key.back() == ' ' || key.back() == '\t')) key.pop_back();
+  if (!key.empty() && key.size() < 16) return InvalidArgument("the API key must be at least 16 characters");
+  return key;
+}
+
+bool is_loopback_host(std::string_view host) {
+  return host == "localhost" || host == "::1" || host == "::ffff:127.0.0.1" || host.starts_with("127.");
+}
 
 int http_status_for(StatusCode code) {
   switch (code) {
@@ -65,11 +122,12 @@ int http_status_for(StatusCode code) {
   }
 }
 
-Status request_server_shutdown(const std::string& host, int port) {
+Status request_server_shutdown(const std::string& host, int port, const std::string& api_key) {
   httplib::Client cli(host, port);
   cli.set_connection_timeout(5, 0);
   cli.set_read_timeout(10, 0);
-  auto res = cli.Post("/admin/shutdown");
+  if (!api_key.empty()) cli.set_bearer_token_auth(api_key);
+  auto res = cli.Post("/admin/shutdown", "{}", "application/json");
   if (!res) return IoError("no server at " + host + ":" + std::to_string(port) + " (" + httplib::to_string(res.error()) + ")");
   if (res->status != 202) {
     return InvalidArgument("server refused shutdown (HTTP " + std::to_string(res->status) + "): " + res->body);
@@ -147,6 +205,30 @@ void Server::Impl::setup() {
   http.set_payload_max_length(opts.max_body_bytes);
   http.set_read_timeout(30, 0);
   http.set_write_timeout(30, 0);
+
+  // Access control before routing (docs/security.md).
+  const bool loopback_bind = is_loopback_host(opts.host);
+  http.set_pre_routing_handler([this, loopback_bind](const httplib::Request& req, httplib::Response& res) {
+    using R = httplib::Server::HandlerResponse;
+    if (loopback_bind && !is_loopback_host(host_name(req.get_header_value("Host")))) {
+      send_error(res, 403, "host not allowed");  // DNS rebinding: a remote name resolved to loopback
+      return R::Handled;
+    }
+    if (!opts.api_key.empty() && !(req.method == "GET" && req.path == "/health")) {
+      const std::string auth = req.get_header_value("Authorization");
+      constexpr std::string_view kBearer = "Bearer ";
+      if (!auth.starts_with(kBearer) || !equal_ct(std::string_view(auth).substr(kBearer.size()), opts.api_key)) {
+        res.set_header("WWW-Authenticate", "Bearer");
+        send_error(res, 401, "missing or invalid API key");
+        return R::Handled;
+      }
+    }
+    if (req.method == "POST" && !req.get_header_value("Content-Type").starts_with("application/json")) {
+      send_error(res, 415, "Content-Type must be application/json");
+      return R::Handled;
+    }
+    return R::Unhandled;
+  });
 
   http.Get("/health", [this](const httplib::Request&, httplib::Response& res) {
     if (draining.load()) {
@@ -226,7 +308,8 @@ void Server::Impl::completions(const httplib::Request& req, httplib::Response& r
                      : engine.generate_text(r.prompt, /*parse_special=*/false, r.params);
   if (!stream.ok()) {
     requests_failed.inc();
-    return send_error(res, http_status_for(stream.status().code()), stream.status().message());
+    if (stream.status().code() != StatusCode::kInvalidArgument) LOG_WARN("request failed: {}", stream.status().to_string());
+    return send_error(res, http_status_for(stream.status().code()), client_message(stream.status()));
   }
   auto inflight = std::make_shared<Inflight>(*this, std::move(*stream));
   admitted = true;
@@ -247,7 +330,8 @@ void Server::Impl::completions(const httplib::Request& req, httplib::Response& r
     if (!ev.done) return send_error(res, 504, "generation timed out");
     inflight->finish(ev);
     if (ev.finish == StreamFinish::kError) {
-      return send_error(res, http_status_for(ev.error.code()), ev.error.message());
+      LOG_WARN("request failed while generating: {}", ev.error.to_string());
+      return send_error(res, http_status_for(ev.error.code()), client_message(ev.error));
     }
     if (ev.finish == StreamFinish::kCancelled) return send_error(res, 503, "request cancelled");
     const api::Usage usage{ev.prompt_tokens, ev.completion_tokens};
@@ -293,7 +377,8 @@ void Server::Impl::completions(const httplib::Request& req, httplib::Response& r
         inflight->finish(ev);
         if (ev.finish == StreamFinish::kError || ev.finish == StreamFinish::kCancelled) {
           const int status = ev.finish == StreamFinish::kError ? http_status_for(ev.error.code()) : 503;
-          send(api::error_json(ev.finish == StreamFinish::kError ? ev.error.message() : "request cancelled",
+          if (ev.finish == StreamFinish::kError) LOG_WARN("request failed while streaming: {}", ev.error.to_string());
+          send(api::error_json(ev.finish == StreamFinish::kError ? client_message(ev.error) : "request cancelled",
                                error_type(status)));
         } else {
           send(chat ? api::chat_chunk_json(id, model, created_at, "", false, ev.finish)
@@ -347,6 +432,46 @@ std::string Server::Impl::render_metrics() const {
   render_gauge("dynalm_scheduler_running", "Sequences admitted", st.scheduler.running, out);
   render_gauge("dynalm_scheduler_waiting", "Sequences queued", st.scheduler.waiting, out);
   counter("dynalm_preemptions_total", "Sequences preempted under KV pressure", st.scheduler.preemptions);
+  // Experimental 8-row packed INT8 kernel (KernelPlan::packed_int8_8rows,
+  // DYNACORE_PACKED_8ROWS): read-only evidence of the setting and its use.
+  render_gauge("dynacore_packed_8rows_enabled", "1 when DYNACORE_PACKED_8ROWS turned on the experimental 8-row packed int8 tiles",
+               dynacore::KernelPlan::defaults().packed_int8_8rows ? 1 : 0, out);
+  counter("dynacore_packed_rows8_dispatches_total", "int8_rows calls that used the experimental 8-row packed tiles",
+          dynacore::CpuDevice::experimental_rows8_dispatches());
+  render_gauge("dynacore_int16_prefill_max_rows", "Row limit of the experimental int16 prefill path (DYNACORE_INT16_PREFILL_ROWS; 0 = off)",
+               dynacore::KernelPlan::defaults().int16_prefill_max_rows, out);
+  counter("dynacore_int16_prefill_matmuls_total", "matmuls that used the experimental int16 prefill path",
+          dynacore::CpuDevice::experimental_int16_prefill_calls());
+  // Matmul kernel registry: which kernel ran how often (calls, rows).
+  {
+    const std::vector<dynacore::MatmulKernelStats> mm = dynacore::CpuDevice::matmul_stats();
+    out += "# HELP dynacore_matmul_calls_total matmuls per selected kernel (dynacore matmul registry)\n"
+           "# TYPE dynacore_matmul_calls_total counter\n";
+    for (const dynacore::MatmulKernelStats& s : mm) {
+      out += "dynacore_matmul_calls_total{kernel=\"" + std::string(dynacore::matmul_kernel_name(s.id)) + "\"} " +
+             std::to_string(s.calls) + "\n";
+    }
+    out += "# HELP dynacore_matmul_rows_total activation rows per selected kernel\n"
+           "# TYPE dynacore_matmul_rows_total counter\n";
+    for (const dynacore::MatmulKernelStats& s : mm) {
+      out += "dynacore_matmul_rows_total{kernel=\"" + std::string(dynacore::matmul_kernel_name(s.id)) + "\"} " +
+             std::to_string(s.rows) + "\n";
+    }
+  }
+  // Experimental solo-prefill chunking (SchedulerConfig::solo_prefill_chunk, --solo-prefill-chunk).
+  render_gauge("dynalm_scheduler_solo_prefill_chunk", "Prefill chunk in steps without decode rows (--solo-prefill-chunk; 0 = off)",
+               st.scheduler.solo_prefill_chunk, out);
+  render_gauge("dynalm_scheduler_solo_prefill_split", "1 when the solo-prefill chunk is split across prefilling sequences",
+               st.scheduler.solo_prefill_split ? 1 : 0, out);
+  counter("dynalm_scheduler_solo_prefill_steps_total", "Scheduler steps planned with the solo-prefill chunk and budget",
+          st.scheduler.steps_solo_prefill);
+  render_counter("dynalm_scheduler_solo_prefill_ms_total", "Forward time of solo-prefill steps (ms)",
+                 st.scheduler.forward_solo_prefill_ms, out);
+  render_gauge("dynalm_scheduler_solo_prefill_step_ms_max", "Longest solo-prefill step (ms)",
+               st.scheduler.solo_prefill_step_ms_max, out);
+  counter("dynalm_scheduler_solo_prefill_skipped_total",
+          "Steps without decode rows that kept the regular chunk because several prompts were prefilling",
+          st.scheduler.steps_solo_prefill_skipped);
   render_gauge("dynalm_queue_latency_ms_avg", "Mean submission-to-admission latency",
                st.scheduler.admitted ? st.scheduler.queue_ms_total / static_cast<double>(st.scheduler.admitted) : 0.0, out);
   render_gauge("dynalm_queue_latency_ms_max", "Max submission-to-admission latency", st.scheduler.queue_ms_max, out);

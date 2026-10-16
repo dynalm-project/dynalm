@@ -87,7 +87,9 @@ int main(int argc, char** argv) {
               std::string(be.name()).c_str(), argv[1]);
   // Interleaved copies (DD-078) of every Q4_K tensor, for the "packed" column.
   for (const Case& c : cases) {
-    for (const Tensor* t : c.layers) be.prepack_weight(t->view(), std::getenv("BENCH_INT16") != nullptr);
+    for (const Tensor* t : c.layers) {
+      be.prepack_weight(t->view(), std::getenv("BENCH_INT16") != nullptr || std::getenv("BENCH_INT16_PREFILL") != nullptr);
+    }
   }
   std::printf("%-9s %-6s %-14s %3s | %9s %7s | %9s %7s | %9s %7s | %9s %7s | %s\n", "tensor", "type", "shape", "M",
               "fused ms", "GB/s", "expand ms", "GB/s", "int8 ms", "GB/s", "packed ms", "GB/s", "best");
@@ -124,6 +126,15 @@ int main(int argc, char** argv) {
         if (path >= 2 && std::getenv("BENCH_INT16")) {  // column 3: int16 on the packed copy (DD-081)
           kp.int8_decode_max_rows = 0;
           kp.int16_decode_max_rows = 64;
+        }
+        // BENCH_INT16_PREFILL=1: column 3 runs the experimental int16 prefill
+        // path instead (8-row tiles, KernelPlan::int16_prefill_max_rows; rows
+        // above kPackedRowsMax only, packed weights with >= q4_repack_min_out rows).
+        if (path == 3 && std::getenv("BENCH_INT16_PREFILL")) {
+          kp.int8_decode_max_rows = 0;
+          kp.int16_decode_max_rows = 0;
+          kp.int16_prefill_max_rows = 1 << 20;
+          kp.int16_prefill_min_weights = 0;  // every packed shape, to measure where it wins
         }
         be.set_kernel_plan(kp);
         size_t next = 0;

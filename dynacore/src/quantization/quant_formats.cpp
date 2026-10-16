@@ -65,7 +65,11 @@ void quantize_q8_0(const float* x, BlockQ8_0* y, int64_t nb) {
     const float d = amax / 127.0f;
     const float id = d != 0.0f ? 1.0f / d : 0.0f;
     y[b].d = fp32_to_fp16(d);
-    for (int i = 0; i < kQK; ++i) y[b].qs[i] = static_cast<int8_t>(std::lround(xb[i] * id));
+    for (int i = 0; i < kQK; ++i) {
+      float v = xb[i] * id;  // |v| <= 127 for finite inputs; the clamp only catches NaN / Inf
+      v = v > -127.0f ? (v < 127.0f ? v : 127.0f) : -127.0f;
+      y[b].qs[i] = static_cast<int8_t>(std::lround(v));
+    }
   }
 }
 

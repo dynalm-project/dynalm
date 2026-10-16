@@ -20,3 +20,6 @@ __pycache__/
 
 # Benchmark tools downloaded by tools/compare_engines.ps1.
 /.bench/
+
+# Local Mac benchmark scripts and their results (test/macos_bench.sh); never committed.
+/test/

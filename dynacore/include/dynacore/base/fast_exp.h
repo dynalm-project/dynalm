@@ -14,7 +14,10 @@
 namespace dynacore {
 
 inline float exp_nonpos(float x) {
-  x = std::max(x, -87.0f);
+  // Comparison clamp: also maps NaN (from a corrupt model's weights) to -87,
+  // so the float -> int conversion below never sees NaN (undefined
+  // behaviour); results for valid inputs (-87 <= x <= 0) are unchanged.
+  x = x > -87.0f ? (x < 88.0f ? x : 88.0f) : -87.0f;
   // Round to nearest without a libm call: adding 1.5 * 2^23 pushes the
   // fraction out of the mantissa (exact for |v| < 2^22).
   const float n = (x * 1.44269504088896341f + 12582912.0f) - 12582912.0f;

@@ -103,6 +103,95 @@
       }
     },
     {
+      "name": "macos-metal",
+      "inherits": "base",
+      "displayName": "macOS Apple Silicon, release, Metal GPU backend (prototype)",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ENABLE_METAL": "ON"
+      }
+    },
+    {
+      "name": "macos-vulkan",
+      "inherits": "base",
+      "displayName": "macOS, release, Vulkan GPU backend through MoltenVK (development and testing)",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ENABLE_VULKAN": "ON"
+      }
+    },
+    {
+      "name": "linux-vulkan",
+      "inherits": "base",
+      "displayName": "Linux, release, Vulkan GPU backend (AMD / Intel / NVIDIA)",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ENABLE_VULKAN": "ON"
+      }
+    },
+    {
+      "name": "linux-cuda",
+      "inherits": "base",
+      "displayName": "Linux, release, CUDA GPU backend (NVIDIA)",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ENABLE_CUDA": "ON"
+      }
+    },
+    {
+      "name": "msvc-vulkan",
+      "inherits": "msvc-base",
+      "displayName": "Windows, release, Vulkan GPU backend",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ENABLE_VULKAN": "ON"
+      }
+    },
+    {
+      "name": "msvc-cuda",
+      "inherits": "msvc-base",
+      "displayName": "Windows x64, release, CUDA GPU backend (NVIDIA)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ENABLE_CUDA": "ON"
+      }
+    },
+    {
+      "name": "windows-arm64",
+      "inherits": "base",
+      "displayName": "Windows on ARM (Snapdragon), release, clang-cl (run from an ARM64 Developer prompt)",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "clang-cl",
+        "CMAKE_CXX_COMPILER": "clang-cl"
+      }
+    },
+    {
       "name": "core-only",
       "inherits": "base",
       "displayName": "DynaCore alone (boundary check)",
@@ -145,6 +234,34 @@
     {
       "name": "macos-release",
       "configurePreset": "macos-release"
+    },
+    {
+      "name": "macos-metal",
+      "configurePreset": "macos-metal"
+    },
+    {
+      "name": "macos-vulkan",
+      "configurePreset": "macos-vulkan"
+    },
+    {
+      "name": "linux-vulkan",
+      "configurePreset": "linux-vulkan"
+    },
+    {
+      "name": "linux-cuda",
+      "configurePreset": "linux-cuda"
+    },
+    {
+      "name": "msvc-vulkan",
+      "configurePreset": "msvc-vulkan"
+    },
+    {
+      "name": "msvc-cuda",
+      "configurePreset": "msvc-cuda"
+    },
+    {
+      "name": "windows-arm64",
+      "configurePreset": "windows-arm64"
     },
     {
       "name": "core-only",

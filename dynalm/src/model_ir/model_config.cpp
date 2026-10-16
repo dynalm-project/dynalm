@@ -11,6 +11,32 @@ int64_t ModelConfig::kv_bytes_per_token(DType kv) const {
   return per_layer * num_layers * dtype_block_bytes(kv) / dtype_block_elems(kv);
 }
 
+Status ModelConfig::check_limits() const {
+  auto bad = [](const std::string& m) { return InvalidArgument("model config: " + m); };
+  // Upper bounds: these values come from untrusted model files and size the
+  // runtime's allocations (per-layer state, scratch, KV), so implausible ones
+  // are refused before anything is allocated (docs/security.md, S10). Each
+  // bound is far above any published model.
+  struct Limit {
+    const char* name;
+    int64_t value, max;
+  };
+  const Limit limits[] = {
+      {"num_layers", num_layers, 1024},          {"hidden_size", hidden_size, int64_t{1} << 17},
+      {"intermediate_size", intermediate_size, int64_t{1} << 19}, {"num_heads", num_heads, 1024},
+      {"num_kv_heads", num_kv_heads, 1024},      {"head_dim", head_dim, 4096},
+      {"head_dim_v", head_dim_v, 4096},          {"vocab_size", vocab_size, int64_t{1} << 24},
+      {"context_length", context_length, int64_t{1} << 24}, {"num_experts", moe.num_experts, 4096},
+  };
+  for (const Limit& l : limits) {
+    if (l.value > l.max) {
+      return bad(std::string(l.name) + " " + std::to_string(l.value) + " exceeds the supported maximum " +
+                 std::to_string(l.max));
+    }
+  }
+  return Status::Ok();
+}
+
 Status ModelConfig::validate() const {
   auto bad = [](const std::string& m) { return InvalidArgument("model config: " + m); };
   if (architecture.empty()) return bad("architecture not set");
@@ -41,7 +67,8 @@ Status ModelConfig::validate() const {
       (moe.experts_per_token <= 0 || moe.experts_per_token > moe.num_experts)) {
     return bad("invalid MoE experts_per_token");
   }
-  return Status::Ok();
+  return check_limits();
+
 }
 
 MemoryEstimate estimate_memory(const ModelConfig& c, int64_t weight_bytes, int64_t context_tokens,

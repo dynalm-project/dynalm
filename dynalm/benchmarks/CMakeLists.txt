@@ -24,3 +24,19 @@ engine_add_benchmark(bench_op_trace bench_op_trace.cpp)
 engine_add_benchmark(bench_compiled bench_compiled.cpp)
 engine_add_benchmark(bench_kv_accuracy bench_kv_accuracy.cpp)
 engine_add_benchmark(bench_alloc bench_alloc.cpp)
+# Scheduler test for the experimental solo-prefill chunk (needs a model file:
+# test_solo_prefill <model.gguf> [threads]).
+engine_add_benchmark(test_solo_prefill test_solo_prefill.cpp)
+# Load-generator test: closed / Poisson / trace arrivals against a fake target
+# (test_loadgen_openloop <model.gguf>; uses only the tokenizer).
+engine_add_benchmark(test_loadgen_openloop test_loadgen_openloop.cpp)
+# Scheduler test for the experimental prefill order (srpt) and the scheduler trace
+# (test_prefill_priority <model.gguf> [threads]).
+engine_add_benchmark(test_prefill_priority test_prefill_priority.cpp)
+# Model-free planner test: the wide-decode switch applies only to decode-only steps
+# of <= DYNACORE_DECODE_WIDE_ROWS rows (test_batch_planner).
+engine_add_benchmark(test_batch_planner test_batch_planner.cpp)
+# GPU accuracy against the CPU fp32 reference (docs/gpu-backend.md); needs a model.
+if(DYNALM_WITH_GGML)
+  engine_add_benchmark(bench_gpu_accuracy bench_gpu_accuracy.cpp)
+endif()

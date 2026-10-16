@@ -193,7 +193,11 @@ void quantize_act(const float* x, ActBlockQ8* out, int64_t n) {
     int32_t sum = 0;
     for (int i = 0; i < kActQ8Block; ++i) {
       // Round to nearest, ties to even: what _mm256_round_ps(..., NEAREST) does.
-      const auto q = static_cast<int32_t>(std::nearbyint(x[i] * id));
+      // The comparison clamp is a no-op for finite inputs (|x * id| <= 127)
+      // and keeps NaN / Inf (a corrupt model) out of the float -> int cast.
+      float v = x[i] * id;
+      v = v > -127.0f ? (v < 127.0f ? v : 127.0f) : -127.0f;
+      const auto q = static_cast<int32_t>(std::nearbyint(v));
       out[b].q[i] = static_cast<int8_t>(std::clamp(q, -127, 127));
       sum += out[b].q[i];
     }
@@ -327,6 +331,19 @@ void dequant_ref(const void* w, float* out, int64_t n) {
   dequantize_row(T, w, out, n);
 }
 
+// Split-byte int16 activations (ActBlockQ16S): q = 256 * hi + lo exactly.
+void split_act16(const ActBlockQ16* in, ActBlockQ16S* out, int64_t nblocks) {
+  for (int64_t b = 0; b < nblocks; ++b) {
+    out[b].d = in[b].d;
+    out[b].sum = in[b].sum;
+    for (int t = 0; t < 32; ++t) {
+      const int q = in[b].q[t];
+      out[b].hi[t] = static_cast<int8_t>(q >> 8);  // arithmetic shift: floor(q / 256)
+      out[b].lo[t] = static_cast<uint8_t>(q & 0xFF);
+    }
+  }
+}
+
 }  // namespace
 
 void register_generic_kernels(CpuKernels& k) {
@@ -336,6 +353,7 @@ void register_generic_kernels(CpuKernels& k) {
   k.dot_f16_f32 = dot_f16_f32;
   k.axpy_f16 = axpy_f16;
   k.gemm_panel = gemm_panel;
+  k.split_act16 = split_act16;
   k.attn_scores_f16 = attn_scores_f16;
   k.attn_accum_f16 = attn_accum_f16;
   k.attn_scores_f32 = attn_scores_f32;
@@ -379,6 +397,14 @@ CpuKernels make_cpu_kernels(CpuIsa isa) {
     // DYNACORE_VNNI=1 until measured end to end.
     const char* v = std::getenv("DYNACORE_VNNI");
     if (cpu_info().features.avx_vnni && v != nullptr && v[0] == '1') register_avxvnni_kernels(k);
+    // The 8-row int16 tiles (used only by the opt-in int16 prefill path) take
+    // vpdpwssd where the CPU has AVX-VNNI; DYNACORE_INT16_PREFILL_VNNI=0 keeps
+    // the AVX2 tiles (identical results).
+    const char* iv = std::getenv("DYNACORE_INT16_PREFILL_VNNI");
+    if (cpu_info().features.avx_vnni && !(iv != nullptr && iv[0] == '0')) register_avxvnni_int16_tiles(k);
+    // Split-byte int16 tiles: available wherever the CPU has AVX-VNNI; the
+    // matmul registry runs them only where its plan enables them.
+    if (cpu_info().features.avx_vnni) register_avxvnni_int16_split(k);
   }
   if (isa == CpuIsa::kNeon) register_neon_kernels(k);
   return k;

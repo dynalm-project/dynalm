@@ -1,7 +1,9 @@
 # Build DynaLM on every supported CPU platform.
 #
-#   build      : configure, build, then CPU feature validation (doctor runs the
-#                DynaCore kernel self-test).
+#   build      : configure, build, CPU feature validation (doctor runs the
+#                DynaCore kernel self-test), then the model-free test programs
+#                and tool tests (tools/ci/run_tests.sh).
+#   sanitizers : the same tests under ASan+UBSan and TSan (Linux, clang).
 #   package    : release-style static build -> archive -> fresh install through
 #                scripts/install.sh / install.ps1 -> checks on the INSTALLED
 #                binaries (tools/ci/package.sh).
@@ -9,7 +11,7 @@ name: ci
 
 on:
   push:
-    branches: [main, master, "ci/**"]
+    branches: [main, master, "ci/**", "release/**"]
   pull_request:
   workflow_dispatch:
 
@@ -28,6 +30,8 @@ jobs:
       # on it fails to compile.
       - run: cmake --preset core-only
       - run: cmake --build --preset core-only
+      - name: Model-free DynaCore tests
+        run: bash tools/ci/run_tests.sh build/core-only
 
   build:
     name: ${{ matrix.name }}
@@ -44,6 +48,8 @@ jobs:
           # AVX2 there, so it exercises the runtime fallback to generic kernels.
           - { name: macos-x86_64 (Rosetta, generic fallback), os: macos-14, preset: macos-release, cmake_args: -DCMAKE_OSX_ARCHITECTURES=x86_64 }
           - { name: windows-x86_64 (MSVC), os: windows-2022, preset: msvc-release }
+          # Windows on ARM (Snapdragon class): native ARM64 MSVC, NEON kernels.
+          - { name: windows-arm64 (MSVC, NEON), os: windows-11-arm, preset: msvc-release, msvc_arch: arm64 }
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchain (Linux)
@@ -54,6 +60,8 @@ jobs:
         run: brew install ninja
       - if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.msvc_arch || 'x64' }}
       - name: Configure
         shell: bash
         run: cmake --preset ${{ matrix.preset }} ${{ matrix.cmake_args }}
@@ -69,6 +77,9 @@ jobs:
           "$exe" doctor
           PY="$(command -v python3 || command -v python)"
           "$PY" tools/ci/check_isa.py "$exe"
+      - name: Model-free tests
+        shell: bash
+        run: bash tools/ci/run_tests.sh build/${{ matrix.preset }}
 
   sanitizers:
     name: linux (${{ matrix.preset }})
@@ -89,6 +100,105 @@ jobs:
         run: |
           build/${{ matrix.preset }}/bin/dynalm --version
           build/${{ matrix.preset }}/bin/dynalm doctor
+      - name: Model-free tests (instrumented)
+        env:
+          ASAN_OPTIONS: halt_on_error=1:detect_leaks=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+          TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
+        run: bash tools/ci/run_tests.sh build/${{ matrix.preset }}
+
+  # Metal GPU backend (docs/gpu-backend.md): builds the pinned ggml with
+  # embedded shaders and runs the model-free suite. Hosted runners may have no
+  # usable Metal device; the GPU tests then report SKIP, and this job says so
+  # explicitly (a skipped GPU test is not a GPU pass). The model-based GPU
+  # gates (bench_gpu_accuracy, smoke_api.py with DYNALM_BACKEND=metal) run on
+  # a designated Apple Silicon machine (docs/release-readiness.md).
+  macos-metal:
+    name: macos-arm64 (Metal GPU backend)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install ninja
+      - run: cmake --preset macos-metal
+      - run: cmake --build --preset macos-metal
+      - name: Model-free tests
+        # pipefail: a failing test must fail the job even though tee succeeds.
+        run: set -o pipefail; bash tools/ci/run_tests.sh build/macos-metal | tee tests.log
+      - name: Metal device status
+        run: |
+          line="$(grep 'dynacore/test_ggml_device' tests.log)"
+          echo "$line"
+          if echo "$line" | grep -q 'all ggml device tests passed'; then
+            echo "::notice::Metal GPU tests RAN on a real device"
+          else
+            echo "::warning::Metal GPU tests did NOT run (no usable Metal device): GPU status NOT RUN"
+          fi
+
+  # Vulkan GPU backend (AMD / Intel / NVIDIA / Qualcomm through their Vulkan
+  # drivers). Hosted runners have no GPU: Mesa's lavapipe (a software Vulkan
+  # device) runs the GPU tests for correctness. It says nothing about speed.
+  linux-vulkan:
+    name: linux-x86_64 (Vulkan GPU backend, lavapipe)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build libvulkan-dev glslc spirv-headers mesa-vulkan-drivers
+      - run: cmake --preset linux-vulkan
+      - run: cmake --build --preset linux-vulkan
+      - name: Model-free tests (GPU tests on lavapipe)
+        # ggml-vulkan lists only discrete / integrated GPUs unless told which
+        # devices to use; lavapipe is a CPU-type device, index 0 here.
+        env:
+          GGML_VK_VISIBLE_DEVICES: "0"
+        run: set -o pipefail; bash tools/ci/run_tests.sh build/linux-vulkan | tee tests.log
+      - name: Vulkan device status
+        run: |
+          line="$(grep 'dynacore/test_ggml_device' tests.log)"
+          echo "$line"
+          if echo "$line" | grep -q 'all ggml device tests passed'; then
+            echo "::notice::Vulkan GPU tests RAN (lavapipe software device)"
+          else
+            echo "::warning::Vulkan GPU tests did NOT run: GPU status NOT RUN"
+          fi
+
+  # CUDA GPU backend: compile and link only (hosted runners have no NVIDIA
+  # GPU, so its GPU tests report "not tested"). One architecture keeps the
+  # build short; release builds use ggml's default architecture list.
+  linux-cuda-build:
+    name: linux-x86_64 (CUDA GPU backend, build only)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build nvidia-cuda-toolkit
+      - run: cmake --preset linux-cuda -DCMAKE_CUDA_ARCHITECTURES=75
+      - run: cmake --build --preset linux-cuda
+      - name: Model-free tests (CPU paths; GPU tests report no device)
+        run: bash tools/ci/run_tests.sh build/linux-cuda
+
+  security:
+    name: security checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build clang
+      - name: Secret scan (tracked files)
+        run: python3 tools/ci/scan_secrets.py
+      - name: SBOM (CycloneDX)
+        run: |
+          python3 tools/ci/sbom.py > sbom.cdx.json
+          python3 tools/ci/sbom.py --ggml > sbom-gpu.cdx.json
+      - name: Parser fuzzing under ASan + UBSan (bounded)
+        env:
+          ASAN_OPTIONS: halt_on_error=1:detect_leaks=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          cmake --preset linux-asan-ubsan
+          cmake --build --preset linux-asan-ubsan --target test_fuzz_parsers
+          build/linux-asan-ubsan/dynalm/tests/test_fuzz_parsers 20000
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: "*.cdx.json"
 
   package:
     name: package + fresh install (${{ matrix.name }})
@@ -100,6 +210,7 @@ jobs:
           - { name: linux-x86_64, os: ubuntu-24.04 }
           - { name: macos-arm64, os: macos-14 }
           - { name: windows-x86_64, os: windows-2022 }
+          - { name: windows-arm64, os: windows-11-arm, msvc_arch: arm64 }
     steps:
       - uses: actions/checkout@v4
       - if: runner.os == 'Linux'
@@ -108,6 +219,8 @@ jobs:
         run: brew install ninja
       - if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.msvc_arch || 'x64' }}
       - shell: bash
         run: bash tools/ci/package.sh
 

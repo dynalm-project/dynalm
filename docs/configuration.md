@@ -25,7 +25,7 @@ model:
   path: qwen3:4b             # model for `dynalm serve` / `dynalm run` when none is given
 
 runtime:
-  device: auto               # auto | cpu
+  device: auto               # auto (a built-in GPU that runs the model, else CPU) | cpu | metal | vulkan | cuda
   threads: auto              # auto = physical cores
   context_length: 8192       # KV cache tokens; auto = sized from free RAM
   batch_tokens: 256          # max tokens per forward pass
@@ -43,7 +43,7 @@ sampling:
   max_tokens: 1024
 
 server:
-  host: 0.0.0.0
+  host: 127.0.0.1           # a non-loopback address needs an API key (docs/security.md)
   port: 8000
   http_threads: auto
   request_timeout: 600       # seconds; 0 = none
@@ -70,7 +70,7 @@ The older flat format, with one `key = value` per line using option names, still
 |---|---|---|
 | model.path | `<model>` / `--model` | — |
 | model.id | `--model-id` | file name, or the registry name |
-| runtime.device | `--backend` | auto (cpu) |
+| runtime.device | `--backend` (auto, cpu, metal, vulkan, cuda) | auto: a built-in GPU that runs the model, else the CPU |
 | runtime.threads | `--threads` | auto |
 | runtime.context_length | `--ctx` | auto |
 | runtime.batch_tokens | `--batch` | 256 |

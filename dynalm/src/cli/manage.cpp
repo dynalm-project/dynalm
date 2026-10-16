@@ -306,7 +306,12 @@ int cmd_stop(std::span<const std::string_view> args) {
       return 1;
     }
   }
-  if (Status st = request_server_shutdown(host, port); !st.ok()) {
+  auto key = load_api_key("");  // the server's key, from DYNALM_API_KEY
+  if (!key.ok()) {
+    std::fprintf(stderr, "stop: %s\n", key.status().message().c_str());
+    return 1;
+  }
+  if (Status st = request_server_shutdown(host, port, *key); !st.ok()) {
     std::fprintf(stderr, "stop: %s\n", st.to_string().c_str());
     return 1;
   }

@@ -63,13 +63,23 @@ set_target_properties(dynalm PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_
 if(ENABLE_SERVER)
   # DYNALM_HTTPLIB_HEADER: a local copy of httplib.h for offline builds (same
   # pinned version; checked against the hash below).
-  set(DYNALM_HTTPLIB_HEADER "" CACHE FILEPATH "Local cpp-httplib v0.18.3 httplib.h (offline builds)")
+  # v0.61.0: the 0.1.4 pin (v0.18.3) is affected by published advisories, among them
+  # header shadowing, CRLF injection and unbounded allocation (docs/security.md, S9).
+  set(DYNALM_HTTPLIB_HEADER "" CACHE FILEPATH "Local cpp-httplib v0.61.0 httplib.h (offline builds)")
   set(_httplib_dir ${CMAKE_BINARY_DIR}/_deps/httplib)
-  set(_httplib_sha256 a0a0c13dc086663863dbe6730a19716f7d3744904b6205496e8301750814dbd5)
+  set(_httplib_sha256 bc77114769db3b3c97e4a6d753dab797c3cadaaa48beead3806298b09702df18)
+  # A header left in the build tree by an earlier pin (or modified) is re-verified, not trusted.
+  if(EXISTS ${_httplib_dir}/httplib.h)
+    file(SHA256 ${_httplib_dir}/httplib.h _have_hash)
+    if(NOT _have_hash STREQUAL _httplib_sha256)
+      message(STATUS "cpp-httplib in the build tree does not match the pin; fetching it again")
+      file(REMOVE ${_httplib_dir}/httplib.h)
+    endif()
+  endif()
   if(NOT EXISTS ${_httplib_dir}/httplib.h AND DYNALM_HTTPLIB_HEADER)
     file(SHA256 "${DYNALM_HTTPLIB_HEADER}" _local_hash)
     if(NOT _local_hash STREQUAL _httplib_sha256)
-      message(FATAL_ERROR "DYNALM_HTTPLIB_HEADER is not cpp-httplib v0.18.3 (SHA256 mismatch)")
+      message(FATAL_ERROR "DYNALM_HTTPLIB_HEADER is not cpp-httplib v0.61.0 (SHA256 mismatch)")
     endif()
     file(COPY "${DYNALM_HTTPLIB_HEADER}" DESTINATION ${_httplib_dir})
   endif()
@@ -77,7 +87,7 @@ if(ENABLE_SERVER)
     # A few attempts: transient DNS / connection failures are common in
     # containers and CI.
     foreach(_attempt 1 2 3 4)
-      file(DOWNLOAD https://raw.githubusercontent.com/yhirose/cpp-httplib/v0.18.3/httplib.h ${_httplib_dir}/httplib.h
+      file(DOWNLOAD https://raw.githubusercontent.com/yhirose/cpp-httplib/v0.61.0/httplib.h ${_httplib_dir}/httplib.h
            EXPECTED_HASH SHA256=${_httplib_sha256}
            TLS_VERIFY ON TIMEOUT 60 STATUS _dl)
       list(GET _dl 0 _dl_code)

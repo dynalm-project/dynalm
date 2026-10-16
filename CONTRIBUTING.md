@@ -9,7 +9,7 @@ welcome.
   `dynalm info` and `dynalm inspect <model>`.
 - **Request a model:** run `dynalm pull <link> --check` and paste the result into a "Model request" issue.
 - **Share benchmarks:** `dynalm benchmark <model> --concurrency 1,4,16` on CPUs we have not measured,
-  especially ARM (Graviton, Ampere, Apple M-series, Raspberry Pi).
+  especially ARM64 (Linux boards and servers, Apple Silicon, Windows on ARM).
 - **Pick an open item** from [ROADMAP.md](ROADMAP.md). Good first areas:
   - NEON kernels for Q2_K, Q3_K and Q5_K;
   - IQ quantization types;

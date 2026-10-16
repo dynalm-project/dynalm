@@ -4,6 +4,9 @@ Copyright 2026 sajosam
 This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 
 Third-party components (not stored in this repository; fetched at build time):
-- cpp-httplib v0.18.3 (MIT License), https://github.com/yhirose/cpp-httplib
-  Used by the HTTP server; the exact header is verified by SHA-256.
-
+- cpp-httplib v0.61.0 (MIT License), https://github.com/yhirose/cpp-httplib
+  Used by the HTTP server; the exact header is verified by SHA-256. Its license text is in
+  THIRD_PARTY_LICENSES.md, installed next to this file.
+- ggml v0.27.0 (MIT License), https://github.com/ggml-org/ggml, commit a05c9922613c
+  (GPU builds only: -DENABLE_METAL, -DENABLE_VULKAN or -DENABLE_CUDA). Its license text is in
+  THIRD_PARTY_LICENSES.md.

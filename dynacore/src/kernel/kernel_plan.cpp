@@ -1,9 +1,12 @@
 #include "dynacore/kernel/kernel_plan.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 
+#include "dynacore/base/env.h"
 #include "dynacore/hardware/cpu_info.h"
+#include "dynacore/kernel/matmul_registry.h"
 
 namespace dynacore {
 
@@ -20,30 +23,47 @@ const KernelPlan& KernelPlan::defaults() {
   static const KernelPlan plan = [] {
     KernelPlan p;
     // Tuning overrides for experiments and the autotuner.
-    if (const char* em = std::getenv("DYNACORE_MATMUL_EXPAND_MIN")) {
+    if (const char* em = env_value("DYNACORE_MATMUL_EXPAND_MIN")) {
       p.expand_min_rows = static_cast<int32_t>(std::max<long>(1, std::strtol(em, nullptr, 10)));
     }
-    if (const char* r = std::getenv("DYNACORE_INT8_DECODE_ROWS")) {
+    if (const char* r = env_value("DYNACORE_INT8_DECODE_ROWS")) {
       p.int8_decode_max_rows = static_cast<int32_t>(std::max<long>(0, std::strtol(r, nullptr, 10)));
     }
-    if (const char* c = std::getenv("DYNACORE_MATMUL_CHUNKS")) {
+    if (const char* c = env_value("DYNACORE_MATMUL_CHUNKS")) {
       p.matmul_chunks_per_thread = static_cast<int32_t>(std::max<long>(1, std::strtol(c, nullptr, 10)));
     }
-    if (const char* sb = std::getenv("DYNACORE_INT8_SUPERBLOCK")) {
+    if (const char* sb = env_value("DYNACORE_INT8_SUPERBLOCK")) {
       p.int8_superblock_min_rows = static_cast<int32_t>(std::max<long>(0, std::strtol(sb, nullptr, 10)));
     }
-    if (const char* sx = std::getenv("DYNACORE_INT8_SUBSCALE")) {
+    if (const char* sx = env_value("DYNACORE_INT8_SUBSCALE")) {
       p.int8_subscale_min_rows = static_cast<int32_t>(std::max<long>(0, std::strtol(sx, nullptr, 10)));
     }
-    if (const char* rp = std::getenv("DYNACORE_Q4_REPACK_ROWS")) {
+    if (const char* rp = env_value("DYNACORE_Q4_REPACK_ROWS")) {
       p.q4_repack_min_rows = static_cast<int32_t>(std::max<long>(0, std::strtol(rp, nullptr, 10)));
     }
-    if (const char* rm = std::getenv("DYNACORE_Q4_REPACK_MAX_ROWS")) {
+    if (const char* rm = env_value("DYNACORE_Q4_REPACK_MAX_ROWS")) {
       p.q4_repack_max_rows = static_cast<int32_t>(std::max<long>(0, std::strtol(rm, nullptr, 10)));
     }
-    if (const char* d = std::getenv("DYNACORE_INT16_FFN_DOWN")) p.int16_ffn_down = std::strtol(d, nullptr, 10) != 0;
-    if (const char* g = std::getenv("DYNACORE_ATTN_GROUPED")) p.grouped_attention = std::strtol(g, nullptr, 10) != 0;
-    if (const char* kc = std::getenv("DYNACORE_GEMM_KC")) {
+    if (const char* p8 = env_value("DYNACORE_PACKED_8ROWS")) p.packed_int8_8rows = std::strtol(p8, nullptr, 10) != 0;
+    if (const char* ip = env_value("DYNACORE_INT16_PREFILL_ROWS")) {
+      p.int16_prefill_max_rows = static_cast<int32_t>(std::max<long>(0, std::strtol(ip, nullptr, 10)));
+    }
+    if (const char* sp = env_value("DYNACORE_INT16_PREFILL_SPLIT")) p.int16_prefill_split = std::strtol(sp, nullptr, 10) != 0;
+    if (const char* dw = env_value("DYNACORE_DECODE_WIDE_ROWS")) {
+      p.decode_wide_max_rows = static_cast<int32_t>(std::clamp<long>(std::strtol(dw, nullptr, 10), 0, 16));  // tested up to 16
+    }
+    if (const char* w8 = env_value("DYNACORE_WIDE_ROWS8")) p.wide_rows8 = std::strtol(w8, nullptr, 10) != 0;
+    if (const char* md = env_value("DYNACORE_MATMUL_DISABLE")) {
+      uint32_t mask = 0;
+      if (const Status st = parse_matmul_kernel_list(md, mask); st.ok()) {
+        p.matmul_disabled = mask;
+      } else {
+        std::fprintf(stderr, "dynacore: ignoring DYNACORE_MATMUL_DISABLE: %s\n", st.message().c_str());
+      }
+    }
+    if (const char* d = env_value("DYNACORE_INT16_FFN_DOWN")) p.int16_ffn_down = std::strtol(d, nullptr, 10) != 0;
+    if (const char* g = env_value("DYNACORE_ATTN_GROUPED")) p.grouped_attention = std::strtol(g, nullptr, 10) != 0;
+    if (const char* kc = env_value("DYNACORE_GEMM_KC")) {
       const long v = std::strtol(kc, nullptr, 10);
       p.gemm_k_block = v > 0 ? static_cast<int32_t>(v / 256 * 256) : 0;
     }

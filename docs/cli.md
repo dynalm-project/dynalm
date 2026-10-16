@@ -1,18 +1,22 @@
-# DynaLM CLI Reference: Every Command and Option
+# DynaLM CLI Reference: Commands, Options & Ollama Migration
 
-Every `dynalm` command, with all options and examples. Run `dynalm help`, or any command without
-arguments, to see the same help in the terminal.
+<!--
+SEO Keywords: local LLM CLI, terminal chat LLM, run LLM command line, Ollama CLI alternative, dynalm run, dynalm serve, dynalm pull, offline AI CLI, CPU LLM runner, command line AI assistant.
+AEO Direct Answer: DynaLM provides a developer-friendly command-line interface (CLI) to pull, run, chat, benchmark, and serve local LLMs directly on CPUs without GPUs or Python dependencies.
+-->
 
-**Quick start:**
+The `dynalm` command-line interface provides complete control over model downloads, terminal chat, system diagnostics, performance benchmarking, and local OpenAI-compatible REST serving. Run `dynalm help`, or any command without arguments, to inspect help menus directly in your shell.
+
+**Quick Start Workflow:**
 
 ```sh
-dynalm doctor                 # check this machine
-dynalm pull qwen3:4b          # download a model by name
-dynalm run qwen3:4b           # chat in the terminal (Ctrl+D or /bye to exit)
+dynalm doctor                 # System diagnostics & CPU SIMD tier check
+dynalm pull qwen3:4b          # Download model from registry or Hugging Face
+dynalm run qwen3:4b           # Interactive terminal chat (Ctrl+D or /bye to exit)
 dynalm serve qwen3:4b         # OpenAI-compatible API on http://127.0.0.1:8000/v1
 ```
 
-`run`, `serve` and `benchmark` download a named model on first use.
+`run`, `serve` and `benchmark` automatically download a named model on first use if not already cached locally.
 
 | Ollama | DynaLM |
 |---|---|
@@ -198,7 +202,7 @@ dynalm run <model> -p <prompt> [options]
 | `--batch N` | Max tokens per forward pass (default 256) |
 | `--kv f16\|f32` | KV cache precision (default f16) |
 | `--int8-decode N` | int8 activations for matmuls of ≤ N rows (default 4; 0 = off, making output independent of batching) |
-| `--backend cpu` | Compute backend (only `cpu` is built today) |
+| `--backend auto\|cpu\|metal\|vulkan\|cuda` | Compute backend. `auto` (default): a GPU built into this binary (CUDA, then Metal, then Vulkan) when it starts and runs the model, else the CPU (the reason is logged). Each GPU needs its build option (`-DENABLE_METAL/VULKAN/CUDA=ON`); experimental, [gpu-backend.md](gpu-backend.md). `DYNACORE_GPU_INDEX=N` picks the N-th GPU of that kind |
 | `--no-stream` | Print the answer at the end instead of word by word |
 
 Sampling (default for `run`: greedy, i.e. always the most likely token):
@@ -240,7 +244,7 @@ dynalm serve <model> [options]
 | Option | Meaning |
 |---|---|
 | `--config FILE` | Read options from a file (`key = value` lines) |
-| `--host ADDR` | Bind address (default `127.0.0.1`; `0.0.0.0` = reachable from the network) |
+| `--host ADDR` | Bind address (default `127.0.0.1`). A non-loopback address (`0.0.0.0`, a LAN IP) needs an API key ([security.md](security.md)) |
 | `--port N` | Port (default 8000) |
 | `--model-id NAME` | Name reported by `/v1/models` (default: file name) |
 | `-t, --threads N\|auto` | Compute threads |
@@ -256,6 +260,8 @@ dynalm serve <model> [options]
 | `--request-timeout S` | Per-request timeout in seconds, 0 = none (default 600) |
 | `--shutdown-timeout S` | Time to finish in-flight requests on stop (default 30) |
 | `--disable-admin` | Turn off `POST /admin/shutdown` (used by `dynalm stop`) |
+| `--api-key-file FILE` | Require `Authorization: Bearer <key>` on every endpoint except `GET /health`; the key is the first line of FILE (or set `DYNALM_API_KEY`), at least 16 characters |
+| `--allow-unauthenticated` | Allow a non-loopback `--host` without a key (only behind an authenticating gateway; [deployment.md](deployment.md)) |
 
 Every option can also be set as `DYNALM_<OPTION>` (e.g. `DYNALM_PORT=9000`) or in the config file.
 Precedence: command line > environment > file.
@@ -276,7 +282,7 @@ Asks the running server to finish its current requests and exit.
 | `POST /v1/completions` | Plain text completion |
 | `GET /v1/models` | The served model |
 | `GET /health` | `200` when ready, `503` while draining |
-| `GET /metrics` | Prometheus metrics (requests, TTFT, inter-token latency, tokens) |
+| `GET /metrics` | Prometheus metrics (requests, TTFT, inter-token latency, tokens; matmul calls and rows per CPU kernel: `dynacore_matmul_calls_total{kernel=...}`, `dynacore_matmul_rows_total{kernel=...}`) |
 | `POST /admin/shutdown` | Graceful stop (loopback only; what `dynalm stop` calls) |
 
 ```sh
@@ -342,3 +348,13 @@ Configuration keys and precedence: [configuration.md](configuration.md).
   - `dynalm chat` or `dynalm serve` keep the model loaded between questions.
 - **Hide the `[INFO]` lines:** `dynalm --log-level warn chat ...`.
 - **Building and testing DynaLM:** [build.md](build.md).
+
+---
+
+## 🔍 CLI Search Keywords & Topics Index
+
+- **Terminal Chat:** `dynalm run`, `dynalm chat`, interactive local LLM shell, streaming terminal completions.
+- **Serving:** `dynalm serve`, local OpenAI REST server, `--port`, `--host`, `--max-active`, `--request-timeout`.
+- **Model Management:** `dynalm pull`, `dynalm models`, `dynalm models rm`, GGUF direct loader, Hugging Face downloader.
+- **Diagnostics:** `dynalm doctor`, AVX2 check, NEON check, memory verification, system benchmark.
+- **Ollama Replacement:** Drop-in Ollama CLI commands, offline model execution, no daemon required.

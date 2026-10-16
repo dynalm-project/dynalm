@@ -85,6 +85,54 @@ struct KernelPlan {
   // within limit), so it is opt-in: 0 = decode shapes only (DD-078).
   int32_t q4_repack_max_rows = 0;
   int32_t q4_repack_min_out = 1024;
+  // EXPERIMENTAL (off by default): matmuls of kPackedRowsMax + 1 up to this
+  // many rows (prefill chunks and mixed prefill/decode steps) on a Q4_K weight
+  // with an interleaved copy (or a Q6_K one, DYNACORE_Q6_PACKED=1) and at
+  // least q4_repack_min_out output rows use int16 activations (the DD-076
+  // accuracy class, not int8) on that copy in 8-row tiles, instead of fp32
+  // expand + GEMM. Other matmuls are unchanged. 0 = off.
+  // Override: DYNACORE_INT16_PREFILL_ROWS.
+  int32_t int16_prefill_max_rows = 0;
+  // ... and only for weights of at least this many elements (N x K): below
+  // ~3M elements the int16 tiles measured slower than fp32 expand on the
+  // i7-1255U (Qwen2.5-1.5B attn_q 1536 x 1536, Qwen3-4B attn_k 1024 x 2560),
+  // from ~10M faster (docs/dynakernel.md, Phase 6).
+  int64_t int16_prefill_min_weights = int64_t{4} << 20;
+  // EXPERIMENTAL, off by default: matmuls on an interleaved Q4_K copy with
+  // more than 4 rows process up to 8 rows per kernel call (one pass over the
+  // packed weights) instead of 4-row tiles. Results are identical (rows are
+  // independent); only speed may change. Needs the AVX2 x8 kernel (not the
+  // DYNACORE_VNNI=1 one). Override: DYNACORE_PACKED_8ROWS=1.
+  bool packed_int8_8rows = false;
+  // DynaLM Next candidate (off by default): where the int16 prefill path above
+  // applies to a Q4_K weight, run the split-byte int16 tiles instead of the
+  // int16 ones. Bit-identical results (test_matmul_registry), different speed.
+  // Needs AVX-VNNI. Override: DYNACORE_INT16_PREFILL_SPLIT=1.
+  bool int16_prefill_split = false;
+  // DynaLM Next candidate (0 = off): in decode-only steps of at most this
+  // many rows, the batch planner raises int8_superblock_max_rows to it, so the
+  // int8 sub-scaled (interleaved Q4_K) and int16 FFN-down decode kernels cover
+  // 9..N concurrent decoders instead of fp32 expand. Those kernels compute
+  // every row independently, so each decode row gets exactly the arithmetic it
+  // gets at <= 8 rows today (test_matmul_registry). Prefill and mixed steps are
+  // unchanged. Override: DYNACORE_DECODE_WIDE_ROWS=16 (clamped to 0..16, the
+  // range test_matmul_registry covers).
+  int32_t decode_wide_max_rows = 0;
+  // With wide decode (more than 8 rows on the int8 interleaved kernel), use
+  // its 8-row tiles: one pass over each packed weight group per 8 rows
+  // instead of per 4. Identical results (test_packed_8rows); measured faster
+  // at 9-16 rows (results/dynalm-release-*/profile-wide). Rows 5-8 keep the
+  // 4-row tiles unless packed_int8_8rows is set. Only reachable when
+  // decode_wide_max_rows is set. Override: DYNACORE_WIDE_ROWS8=0.
+  bool wide_rows8 = true;
+  // Matmul kernels removed from selection, as a bitmask of
+  // matmul_kernel_bit(MatmulKernelId) (matmul_registry.h); selection falls
+  // through to the next eligible kernel. Override: DYNACORE_MATMUL_DISABLE=
+  // name,name or all-accelerated (the fp32 reference arithmetic only).
+  uint32_t matmul_disabled = 0;
+  // Consult kernels registered with CpuDevice::register_external_matmul
+  // (DynaKernel extension point) before the built-in ones. Off by default.
+  bool external_matmul = false;
 
   // --- attention ---
   // Separate decisions for full-causal and sliding-window layers: a window
@@ -99,7 +147,11 @@ struct KernelPlan {
   bool grouped_attention = true;
 
   // Defaults, with the tuning overrides DYNACORE_MATMUL_EXPAND_MIN,
-  // DYNACORE_GEMM_KC, DYNACORE_INT8_DECODE_ROWS, DYNACORE_INT8_SUPERBLOCK, DYNACORE_INT16_FFN_DOWN, DYNACORE_ATTN_GROUPED and DYNACORE_MATMUL_CHUNKS applied (read once per process).
+  // DYNACORE_GEMM_KC, DYNACORE_INT8_DECODE_ROWS, DYNACORE_INT8_SUPERBLOCK,
+  // DYNACORE_INT8_SUBSCALE, DYNACORE_Q4_REPACK_ROWS, DYNACORE_Q4_REPACK_MAX_ROWS,
+  // DYNACORE_PACKED_8ROWS, DYNACORE_INT16_PREFILL_ROWS, DYNACORE_INT16_PREFILL_SPLIT,
+  // DYNACORE_MATMUL_DISABLE, DYNACORE_INT16_FFN_DOWN, DYNACORE_ATTN_GROUPED and
+  // DYNACORE_MATMUL_CHUNKS applied (read once per process).
   static const KernelPlan& defaults();
 
   friend bool operator==(const KernelPlan&, const KernelPlan&) = default;

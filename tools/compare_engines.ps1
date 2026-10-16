@@ -4,26 +4,44 @@
 
 .DESCRIPTION
   Sets everything up and runs tools/compare_engines.py:
-    1. Finds dynalm.exe (builds it with the msvc-release preset if missing).
-    2. Finds llama-server.exe in .bench\llamacpp, or downloads the latest official
-       llama.cpp Windows CPU build from GitHub (ggml-org/llama.cpp).
+    1. Uses the DynaLM executable given with -DynalmExe; without it, this
+       workspace's build\msvc-release\bin\dynalm.exe (built if missing). The
+       chosen path, version and SHA-256 are printed and recorded in the report
+       (manifest.json, report.md, every result row). An explicitly requested
+       executable is never replaced.
+    2. Finds llama-server.exe in .bench\llamacpp (or -LlamaServer), or downloads
+       the latest official llama.cpp Windows CPU build from GitHub.
     3. Finds Ollama, or installs it with winget.
-    4. Checks the model files and free RAM, stops leftover servers.
+    4. Checks the model files and free RAM. Never stops processes it did not
+       start: busy ports make the affected engine fail its preflight, and Ollama
+       runs as the script's own `ollama serve` on -OllamaPort (default 11435),
+       so a running Ollama desktop app is left alone.
     5. Runs every engine on every model, one server at a time, with the same load
        generator (dynalm benchmark --url), and writes a Markdown report.
 
   Close other heavy apps first: results are only fair with free RAM.
 
 .EXAMPLE
-  powershell -ExecutionPolicy Bypass -File tools\compare_engines.ps1
+  powershell -ExecutionPolicy Bypass -File tools\compare_engines.ps1 -DynalmExe D:\path\to\dynalm.exe
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File tools\compare_engines.ps1 -Threads 8 -Skip ollama
 #>
 [CmdletBinding()]
 param(
+  # The DynaLM executable under test (default: this workspace's msvc-release build).
+  [string]$DynalmExe = "",
+  # llama-server.exe (default: .bench\llamacpp\llama-server.exe, downloaded if missing).
+  [string]$LlamaServer = "",
   # Compute threads for every engine.
   [int]$Threads = 10,
+  # Context per user, the same for every engine.
+  [int]$Ctx = 2048,
+  # Requests per point (0 = the load generator's default) and uncounted warm-up requests.
+  [int]$Requests = 0,
+  [int]$WarmupRequests = 0,
+  # Port of the script's own `ollama serve`.
+  [int]$OllamaPort = 11435,
   # FILE[:CONCURRENCY:PROMPTS:OUTPUTS]; lists are comma-separated, models
   # separated by ';' when passed with -File.
   [string[]]$Models = @(
@@ -33,7 +51,7 @@ param(
   ),
   # Engines to leave out: dynalm, llama.cpp, ollama.
   [string[]]$Skip = @(),
-  # Output directory (default: results\compare-<timestamp>).
+  # Output directory (default: results\compare-<timestamp>); must not hold results yet.
   [string]$Out = ""
 )
 
@@ -46,6 +64,7 @@ Set-Location $Root
 $Skip = @($Skip | ForEach-Object { $_ -split "," } | Where-Object { $_ })
 $Models = @($Models | ForEach-Object { $_ -split ";" } | Where-Object { $_ })
 if (-not $Out) { $Out = "results\compare-" + (Get-Date -Format "yyyyMMdd-HHmmss") }
+if (Test-Path (Join-Path $Out "results.jsonl")) { throw "$Out already holds results; pick a new -Out." }
 
 function Step($msg) { Write-Host "`n== $msg" -ForegroundColor Cyan }
 
@@ -57,38 +76,54 @@ if (-not $Python) { throw "Python 3 is required (https://www.python.org/download
 
 # --- DynaLM -----------------------------------------------------------------
 Step "DynaLM"
-$Dynalm = Join-Path $Root "build\msvc-release\bin\dynalm.exe"
-if (-not (Test-Path $Dynalm)) {
-  Write-Host "Building DynaLM (msvc-release)..."
-  cmd /c "tools\dev.cmd cmake --preset msvc-release && tools\dev.cmd cmake --build --preset msvc-release"
-  if ($LASTEXITCODE -ne 0) { throw "DynaLM build failed." }
+if ($DynalmExe) {
+  # Explicit choice: use exactly this file, never a local build instead.
+  if (-not (Test-Path $DynalmExe -PathType Leaf)) { throw "-DynalmExe $DynalmExe does not exist." }
+  $Dynalm = (Resolve-Path $DynalmExe).Path
+} else {
+  $Dynalm = Join-Path $Root "build\msvc-release\bin\dynalm.exe"
+  if (-not (Test-Path $Dynalm)) {
+    Write-Host "Building DynaLM (msvc-release)..."
+    cmd /c "tools\dev.cmd cmake --preset msvc-release && tools\dev.cmd cmake --build --preset msvc-release"
+    if ($LASTEXITCODE -ne 0) { throw "DynaLM build failed." }
+  }
+  Write-Host "No -DynalmExe given: using this workspace's build."
 }
+Write-Host "DynaLM under test: $Dynalm"
+Write-Host ("  SHA-256 {0}" -f (Get-FileHash $Dynalm -Algorithm SHA256).Hash)
 & $Dynalm --version
 
 # --- llama.cpp --------------------------------------------------------------
 Step "llama.cpp"
-$LlamaDir = Join-Path $Root ".bench\llamacpp"
-$LlamaServer = Join-Path $LlamaDir "llama-server.exe"
-if (-not (Test-Path $LlamaServer)) {
-  New-Item -ItemType Directory -Force $LlamaDir | Out-Null
-  Write-Host "Looking up the latest llama.cpp Windows CPU build..."
-  $releases = Invoke-RestMethod "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=15" `
-    -ErrorAction Stop -Headers @{ "User-Agent" = "dynalm-bench" }
-  $asset = $null
-  foreach ($r in $releases) {
-    $asset = $r.assets | Where-Object { $_.name -match "^llama-.*-bin-win-cpu-x64\.zip$" } | Select-Object -First 1
-    if ($asset) { break }
+if ($LlamaServer) {
+  if (-not (Test-Path $LlamaServer -PathType Leaf)) { throw "-LlamaServer $LlamaServer does not exist." }
+  $LlamaServer = (Resolve-Path $LlamaServer).Path
+} else {
+  $LlamaDir = Join-Path $Root ".bench\llamacpp"
+  $LlamaServer = Join-Path $LlamaDir "llama-server.exe"
+  if (-not (Test-Path $LlamaServer) -and $Skip -notcontains "llama.cpp") {
+    New-Item -ItemType Directory -Force $LlamaDir | Out-Null
+    Write-Host "Looking up the latest llama.cpp Windows CPU build..."
+    $releases = Invoke-RestMethod "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=15" `
+      -ErrorAction Stop -Headers @{ "User-Agent" = "dynalm-bench" }
+    $asset = $null
+    foreach ($r in $releases) {
+      $asset = $r.assets | Where-Object { $_.name -match "^llama-.*-bin-win-cpu-x64\.zip$" } | Select-Object -First 1
+      if ($asset) { break }
+    }
+    if (-not $asset) { throw "No llama.cpp Windows CPU build found in the latest releases." }
+    $zip = Join-Path $LlamaDir $asset.name
+    Write-Host "Downloading $($asset.name) ($([math]::Round($asset.size / 1MB)) MB)..."
+    Invoke-WebRequest $asset.browser_download_url -OutFile $zip -UseBasicParsing -ErrorAction Stop
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $LlamaDir)
+    Remove-Item $zip
   }
-  if (-not $asset) { throw "No llama.cpp Windows CPU build found in the latest releases." }
-  $zip = Join-Path $LlamaDir $asset.name
-  Write-Host "Downloading $($asset.name) ($([math]::Round($asset.size / 1MB)) MB)..."
-  Invoke-WebRequest $asset.browser_download_url -OutFile $zip -UseBasicParsing -ErrorAction Stop
-  Add-Type -AssemblyName System.IO.Compression.FileSystem
-  [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $LlamaDir)
-  Remove-Item $zip
 }
-cmd /c "`"$LlamaServer`" --version 2>&1" | Select-String "version"
-if (-not $?) { throw "llama-server.exe does not run." }
+if ($Skip -notcontains "llama.cpp") {
+  cmd /c "`"$LlamaServer`" --version 2>&1" | Select-String "version"
+  if (-not $?) { throw "llama-server.exe does not run." }
+}
 
 # --- Ollama -----------------------------------------------------------------
 Step "Ollama"
@@ -122,23 +157,24 @@ foreach ($m in $Models) {
 }
 if ($specs.Count -eq 0) { throw "No model files found. Pull them with: dynalm pull qwen2.5:1.5b / qwen3:4b" }
 
-# --- Memory and leftover servers ---------------------------------------------
+# --- Memory and running servers ----------------------------------------------
 Step "System"
 $freeGb = (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB
 Write-Host ("Free RAM: {0:N1} GB" -f $freeGb)
 if ($freeGb -lt 6) { Write-Warning "Less than 6 GB free: close other apps or results will be skewed by paging." }
-foreach ($p in "llama-server", "ollama", "ollama app") {
-  Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+# Report, never stop: other inference servers distort the measurement.
+$others = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(llama-server|ollama|ollama app|dynalm)$' })
+if ($others.Count -gt 0) {
+  Write-Warning ("Other inference processes are running and will compete for the CPU: {0}. Close them yourself for fair numbers." -f (($others | ForEach-Object { "$($_.Name) ($($_.Id))" }) -join ", "))
 }
-Get-CimInstance Win32_Process -Filter "Name='dynalm.exe'" |
-  Where-Object { $_.CommandLine -match " serve " } |
-  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
 # --- Run --------------------------------------------------------------------
 Step "Benchmark (this takes a while; one server at a time)"
 $pyArgs = @("tools\compare_engines.py", "--dynalm", $Dynalm, "--llama-server", $LlamaServer,
-            "--threads", "$Threads", "--out", $Out)
-if ($Ollama) { $pyArgs += @("--ollama", $Ollama) } else { $pyArgs += @("--skip", "ollama") }
+            "--threads", "$Threads", "--ctx", "$Ctx", "--ollama-port", "$OllamaPort", "--out", $Out)
+if ($Requests -gt 0) { $pyArgs += @("--requests", "$Requests") }
+if ($WarmupRequests -gt 0) { $pyArgs += @("--warmup-requests", "$WarmupRequests") }
+if ($Ollama) { $pyArgs += @("--ollama", $Ollama) } elseif ($Skip -notcontains "ollama") { $pyArgs += @("--skip", "ollama") }
 foreach ($s in $Skip) { $pyArgs += @("--skip", $s) }
 foreach ($s in $specs) { $pyArgs += @("--model", $s) }
 
@@ -146,14 +182,10 @@ New-Item -ItemType Directory -Force $Out | Out-Null
 $env:PYTHONUTF8 = "1"
 & $Python @pyArgs | Tee-Object -FilePath (Join-Path $Out "run.log")
 
-# --- Clean up ---------------------------------------------------------------
-foreach ($p in "llama-server", "ollama") {
-  Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-}
-
 Step "Done"
 $OutFull = if ([System.IO.Path]::IsPathRooted($Out)) { $Out } else { Join-Path $Root $Out }
-Write-Host "Report:  $(Join-Path $OutFull 'report.md')"
-Write-Host "Raw:     $(Join-Path $OutFull 'results.jsonl')"
-Write-Host "Log:     $(Join-Path $OutFull 'run.log')"
-Write-Host "Note: Ollama ignores ignore_eos; compare its rows by the 'Mean output tokens' column."
+Write-Host "Report:   $(Join-Path $OutFull 'report.md')"
+Write-Host "Manifest: $(Join-Path $OutFull 'manifest.json')"
+Write-Host "Raw:      $(Join-Path $OutFull 'results.jsonl')"
+Write-Host "Log:      $(Join-Path $OutFull 'run.log')"
+Write-Host "Note: Ollama ignores ignore_eos; rows below 95% of the requested output are marked not comparable."

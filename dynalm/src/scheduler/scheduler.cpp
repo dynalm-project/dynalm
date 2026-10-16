@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <string>
 
+#include "dynacore/base/env.h"
 #include "dynacore/base/timer.h"
 #include "logging/log.h"
 #include "sampling/sampler.h"
@@ -18,6 +19,17 @@ std::string_view scheduler_policy_name(SchedulerPolicy p) {
     case SchedulerPolicy::kThroughputFirst: return "throughput";
   }
   return "balanced";
+}
+
+std::string_view prefill_order_name(PrefillOrder o) {
+  return o == PrefillOrder::kShortestRemaining ? "srpt" : "fifo";
+}
+
+bool parse_prefill_order(std::string_view s, PrefillOrder& out) {
+  if (s == "fifo") out = PrefillOrder::kFifo;
+  else if (s == "srpt") out = PrefillOrder::kShortestRemaining;
+  else return false;
+  return true;
 }
 
 bool parse_scheduler_policy(std::string_view s, SchedulerPolicy& out) {
@@ -41,10 +53,37 @@ Scheduler::Scheduler(Transformer& model, KvBlockPool& kv, const Tokenizer& token
     config_.protected_prefill_min = 16;
     config_.decode_latency_target = 4.0f;
   }
-  if (const char* dp = std::getenv("DYNALM_DECODE_PROTECT")) config_.decode_protect = std::strtol(dp, nullptr, 10) != 0;
-  if (const char* dt = std::getenv("DYNALM_DECODE_TARGET")) config_.decode_latency_target = static_cast<float>(std::atof(dt));
-  if (const char* pm = std::getenv("DYNALM_PROTECT_MIN")) config_.protected_prefill_min = static_cast<int32_t>(std::atoi(pm));
+  // Environment overrides; empty or invalid values are ignored (with a warning)
+  // instead of being read as 0, which would collapse the mixed-step prefill
+  // budget to one row (a target of 0 halves it on every mixed step).
+  long lv = 0;
+  double dv = 0;
+  if (const char* dp = dynacore::env_value("DYNALM_DECODE_PROTECT")) {
+    if (dynacore::parse_env_long(dp, lv)) {
+      config_.decode_protect = lv != 0;
+    } else {
+      LOG_WARN("ignoring DYNALM_DECODE_PROTECT='{}' (expected 0 or 1)", dp);
+    }
+  }
+  if (const char* dt = dynacore::env_value("DYNALM_DECODE_TARGET")) {
+    if (dynacore::parse_env_double(dt, dv) && dv > 0) {
+      config_.decode_latency_target = static_cast<float>(dv);
+    } else {
+      LOG_WARN("ignoring DYNALM_DECODE_TARGET='{}' (expected a number > 0)", dt);
+    }
+  }
+  if (const char* pm = dynacore::env_value("DYNALM_PROTECT_MIN")) {
+    if (dynacore::parse_env_long(pm, lv) && lv >= 1) {
+      config_.protected_prefill_min = static_cast<int32_t>(lv);
+    } else {
+      LOG_WARN("ignoring DYNALM_PROTECT_MIN='{}' (expected an integer >= 1)", pm);
+    }
+  }
   config_.protected_prefill_min = std::clamp(config_.protected_prefill_min, 1, config_.prefill_token_budget);
+  // A step without decode rows carries prefill rows only: the solo chunk may use the whole batch.
+  config_.solo_prefill_chunk = std::clamp(config_.solo_prefill_chunk, 0, cap);
+  stats_.solo_prefill_chunk = config_.solo_prefill_chunk;
+  stats_.solo_prefill_split = config_.solo_prefill_split;
   mixed_prefill_budget_ = config_.prefill_token_budget;
   batch_.reserve(static_cast<size_t>(config_.max_running));
   batch_owner_.reserve(static_cast<size_t>(config_.max_running));
@@ -72,6 +111,9 @@ uint64_t Scheduler::submit(Request request) {
   }
   e.arrival_ns = now_ns();
   e.deadline_ns = request.timeout_ms > 0 ? e.arrival_ns + request.timeout_ms * 1000000 : 0;
+  e.trace.id = id;
+  e.trace.prompt_tokens = static_cast<int32_t>(request.prompt.size());
+  e.trace.submit_ns = e.arrival_ns;
   std::lock_guard<std::mutex> lock(in_mu_);
   incoming_.push_back(std::move(e));
   incoming_count_.fetch_add(1, std::memory_order_release);
@@ -106,6 +148,14 @@ void Scheduler::retire(Entry& e) {
       ++stats_.failed;
       if (e.seq->error().code() == StatusCode::kDeadlineExceeded) ++stats_.timed_out;
       break;
+  }
+  if (config_.trace) {
+    e.trace.finish_ns = now_ns();
+    e.trace.status = e.seq->status();
+    e.trace.generated = e.seq->generated();
+    e.trace.preemptions = e.seq->preemptions();
+    std::lock_guard<std::mutex> lock(trace_mu_);
+    request_trace_.push_back(e.trace);
   }
   emit_final(e);
 }
@@ -218,6 +268,8 @@ void Scheduler::admit(int64_t now) {
       e.cached_blocks = match.tokens / bs;
     }
     e.admit_order = ++admit_counter_;
+    e.admit_ns = now;
+    if (e.trace.admit_ns == 0) e.trace.admit_ns = now;
     if (e.seq->preemptions() == 0) {
       const double q = static_cast<double>(now - e.arrival_ns) * 1e-6;
       stats_.queue_ms_total += q;
@@ -288,6 +340,8 @@ bool Scheduler::step() {
     return e.seq->status() == SequenceStatus::kDecode && e.seq->pending() == 1;
   };
   std::vector<Entry*> order;
+  bool solo = false, solo_skipped = false, srpt = false;
+  int32_t traced_budget = 0, traced_chunk = 0, traced_prefilling = 0;
   for (int attempt = 0;; ++attempt) {
     batch_.clear();
     batch_owner_.clear();
@@ -299,13 +353,49 @@ bool Scheduler::step() {
     // Decode-protected prefill (DD-079): smaller prefill share while streams decode.
     bool any_decode = false;
     for (const Entry* e : order) any_decode = any_decode || is_decode_row(*e);
-    const int32_t prefill_budget =
-        config_.decode_protect && any_decode ? mixed_prefill_budget_ : config_.prefill_token_budget;
+    // Solo prefill (experimental, off when solo_prefill_chunk == 0): a step with
+    // no decode rows takes larger chunks. FIFO (the default mode) only for a
+    // lone prompt: with two or more sequences prefilling, the oldest would take
+    // the whole solo budget and a short prompt would wait behind every large
+    // chunk of a long one (Phase 9 V3), so such steps keep the regular chunk and
+    // budget. Split mode shares the solo budget instead. Mixed steps never see
+    // the solo budget; mixed_prefill_budget_ stays bounded by
+    // prefill_token_budget (DD-079).
+    int32_t prefilling = 0;
+    for (const Entry* e : order) {
+      prefilling += !is_terminal(e->seq->status()) && e->seq->pending() > 0 && !is_decode_row(*e) ? 1 : 0;
+    }
+    // Experimental prefill order (default FIFO); only matters with >= 2 prompts prefilling.
+    srpt = config_.prefill_order == PrefillOrder::kShortestRemaining && prefilling > 1;
+    const int64_t aging_ns = static_cast<int64_t>(config_.prefill_aging_ms) * 1000000;
+    solo = config_.solo_prefill_chunk > 0 && !any_decode && (prefilling == 1 || config_.solo_prefill_split);
+    solo_skipped = config_.solo_prefill_chunk > 0 && !any_decode && !solo;
+    const int32_t prefill_budget = solo ? std::max(config_.prefill_token_budget, config_.solo_prefill_chunk)
+                                   : config_.decode_protect && any_decode ? mixed_prefill_budget_
+                                                                          : config_.prefill_token_budget;
+    int32_t prefill_chunk = config_.max_prefill_chunk;  // 0 = up to the budget
+    if (solo) {
+      prefill_chunk = config_.solo_prefill_chunk;
+      if (config_.solo_prefill_split && prefilling > 1) {
+        prefill_chunk = std::max({config_.max_prefill_chunk, config_.solo_prefill_chunk / prefilling, 1});
+      }
+    }
+    traced_budget = prefill_budget;
+    traced_chunk = prefill_chunk;
+    traced_prefilling = prefilling;
     std::stable_sort(order.begin(), order.end(), [&](const Entry* a, const Entry* b) {
       const bool ad = is_decode_row(*a), bd = is_decode_row(*b);
       if (ad != bd) return ad;
       if (ad) return a->last_step != b->last_step ? a->last_step < b->last_step : a->admit_order < b->admit_order;
-      return a->priority != b->priority ? a->priority > b->priority : a->admit_order < b->admit_order;
+      if (a->priority != b->priority) return a->priority > b->priority;
+      if (srpt) {
+        // Prompts waiting longer than prefill_aging_ms first (FIFO among them),
+        // then the fewest prompt tokens left.
+        const bool sa = now - a->admit_ns >= aging_ns, sb = now - b->admit_ns >= aging_ns;
+        if (sa != sb) return sa;
+        if (!sa && a->seq->pending() != b->seq->pending()) return a->seq->pending() < b->seq->pending();
+      }
+      return a->admit_order < b->admit_order;
     });
 
     for (Entry* e : order) {
@@ -314,7 +404,7 @@ bool Scheduler::step() {
       int32_t& used = decode ? decode_rows : prefill_rows;
       const int32_t budget = decode ? config_.decode_token_budget : prefill_budget;
       int32_t n = std::min(e->seq->pending(), budget - used);
-      if (!decode && config_.max_prefill_chunk > 0) n = std::min(n, config_.max_prefill_chunk);
+      if (!decode && prefill_chunk > 0) n = std::min(n, prefill_chunk);
       if (n <= 0) continue;
       const int64_t t_kv = now_ns();
       const Status st = e->seq->reserve_kv(n);
@@ -346,7 +436,42 @@ bool Scheduler::step() {
     if (restart) continue;
     stats_.last_decode_rows = decode_rows;
     stats_.last_prefill_rows = prefill_rows;
+    if (solo && prefill_rows > 0) ++stats_.steps_solo_prefill;
+    if (solo_skipped && prefill_rows > 0) ++stats_.steps_solo_prefill_skipped;
+    if (srpt && prefill_rows > 0) ++stats_.steps_prefill_srpt;
     break;
+  }
+
+  // Trace (statistics only): what each sequence computed, and who waited.
+  StepTrace cur;
+  if (config_.trace && !batch_.empty()) {
+    cur.step = step_no;
+    cur.plan_start_ns = t_plan;
+    cur.prefill_rows = stats_.last_prefill_rows;
+    cur.decode_rows = stats_.last_decode_rows;
+    cur.prefill_budget = traced_budget;
+    cur.prefill_chunk = traced_chunk;
+    cur.prefilling = traced_prefilling;
+    cur.waiting = static_cast<int32_t>(waiting_.size());
+    cur.solo = solo;
+    cur.solo_skipped = solo_skipped;
+    cur.srpt = srpt;
+    const int64_t planned = now_ns();  // after admission and planning
+    for (size_t b = 0; b < batch_.size(); ++b) {
+      Entry& e = *batch_owner_[b];
+      const bool dec = is_decode_row(e);
+      cur.rows.push_back({e.id, static_cast<int32_t>(batch_[b].tokens.size()), batch_[b].start_pos, dec});
+      if (!dec) {
+        if (e.trace.first_scheduled_ns == 0) e.trace.first_scheduled_ns = planned;
+        ++e.trace.prefill_steps;
+      }
+    }
+    for (Entry& e : running_) {
+      if (is_terminal(e.seq->status()) || e.seq->pending() == 0 || is_decode_row(e)) continue;
+      if (std::find(batch_owner_.begin(), batch_owner_.end(), &e) != batch_owner_.end()) continue;
+      cur.prefill_unserved.push_back(e.id);
+      ++e.trace.prefill_unserved_steps;
+    }
   }
 
   if (batch_.empty()) {
@@ -366,6 +491,10 @@ bool Scheduler::step() {
   const int64_t t_post = now_ns();
   const double fwd_ms = static_cast<double>(t_post - t_fwd) * 1e-6;
   stats_.forward_ms += fwd_ms;
+  if (solo && stats_.last_prefill_rows > 0) {  // statistics only: forward time of solo-prefill steps
+    stats_.forward_solo_prefill_ms += fwd_ms;
+    stats_.solo_prefill_step_ms_max = std::max(stats_.solo_prefill_step_ms_max, fwd_ms);
+  }
   if (stats_.last_prefill_rows == 0) {
     ++stats_.steps_decode_only;
     stats_.forward_decode_only_ms += fwd_ms;
@@ -406,6 +535,7 @@ bool Scheduler::step() {
     const bool was_decode = is_decode_row(e);
     e.seq->mark_computed(static_cast<int32_t>(batch_[b].tokens.size()));
     if (was_decode) e.last_step = step_no;
+    if (config_.trace && !was_decode) e.trace.prefill_forward_ms += fwd_ms;
     if (prefix_cache_) {
       // Offer newly completed (hence immutable) blocks for reuse.
       const int32_t full = e.seq->num_computed() / kv_.geometry().block_size;
@@ -422,6 +552,7 @@ bool Scheduler::step() {
     if (e.seq->pending() != 0 || e.seq->status() != SequenceStatus::kDecode) continue;
     const TokenId next = e.sampler ? e.sampler->sample(row, e.seq->tokens()) : sample_greedy(row);
     e.seq->append_token(next, tokenizer_);
+    if (config_.trace && e.trace.first_token_ns == 0) e.trace.first_token_ns = now_ns();
     ++stats_.tokens_generated;
     if (e.on_event) {
       const int64_t t0 = now_ns();
@@ -438,7 +569,27 @@ bool Scheduler::step() {
   stats_.prefix_insert_ms += static_cast<double>(insert_ns) * 1e-6;
   stats_.emit_ms += static_cast<double>(emit_ns) * 1e-6;
   stats_.sample_ms += static_cast<double>(post_ns - insert_ns - emit_ns) * 1e-6;
+  if (config_.trace) {
+    cur.forward_start_ns = t_fwd;
+    cur.forward_end_ns = t_post;
+    std::lock_guard<std::mutex> lock(trace_mu_);
+    step_trace_.push_back(std::move(cur));
+  }
   return true;
+}
+
+std::vector<StepTrace> Scheduler::take_step_trace() {
+  std::lock_guard<std::mutex> lock(trace_mu_);
+  std::vector<StepTrace> out;
+  out.swap(step_trace_);
+  return out;
+}
+
+std::vector<RequestTrace> Scheduler::take_request_trace() {
+  std::lock_guard<std::mutex> lock(trace_mu_);
+  std::vector<RequestTrace> out;
+  out.swap(request_trace_);
+  return out;
 }
 
 void Scheduler::run_until_idle() {

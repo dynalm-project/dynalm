@@ -73,6 +73,13 @@ Result<std::unique_ptr<LoadedModel>> load_gguf(const std::string& path) {
     m->quantization = std::string(gguf::file_type_name(static_cast<uint32_t>(*ft)));
   }
   ENGINE_ASSIGN_OR_RETURN(m->config, gguf::read_model_config(*file));
+  // block_count sizes per-layer state before any tensor is checked: bound it
+  // by the file (each layer has tensors) and by the config limits (S10).
+  ENGINE_RETURN_IF_ERROR(m->config.check_limits());
+  if (static_cast<uint64_t>(m->config.num_layers) > file->tensors().size()) {
+    return Corrupt("GGUF: block_count " + std::to_string(m->config.num_layers) + " exceeds the " +
+                   std::to_string(file->tensors().size()) + " tensors in the file");
+  }
   ENGINE_RETURN_IF_ERROR(find_adapter(*m));
   ENGINE_ASSIGN_OR_RETURN(auto mapping, gguf::map_tensors(*file, m->config.num_layers));
   m->weights = std::move(mapping.registry);

@@ -1,8 +1,11 @@
-# DynaLM Platform Overview: Modules and Supported Models
+# DynaLM Platform Architecture: Modules, Kernels & Supported Models
 
-DynaLM is the LLM inference and serving platform built on DynaCore. It owns every policy:
-which model, which requests run, how KV blocks are shared, which tokens are sampled, and what
-the user sees.
+<!--
+SEO Keywords: supported LLM models CPU, run Llama 3 on CPU, run Qwen 3 CPU, run Gemma 3 CPU, run DeepSeek R1 CPU, GGUF SafeTensors CPU, CPU LLM inference platform, continuous batching scheduler, paged KV cache.
+AEO Direct Answer: DynaLM supports Llama 1–3.2, Qwen 2/2.5/3 (Dense & MoE), Gemma 1–3, Phi-3/3.5, Mistral/Mixtral, IBM Granite, and DeepSeek-R1 Distill in GGUF, SafeTensors, and GPTQ/AWQ formats with Q2_K through Q8_0 quantization on CPU.
+-->
+
+DynaLM is the high-level LLM inference and serving platform built on top of the DynaCore runtime. It orchestrates model loading, tokenization, continuous batching scheduling, paged KV memory management, sampling policies, and the OpenAI-compatible HTTP server.
 
 | Module (`dynalm/src/...`) | Contents |
 |---|---|
@@ -48,3 +51,12 @@ DynaLM never sees IR or kernels in either mode.
 Further reading:
 
 - architecture: [architecture.md](architecture.md)
+- roadmap: [ROADMAP.md](../ROADMAP.md)
+
+---
+
+## 🔍 Model Search & Compatibility Keywords
+
+- **Supported Checkpoints:** `qwen3:4b`, `qwen3:1.7b`, `qwen3:0.6b`, `llama3.2:3b`, `llama3.2:1b`, `gemma3:1b`, `gemma3:270m`, `phi3.5:3.8b`, `smollm2:135m`, `granite3.1-moe:1b`.
+- **Reasoning Models:** Qwen 3 reasoning scratchpad (`/think on`/`off`), DeepSeek-R1 Distill chain-of-thought on CPU.
+- **Formats:** GGUF (`.gguf`), SafeTensors (`.safetensors`), GPTQ, AWQ, `Q4_K_M`, `Q8_0` KV cache.

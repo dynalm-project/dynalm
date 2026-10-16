@@ -1,6 +1,7 @@
 #include "dynacore/ir/verifier.h"
 
 #include "dynacore/ir/text.h"
+#include "dynacore/kernel/matmul_registry.h"
 
 namespace dynacore::ir {
 namespace {
@@ -75,6 +76,14 @@ std::vector<std::string> verify_all(const Graph& g, const VerifyOptions& opts) {
         } else if (!result_type_matches(*t, r.type)) {
           errors.push_back(where + ": result type " + type_to_string(r.type) + " but operands give " +
                            type_to_string(*t));
+        }
+        // Matmuls: the CPU backend's own shape contract (matmul_registry.h),
+        // the same check CpuDevice::matmul applies before any kernel runs.
+        if ((op.kind == OpKind::kMatMul || op.kind == OpKind::kQuantizedMatMul) && types.size() >= 2 &&
+            types[0].rank() == 2 && types[1].rank() == 2 && types[1].shape[0].known() && types[1].shape[1].known()) {
+          const int64_t m = types[0].shape[0].known() ? types[0].shape[0].size : opts.symbol_size;
+          const MatmulShape ms{m, types[1].shape[0].size, types[1].shape[1].size, types[1].dtype, true};
+          if (const Status st = validate_matmul_shape(ms); !st.ok()) errors.push_back(where + ": " + st.message());
         }
         if (op_writes_in_place(op.kind) && !op.inputs.empty() && g.value(op.inputs[0]).buffer != r.buffer) {
           errors.push_back(where + ": in-place op must share its first operand's buffer");

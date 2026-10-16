@@ -1,6 +1,282 @@
 # Changelog
 
-## [Unreleased]
+## [0.1.5] - 2026-10-17
+
+0.1.4 was prepared but never published as a GitHub release. Its changes (the [0.1.4] section
+below) ship in 0.1.5 together with everything listed here.
+
+CPU-only builds behave as before. GPU backends (Metal, Vulkan, CUDA) are opt-in at build
+time. **In a GPU build, `--backend auto` (the default) now selects the GPU** when the model
+runs on it. Otherwise it selects the CPU and logs why. `--backend cpu` and
+`--backend metal` are always obeyed. **One security default changed:** `serve` refuses a
+non-loopback `--host` without an API key (see Security).
+
+### Vulkan and CUDA GPU backends, Windows on ARM (preview)
+- **Vulkan** (preview; `-DENABLE_VULKAN=ON`, `--backend vulkan`): AMD, Intel, NVIDIA and
+  Qualcomm GPUs through the same ggml device as Metal.
+  - Passes the GPU device suite, the engine tests, DD-053 accuracy and the API smoke test
+    (validated through MoltenVK).
+  - CI runs it on Mesa lavapipe.
+- **CUDA** (preview; `-DENABLE_CUDA=ON`, `--backend cuda`): the same device layer. CI builds
+  it.
+- **Shared GPU changes:**
+  - Matmul and attention request fp32 precision on every GPU (DD-053).
+  - Buffers get unique handle addresses on providers that do not provide them.
+  - Auto KV capacity respects free device memory.
+  - `DYNACORE_GPU_INDEX` selects a GPU.
+  - `ENABLE_HIP` is refused with a pointer to Vulkan.
+  - A GPU that cannot run the core ops (for example a virtualized GPU without the
+    required features) is refused at startup. `auto` then uses the CPU instead of
+    failing on the first request.
+- **Windows on ARM** (preview):
+  - presets `msvc-release` (ARM64 prompt) and `windows-arm64` (clang-cl);
+  - CI build, test and package jobs on `windows-11-arm`;
+  - a `dynalm-windows-arm64.zip` release asset;
+  - the installer detects ARM64 from the system registry (an emulated x64 PowerShell reports
+    AMD64).
+- **Portability fix:** `TensorLayout::contiguous` no longer uses `__builtin_mul_overflow`,
+  which MSVC lacks.
+
+### Metal GPU backend (preview; docs/gpu.md, docs/gpu-backend.md)
+- **Device choice:** `--backend auto|cpu|metal` on `run`, `serve` and `benchmark`;
+  `runtime.device` in the config file; or `DYNALM_BACKEND`.
+  - `auto` checks the model at startup (`gpu_model_support`). Unsupported models fall back to
+    the CPU: MoE, per-head Q/K norm (Qwen3, Gemma 3), YaRN or Llama 3 RoPE scaling, and KV
+    types other than f16, f32 and q8_0.
+  - `auto` also falls back to the CPU when the GPU fails to start. It logs
+    `Device: auto selects the CPU: <reason>`.
+  - `--backend metal` with an unsupported model now fails at startup, not on the first
+    request.
+- **Execution:** each forward step runs on the GPU as one ggml graph (pinned ggml v0.27.0,
+  `a05c992`, MIT; Metal shaders embedded and compiled at run time, so no Xcode is needed).
+  - The step is recorded by DynaIR and handed over whole (`SegmentExecutor`, `DeviceCall`).
+  - Prepared graphs are cached by structure and padded KV span; only token ids, positions, KV
+    indices and masks are uploaded per step.
+- **Paged KV read in place:** the GPU KV pool uses a slot-major block layout
+  (`KvLayout::kSlotMajor`) and flash attention reads it directly.
+  - The block tables, causality and sliding window become a mask; fully masked chunks are
+    skipped by the kernel.
+  - Nothing is gathered or copied. Prefix sharing and copy-on-write work unchanged.
+  - The stage-1 gather path remains for A/B (`DYNALM_KV_LAYOUT=head`).
+  - f16, f32 and q8_0 KV are supported.
+- **Zero-copy weights:** weights borrowed from the GGUF mmap are wrapped in place as shared
+  Metal buffers. Peak memory footprint for Qwen2.5-1.5B Q4_K_M: 1,354 → 291 MiB.
+  `DYNACORE_GPU_WEIGHTS=copy` restores copies.
+- **GPU prefill default:** steps without decode rows use 256-token prompt chunks
+  (`kGpuSoloPrefillChunk`); `--solo-prefill-chunk` overrides it. CPU defaults are unchanged.
+  - **Single user:** paired sweep of chunks 0–512, 3 rounds, Apple Silicon Mac on AC. TTFT 1.56× / 1.66× /
+    1.64× faster at 128 / 512 / 2,048 prompt tokens, ITL unchanged.
+  - **4 users:** no change.
+  - **Why 256:** 512 was marginally faster for one user, but noisier, with a small 4-user
+    ITL regression.
+- **Accuracy:** within DD-053 against the CPU fp32 reference — decode perplexity +0.011%,
+  prefill +0.150%, greedy-identical on the reference prompts; deterministic.
+- **Not supported on the GPU (named errors, no CPU fallback):** MoE models, YaRN or Llama 3
+  RoPE scaling, Qwen3-style per-head Q/K norm.
+
+### Security (docs/security.md)
+- **API key authentication:** `--api-key-file FILE` or `DYNALM_API_KEY`, at least 16
+  characters. Bearer authentication applies to every endpoint except `GET /health`, compared in
+  constant time and never logged. `dynalm stop` and `dynalm benchmark --url` send the key.
+- **Non-loopback binds:** `serve` refuses a non-loopback `--host` without a key, unless
+  `--allow-unauthenticated` is given (for deployments behind an authenticating gateway).
+- **Browser attacks on localhost:**
+  - on a loopback bind, requests need a loopback `Host` header (DNS-rebinding protection,
+    403);
+  - POST bodies must be `application/json` (415), so web pages cannot drive the API or
+    `/admin/shutdown` with simple cross-origin requests.
+- **Error messages:** errors raised while generating are reported to clients by category;
+  details go to the log.
+- **Fixed, found by fuzzing under UBSan:**
+  - undefined behaviour on NaN weights (`fast_exp`, int8 activation and q8_0 quantization);
+  - signed overflow in tensor strides for a GGUF tensor with a zero dimension.
+- **Logs:** control characters in log messages are escaped (log injection through model
+  metadata).
+- **Model metadata limits:** dimensions that size allocations are bounded
+  (`ModelConfig::check_limits`; for example at most 1,024 layers), and a GGUF `block_count`
+  may not exceed the file's tensor count. A fuzzed file that declared 67 million layers
+  previously exhausted memory.
+- **cpp-httplib upgraded from v0.18.3 to v0.61.0:** v0.18.3 is in the affected range of
+  published advisories, including critical header shadowing and CRLF injection, and high
+  unbounded-memory issues. A cached header that does not match the pinned SHA-256 is now
+  fetched again instead of being trusted.
+- **`dynalm pull`:** the saved file name must be a plain name (`[A-Za-z0-9._-]`), so a link
+  cannot write outside the model store on Windows.
+
+### Tests and CI
+- **New model-free tests on a synthetic GGUF model** (`dynalm/tests/tiny_gguf.h`), in
+  `tools/ci/run_tests.sh`:
+  - `test_engine`: determinism, concurrent == alone, prefix cache, cancellation, deadlines,
+    the solo-prefill non-starvation trace, bounded memory; CPU and Metal;
+  - `test_server`: access control, limits, overload, disconnect, drain;
+  - `test_fuzz_parsers`: GGUF, SafeTensors and JSON mutation fuzzing.
+- **`test_ggml_device`:** every GPU op against the CPU, paged attention in both layouts,
+  failure paths, buffer reuse, zero-copy weights.
+- **`bench_gpu_accuracy`:** model-based DD-053, determinism, multi-sequence and
+  copy-on-write checks.
+- **CI jobs:**
+  - `macos-metal`: reports whether a real Metal device ran the GPU tests;
+  - `security`: secret scan, CycloneDX SBOM, 20,000-iteration fuzzing under ASan+UBSan.
+- **Package checks:** `package.sh` checks the package contents and licences, secret-scans the
+  archive and writes an SBOM.
+
+### Removed
+- Internal benchmark campaign scripts: `tools/next_sweep*.ps1`, `tools/phase8_sweep.ps1`,
+  `tools/phase9_sweep.ps1`, `tools/pk8_validation.ps1`, `tools/pk8_analyze.py`,
+  `tools/e2e_engines.ps1` and `tools/e2e_engines_analyze.py`. `docs/benchmarking.md` now
+  describes paired runs with `dynalm benchmark` and `tools/bench_analyze.py` directly.
+- Unused fixture generators for the test suites removed in 0.1.3 (`tools/make_tiny_*.py`,
+  `tools/gen_tokenizer_golden.py`) and the dev-container helper (`tools/linux.sh`,
+  `tools/docker/Dockerfile.dev`).
+
+## [0.1.4] - 2026-10-15
+
+Default behaviour is unchanged from 0.1.3: with no new environment variables set, the same
+kernels run and greedy output tokens are identical (verified against the 0.1.3-based reference
+build).
+
+### CPU matmul kernel registry (DynaCore)
+- `CpuDevice::matmul` now asks an explicit registry (`dynacore/kernel/matmul_registry.h`)
+  which kernel runs. Selection is deterministic: shape, `KernelPlan` and CPU tier only. The
+  priority order is the one of the previous dispatch: `test_matmul_registry` checks 554,190
+  selections against a copy of it.
+- **Diagnostics:**
+  - `DYNACORE_MATMUL_EXPLAIN=1` logs each kernel choice and why higher-priority kernels were
+    not eligible;
+  - `DYNACORE_MATMUL_TIMING=1` adds time per kernel and shape;
+  - `/metrics` adds `dynacore_matmul_calls_total{kernel}` and `dynacore_matmul_rows_total{kernel}`;
+  - `dynalm benchmark` JSON adds `diag.matmul_kernels`.
+- `DYNACORE_MATMUL_DISABLE=name,...|all-accelerated` removes kernels from selection;
+  `all-accelerated` leaves the fp32 reference arithmetic.
+- A matmul with invalid shape metadata now stops with an error message instead of reaching a
+  kernel (it was a debug-only assert). The DynaIR verifier applies the same shape check.
+- Extension point for external kernels (`CpuDevice::register_external_matmul`), used only when
+  `KernelPlan::external_matmul` is set; nothing registers one by default.
+
+### Experimental CPU features (opt-in; off by default)
+- **Split-byte int16 prefill:** `DYNACORE_INT16_PREFILL_ROWS=64 DYNACORE_INT16_PREFILL_SPLIT=1`
+  (AVX-VNNI). It computes the opt-in int16 prefill path's exact integer dot products with
+  `vpdpbusd` on split activation bytes.
+  - **Accuracy:** bit-identical to that path in tests and in greedy tokens. DD-053 on
+    Qwen2.5-1.5B (perplexity +0.003% / +0.005%) and Qwen3-4B (−0.012% / −0.003%), mean
+    KL ≤ 0.000001.
+  - **Measured** on an x86-64 hybrid laptop CPU, Q4_K_M models, 10 threads, paired runs with
+    predeclared gates, each against the default:
+
+  | workload | change | verdict |
+  |---|---|---|
+  | Qwen3-4B, single 2048-token prompt | TTFT −13.6% | reliable PASS |
+  | Qwen2.5-1.5B, single 2048-token prompt | TTFT −11 to −13% | baseline varied 2.3%, inconclusive by rule |
+  | Qwen2.5-1.5B open loop (Poisson 0.15 req/s, mixed 128 / 2048-token prompts) | output tok/s +2%, short-request TTFT p95 −21%, E2E p99 −12%, ITL p99 −13% | PASS |
+  | 16 concurrent 128-token requests | output tok/s +17%, TPOT −15% | PASS |
+  | same, ITL p99 | one round +3.3% | inconclusive |
+  | Qwen2.5-1.5B, 4 users, 512-token prompts (release campaign, 3 sessions) | TTFT −14.5% (every pair −13.9 to −15.5%), output tok/s +11.9% | inconclusive by rule (baseline ITL p99 varied 13%) |
+  | Qwen2.5-1.5B, 4 users, 128-token prompts | output tok/s +4.3% | PASS (no regression) |
+  | 4 users, with `--policy latency` (both models, 6 pairs each) | ITL p99 −48%, TTFT −11 to −15%, output tok/s +5 to +7% | inconclusive by rule (baseline tok/s varied 9–10%) |
+
+  - These figures hold for the measured machine and these workloads only; they are not a general
+    guarantee.
+  - On E-cores the AVX-VNNI unit runs integer dot products at half the fp32 FMA rate, which
+    caps the gain.
+- **Wide decode:** `DYNACORE_DECODE_WIDE_ROWS=16`.
+  - In decode-only steps of 9–16 rows, the batch planner keeps the int8 / int16 decode kernels
+    instead of fp32. Each row gets the arithmetic it gets at ≤ 8 rows today (bit-identical per
+    row, tested). The value is clamped to 0..16.
+  - Above 8 rows it uses the 8-row int8 tiles, so each packed weight group is read once per
+    8 rows instead of once per 4. `DYNACORE_WIDE_ROWS8=0` keeps the 4-row tiles.
+  - Release campaign (3 sessions, gates declared in advance), Qwen2.5-1.5B:
+    - output tok/s +11.0% at 12 users and +11.9% at 16 users (PASS);
+    - together with split-byte prefill: +19.7% and +22.5% (PASS);
+    - but at 12 users TTFT p50 rose 45% (FAIL; mean TTFT about +7% in a traced run). This is
+      why wide decode stays opt-in.
+  - Qwen3-4B moved the same way (+4 to +5% tok/s alone, +14 to +19% with split), but those
+    results are inconclusive: the baseline varied too much on the measured machine.
+  - The 8-row tiles make decode steps 2–4% faster than the 4-row tiles.
+  - It has no effect at 8 or fewer concurrent requests.
+- **Tail latency at a few users:**
+  - Split-byte prefill together with `--policy latency` cut ITL p99 by about 48% at 4 users,
+    without the TTFT and throughput cost that `--policy latency` has on its own (+13 to +16%
+    TTFT, −6 to −10% tok/s).
+  - The verdict is inconclusive by the campaign's rule, so this remains an experimental
+    combination, not a default.
+
+### Also new since 0.1.3 (experimental, opt-in)
+- **CPU kernels:**
+  - int16 prefill tiles for 9–N-row matmuls on large Q4_K weights: `DYNACORE_INT16_PREFILL_ROWS`,
+    using `vpdpwssd` on AVX-VNNI CPUs (`DYNACORE_INT16_PREFILL_VNNI=0` for the AVX2 tiles);
+  - interleaved Q6_K for int16 activations: `DYNACORE_Q6_PACKED=1`;
+  - 8-row int8 tiles for 5–8 decode rows: `DYNACORE_PACKED_8ROWS=1`.
+  - Results are identical to the paths they replace, or within the DD-053 contract. All are off
+    by default.
+- **Scheduler:**
+  - `--solo-prefill-chunk N` / `--solo-prefill-split`: a larger prompt chunk in steps without
+    decode rows;
+  - `--prefill-order fifo|srpt` with `--prefill-aging-ms`: shortest-remaining-prompt first.
+    Known defect: after aging, a long prompt takes the whole mixed-step budget, so keep FIFO
+    (the default) for latency-sensitive use;
+  - `--step-trace FILE` (benchmark): per-step and per-request scheduler trace (queue, prefill
+    and decode times, rows per step).
+- **Load generator** (`dynalm benchmark`):
+  - open-loop arrivals: `--arrival-rate`, `--seed`, `--arrival-trace`, `--prompt-mix`;
+  - per-request logs: `--request-log`;
+  - uncounted full-size warm-up: `--warmup-requests`;
+  - per-prompt-length latency percentiles.
+- **Thread pool:** a parallel region requested while another is in flight (reentrant or from a
+  second thread) is detected, run serially on the caller and counted (`misuse_count()`),
+  instead of racing on the running region's state.
+- **DynaKernel prototype** (`dynacore/dynakernel/`, `dkgen`; LLVM backend loaded at run time
+  through `DYNACORE_LLVM_C`): kernel IR, lowering, generated C++ and LLVM backends for
+  experiments. It is not linked into `dynalm` and is not a production acceleration.
+
+### Tools
+- `tools/compare_engines.{ps1,py}`:
+  - `-DynalmExe` / `--dynalm` selects the exact executable under test. Its path, version and
+    SHA-256 are recorded in `manifest.json`, `report.md` and every result row. It is never
+    replaced by a local build.
+  - The tool no longer stops processes it did not start. Busy ports fail that engine's
+    preflight, and Ollama runs as the script's own server on port 11435.
+  - Ollama gets the same per-user context.
+  - The report shows the prompt length each engine reported. Ollama 0.40.1 wraps
+    `/v1/completions` prompts in its chat template (128 → 157 tokens on Qwen2.5) and ignored
+    the raw `TEMPLATE` requested by the script.
+  - Rows below 95% of the requested output tokens are marked not comparable and are not ranked.
+    Ollama ignores `ignore_eos`, and Qwen2.5 stops early there: mean 13–74 tokens for a
+    128-token target.
+- New:
+  - `tools/next_sweep.ps1`: paired benchmark runner. It records a quiet check, git state and
+    per-run hashes.
+  - `tools/bench_analyze.py`: paired analysis with predeclared gates. It counts runs, points,
+    pairs and gate evaluations separately, and reports session-level stability and bootstrap
+    intervals.
+  - `docs/benchmarking.md`: the supported ways to benchmark.
+  - Tool tests: `tools/test_compare_engines.py`, `tools/test_bench_analyze.py`.
+  - `tools/ci/smoke_api.py`: CLI and HTTP API smoke test against a model.
+  - `dynacore/benchmarks/bench_ffn_kernels.cpp`: per-core kernel rates.
+
+### CI
+- The model-free test programs and the tool tests now run in CI (`tools/ci/run_tests.sh`).
+  Covered jobs: Windows (MSVC), Linux (GCC, Clang, ARM64), macOS (ARM64, x86-64 under
+  Rosetta), the core-only boundary build, and the ASan+UBSan and TSan builds.
+- Pushes to `release/**` branches run CI.
+- New model-free test `test_batch_planner` (wide-decode planning).
+
+### Fixed
+- An empty tuning environment variable (for example `DYNALM_PROTECT_MIN=`) was read as 0.
+  For `DYNALM_PROTECT_MIN` and `DYNALM_DECODE_TARGET` that cut the prompt rows of a mixed step
+  to one: at 4 concurrent users TTFT rose from about 2 s to about 20 s. Empty values are now
+  ignored for all `DYNACORE_*` planner variables. `DYNALM_DECODE_PROTECT`, `DYNALM_DECODE_TARGET`
+  and `DYNALM_PROTECT_MIN` are validated: invalid values are ignored, with a warning in the log.
+  The benchmark runner (`tools/next_sweep.ps1`) also restored unset variables as empty strings;
+  it now removes them and checks the environment after each run.
+- `test_dynakernel_quant` could fail intermittently. After releasing a packed weight, it packed
+  new weights on the same backend, which by design refuses an address it released earlier. When
+  the heap reused the freed buffer, the test failed. The accuracy section now uses its own
+  backend.
+- `dynalm serve` logged the requested scheduler budgets, not the ones in effect, with
+  `--policy latency|throughput`.
+- Packages now include `THIRD_PARTY_LICENSES.md` with the cpp-httplib MIT license text, which
+  is compiled into `dynalm`.
+- `NOTICE` no longer describes GoogleTest as a current build dependency.
 
 ## [0.1.3] - 2026-10-09
 
@@ -139,7 +415,7 @@
   at most measured points; end-to-end aggregate tok/s is unchanged within noise (attention is
   5–8% of a decode step). `DYNALM_ATTN_GROUPED=0` selects the per-head path.
 - Benchmark diagnostics on Windows report the effective CPU clock (PDH `% Processor
-  Performance`), not the constant base clock (1367 MHz on an i7-1255U).
+  Performance`), not the constant base clock (the CPU's rated base clock).
 - `bench_batch_decode` runs in-process old/new A/B with alternating order and a free-memory
   floor; new `bench_attn_accuracy` and `tools/ab_summary.py`.
 
@@ -318,7 +594,7 @@
   - install scripts and Docker.
 
   `release.yml` builds packages on tags.
-- ARM64 NEON kernel tier (Apple Silicon, Graviton, Windows on ARM). SIMD options are now
+- ARM64 NEON kernel tier (Apple Silicon, ARM64 Linux, Windows on ARM). SIMD options are now
   architecture-aware.
 - macOS platform support: CPU topology (P/E cores), memory, process stats.
 - Presets `linux-clang-release` and `macos-release`. The dev image includes clang and builds

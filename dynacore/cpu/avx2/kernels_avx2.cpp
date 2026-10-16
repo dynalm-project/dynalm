@@ -1110,6 +1110,25 @@ void dot_x8_sx_q4_K(const void* w, const ActBlockQ8* const* xin, int m, int64_t 
   }
 }
 
+// Experimental 8-row entry (KernelPlan::packed_int8_8rows): the same template
+// for up to kPackedRowsMax rows, so 5..8 activation rows share one pass over
+// each packed weight group. Per-row arithmetic is unchanged.
+void dot_x8_sx_q4_K_rows8(const void* w, const ActBlockQ8* const* xin, int m, int64_t n, float* out) {
+  const auto* pw = static_cast<const BlockQ4_Kx8*>(w);
+  const ActSuperQ8* x[kPackedRowsMax];
+  for (int r = 0; r < m; ++r) x[r] = reinterpret_cast<const ActSuperQ8*>(xin[r]);
+  switch (m) {
+    case 1: dot_x8_sx_q4_K_m<1>(pw, x, n, out); break;
+    case 2: dot_x8_sx_q4_K_m<2>(pw, x, n, out); break;
+    case 3: dot_x8_sx_q4_K_m<3>(pw, x, n, out); break;
+    case 4: dot_x8_sx_q4_K_m<4>(pw, x, n, out); break;
+    case 5: dot_x8_sx_q4_K_m<5>(pw, x, n, out); break;
+    case 6: dot_x8_sx_q4_K_m<6>(pw, x, n, out); break;
+    case 7: dot_x8_sx_q4_K_m<7>(pw, x, n, out); break;
+    default: dot_x8_sx_q4_K_m<8>(pw, x, n, out); break;
+  }
+}
+
 // --- Interleaved Q4_K x 8 rows with int16 activations (DD-081) --------------
 // The FFN down projection keeps int16 activations (int8 breaks the accuracy
 // contract there, DD-053/DD-076). On the BlockQ4_Kx8 layout each 4-value chunk
@@ -1260,6 +1279,36 @@ void dot_x8_q16_q6_K(const void* w, const ActBlockQ16* const* x, int m, int64_t 
     case 2: dot_x8_q16_q6_K_m<2>(pw, x, n, out); break;
     case 3: dot_x8_q16_q6_K_m<3>(pw, x, n, out); break;
     default: dot_x8_q16_q6_K_m<4>(pw, x, n, out); break;
+  }
+}
+
+// 8-row tiles of the two int16 x8 kernels (KernelPlan::int16_prefill_max_rows):
+// up to kPackedRowsMax activation rows per pass over a packed group.
+void dot_x8_q16_q4_K_rows8(const void* w, const ActBlockQ16* const* x, int m, int64_t n, float* out) {
+  const auto* pw = static_cast<const BlockQ4_Kx8*>(w);
+  switch (m) {
+    case 1: dot_x8_q16_q4_K_m<1>(pw, x, n, out); break;
+    case 2: dot_x8_q16_q4_K_m<2>(pw, x, n, out); break;
+    case 3: dot_x8_q16_q4_K_m<3>(pw, x, n, out); break;
+    case 4: dot_x8_q16_q4_K_m<4>(pw, x, n, out); break;
+    case 5: dot_x8_q16_q4_K_m<5>(pw, x, n, out); break;
+    case 6: dot_x8_q16_q4_K_m<6>(pw, x, n, out); break;
+    case 7: dot_x8_q16_q4_K_m<7>(pw, x, n, out); break;
+    default: dot_x8_q16_q4_K_m<8>(pw, x, n, out); break;
+  }
+}
+
+void dot_x8_q16_q6_K_rows8(const void* w, const ActBlockQ16* const* x, int m, int64_t n, float* out) {
+  const auto* pw = static_cast<const BlockQ6_Kx8*>(w);
+  switch (m) {
+    case 1: dot_x8_q16_q6_K_m<1>(pw, x, n, out); break;
+    case 2: dot_x8_q16_q6_K_m<2>(pw, x, n, out); break;
+    case 3: dot_x8_q16_q6_K_m<3>(pw, x, n, out); break;
+    case 4: dot_x8_q16_q6_K_m<4>(pw, x, n, out); break;
+    case 5: dot_x8_q16_q6_K_m<5>(pw, x, n, out); break;
+    case 6: dot_x8_q16_q6_K_m<6>(pw, x, n, out); break;
+    case 7: dot_x8_q16_q6_K_m<7>(pw, x, n, out); break;
+    default: dot_x8_q16_q6_K_m<8>(pw, x, n, out); break;
   }
 }
 
@@ -1469,8 +1518,11 @@ bool register_avx2_kernels(CpuKernels& k) {
   k.dot_q8_sx_rows[static_cast<size_t>(DType::kQ4_K)] = dot_rows_sx_q4_K;
   k.dot_q8_sx_rows[static_cast<size_t>(DType::kQ6_K)] = dot_rows_sx_q6_K;
   k.dot_q8_sx_x8_q4_K = dot_x8_sx_q4_K;
+  k.dot_q8_sx_x8_q4_K_rows8 = dot_x8_sx_q4_K_rows8;  // used only with KernelPlan::packed_int8_8rows
   k.dot_q16_x8_q4_K = dot_x8_q16_q4_K;
   k.dot_q16_x8_q6_K = dot_x8_q16_q6_K;
+  k.dot_q16_x8_q4_K_rows8 = dot_x8_q16_q4_K_rows8;
+  k.dot_q16_x8_q6_K_rows8 = dot_x8_q16_q6_K_rows8;
   k.quantize_act16 = quantize_act16;
   k.dot_q16_rows[static_cast<size_t>(DType::kQ8_0)] = dot_rows16_q8_0;
   k.dot_q16_rows[static_cast<size_t>(DType::kQ4_K)] = dot_rows16_q4_K;

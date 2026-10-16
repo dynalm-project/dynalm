@@ -1,8 +1,10 @@
 #include "dynacore/device/device_registry.h"
 
+#include <cctype>
 #include <string>
 
 #include "dynacore/cpu/cpu_device.h"
+#include "dynacore/gpu/ggml_device.h"
 #include "dynacore/hardware/cpu_info.h"
 #include "dynacore/hardware/isa.h"
 
@@ -27,11 +29,44 @@ Result<DeviceKind> parse_device_kind(std::string_view name) {
   return InvalidArgument("unknown backend '" + std::string(name) + "' (cpu, cuda, hip, metal, vulkan)");
 }
 
-std::vector<DeviceKind> compiled_devices() { return {DeviceKind::kCpu}; }
+namespace {
+
+// The storage provider of a GPU device kind (ggml_device.h).
+DeviceType gpu_type(DeviceKind k) {
+  switch (k) {
+    case DeviceKind::kCuda: return DeviceType::kCuda;
+    case DeviceKind::kHip: return DeviceType::kHip;
+    case DeviceKind::kMetal: return DeviceType::kMetal;
+    case DeviceKind::kVulkan: return DeviceType::kVulkan;
+    case DeviceKind::kCpu: break;
+  }
+  return DeviceType::kCpu;
+}
+
+}  // namespace
+
+std::vector<DeviceKind> compiled_devices() {
+  std::vector<DeviceKind> out = {DeviceKind::kCpu};
+  for (DeviceKind k : {DeviceKind::kCuda, DeviceKind::kMetal, DeviceKind::kVulkan}) {
+    if (ggml_gpu_compiled(gpu_type(k))) out.push_back(k);
+  }
+  return out;
+}
 
 Result<std::unique_ptr<Device>> create_device(DeviceKind kind, ThreadPool& pool) {
   if (kind == DeviceKind::kCpu) {
     return std::unique_ptr<Device>(std::make_unique<CpuDevice>(pool, select_isa(cpu_info().features)));
+  }
+  // GPUs through pinned ggml (docs/gpu-backend.md). They run only compiled
+  // steps: the engine wraps them in a RecordingDevice.
+  if (kind == DeviceKind::kMetal || kind == DeviceKind::kVulkan || kind == DeviceKind::kCuda) {
+    if (!ggml_gpu_compiled(gpu_type(kind))) {
+      std::string flag(device_kind_name(kind));
+      for (char& ch : flag) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+      return Unsupported("the " + std::string(device_kind_name(kind)) + " backend is not built in this version (configure with -DENABLE_" +
+                         flag + "=ON); use --backend cpu");
+    }
+    return create_ggml_gpu_device(gpu_type(kind));
   }
   return Unsupported("the " + std::string(device_kind_name(kind)) +
                      " backend is not built in this version: GPU backends are designed (docs/gpu-backend.md, "

@@ -108,6 +108,8 @@ struct ModelConfig {
 
   // Structural consistency (positive sizes, head divisibility, rope dim fits).
   Status validate() const;
+  // Upper bounds on the dimensions that size allocations (untrusted metadata); also part of validate().
+  Status check_limits() const;
 };
 
 // Rough resident-memory estimate for serving `context_tokens` total KV tokens.

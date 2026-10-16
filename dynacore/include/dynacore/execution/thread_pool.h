@@ -56,8 +56,23 @@ class ThreadPool {
 
   // Calls fn(begin, end) over [0, n) in chunks of at most `grain` items,
   // using every thread including the caller. Blocks until all chunks finish.
-  // Not reentrant: fn must not call parallel_for on the same pool.
+  //
+  // Contract: one parallel region at a time. The pool is owned by one runtime
+  // (one scheduler thread issues its regions), must outlive every device or
+  // backend that borrows it, and fn must not call parallel_for on the same
+  // pool. A region requested while another is in flight (a reentrant call
+  // from fn, or a call from a second thread) is detected with an atomic
+  // ownership flag: it never touches the running region's shared state; it
+  // runs fn over [0, n) serially on the calling thread, in chunks of at most
+  // `grain` (same result, no data race, no waiting), and counts one misuse
+  // (misuse_count()). Regions small enough
+  // to run inline (n <= grain, or a 1-thread pool) touch no shared job state
+  // and are not counted.
   void parallel_for(size_t n, size_t grain, FunctionRef<void(size_t, size_t)> fn);
+
+  // Regions serialized because another region was in flight (see above).
+  // Callers that own the pool check it to turn misuse into an error.
+  uint64_t misuse_count() const { return misuse_.load(std::memory_order_relaxed); }
 
   // Statistics are owned by the thread that calls parallel_for (one scheduler
   // thread); toggle and read them from that thread or while it is quiescent.
@@ -83,6 +98,10 @@ class ThreadPool {
   alignas(kCacheLineSize) std::atomic<size_t> next_{0};
   alignas(kCacheLineSize) std::atomic<int> active_{0};
   alignas(kCacheLineSize) std::atomic<uint64_t> epoch_{0};
+  // Held by the caller of the region in flight (fn_, n_, grain_, next_,
+  // active_ and stats_ belong to it).
+  alignas(kCacheLineSize) std::atomic<bool> in_region_{false};
+  std::atomic<uint64_t> misuse_{0};
 
   std::mutex mu_;
   std::condition_variable cv_;

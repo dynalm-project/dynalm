@@ -43,6 +43,7 @@
 #include <vector>
 
 #include "dynacore/device/device.h"
+#include "dynacore/device/segment.h"
 #include "dynacore/ir/ir.h"
 
 namespace dynacore::ir {
@@ -147,7 +148,14 @@ class RecordingDevice final : public Device {
                         const TensorView& dst) override;
 
   // A recorded call with private copies of its host arguments.
-  struct Call;
+  using Call = DeviceCall;
+
+  // Errors of segments run by a SegmentExecutor inner device (and the inner
+  // device's own), cleared on read.
+  Status take_error() override;
+  MemoryStats memory_stats() const override { return inner_.memory_stats(); }
+  KvLayout preferred_kv_layout() const override { return inner_.preferred_kv_layout(); }
+  bool supports_kv_layout(KvLayout layout) const override { return inner_.supports_kv_layout(layout); }
 
  private:
   enum class Role : uint8_t { kActivation, kWeight };
@@ -198,6 +206,7 @@ class RecordingDevice final : public Device {
   std::shared_ptr<const KernelPlan> plan_;     // in effect for new calls
   std::shared_ptr<const KernelPlan> applied_;  // last plan given to the inner device
   RecordingStats stats_;
+  Status error_;  // first error of a segment executor run since take_error()
 };
 
 }  // namespace dynacore::ir

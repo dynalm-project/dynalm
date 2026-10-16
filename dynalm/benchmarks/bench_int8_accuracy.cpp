@@ -10,6 +10,8 @@
 // Then both paths generate 64 tokens greedily from the same prompt and the
 // first position where they diverge is reported. The int8 path is enabled by
 // default only if these stay within the thresholds in DD-053.
+// The prefill comparison runs chunks of 32 and 64 tokens; BENCH_PREFILL_CHUNKS
+// (e.g. 32,64,128) sets the list. BENCH_PREFILL_ONLY=1 runs only that part.
 
 #include <algorithm>
 #include <cmath>
@@ -63,6 +65,27 @@ int main(int argc, char** argv) {
     return 1;
   }
   const int threads = argc > 2 ? std::atoi(argv[2]) : cpu_info().physical_cores;
+  // Prefill chunk sizes for the DD-053 prefill comparison (default 32 and 64).
+  // BENCH_PREFILL_CHUNKS=32,64,128 adds others; the forward pass is sized for the largest.
+  std::vector<int> prefill_chunks = {32, 64};
+  if (const char* pc = std::getenv("BENCH_PREFILL_CHUNKS")) {
+    prefill_chunks.clear();
+    for (const char* s = pc; *s != 0;) {
+      char* end = nullptr;
+      const long v = std::strtol(s, &end, 10);
+      if (end == s || v <= 0 || v > 4096 || (*end != ',' && *end != 0)) {
+        std::fprintf(stderr, "BENCH_PREFILL_CHUNKS: expected a comma-separated list of chunk sizes, got '%s'\n", pc);
+        return 2;
+      }
+      prefill_chunks.push_back(static_cast<int>(v));
+      s = *end == ',' ? end + 1 : end;
+    }
+    if (prefill_chunks.empty()) {
+      std::fprintf(stderr, "BENCH_PREFILL_CHUNKS: empty list\n");
+      return 2;
+    }
+  }
+  const int max_rows = std::max(64, *std::max_element(prefill_chunks.begin(), prefill_chunks.end()));
   auto lm = load_model(argv[1]);
   if (!lm.ok()) {
     std::fprintf(stderr, "%s\n", lm.status().to_string().c_str());
@@ -71,7 +94,7 @@ int main(int argc, char** argv) {
   const ModelConfig& c = (*lm)->config;
   ThreadPool pool(threads);
   CpuDevice be(pool, select_best_isa(cpu_info().features));
-  auto tf = Transformer::create(c, (*lm)->weights, be, 64);
+  auto tf = Transformer::create(c, (*lm)->weights, be, max_rows);
   if (!tf.ok()) {
     std::fprintf(stderr, "%s\n", tf.status().to_string().c_str());
     return 1;
@@ -188,6 +211,8 @@ int main(int argc, char** argv) {
         } else if (path == 0) {  // fp32 reference: no int8/int16 activations
           plan.kernels.int8_decode_max_rows = 0;
           plan.kernels.int16_ffn_down = false;
+          plan.kernels.int16_prefill_max_rows = 0;  // the experimental int16 prefill path is an alternative, not the reference
+          plan.kernels.q4_repack_max_rows = 0;      // nor the int8 prefill path (DD-078)
         }
         std::vector<float>& out = path == 0 ? lf : la;
         out.resize(static_cast<size_t>(len) * static_cast<size_t>(vocab));
@@ -223,8 +248,7 @@ int main(int argc, char** argv) {
   };
   std::printf("model: %s (%s), %d threads\n", argv[1], (*lm)->quantization.c_str(), threads);
   if (std::getenv("BENCH_PREFILL_ONLY")) {
-    compare_prefill(32);
-    compare_prefill(64);
+    for (const int chunk : prefill_chunks) compare_prefill(chunk);
     return 0;
   }
   compare(2, "fp32 expand path (summation-order noise floor)");
@@ -234,7 +258,6 @@ int main(int argc, char** argv) {
   compare(5, "super-block int8 activations incl. ffn_down");
   compare(6, "int8 activations, int16 for ffn_down (DD-076)");
   compare(7, "sub-scaled int8 activations (DD-077), int16 for ffn_down");
-  compare_prefill(32);
-  compare_prefill(64);
+  for (const int chunk : prefill_chunks) compare_prefill(chunk);
   return 0;
 }
