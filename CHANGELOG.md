@@ -22,8 +22,8 @@ non-loopback `--host` without an API key (see Security).
   - Auto KV capacity respects free device memory.
   - `DYNACORE_GPU_INDEX` selects a GPU.
   - `ENABLE_HIP` is refused with a pointer to Vulkan.
-  - A GPU that cannot run the core ops (for example a paravirtual / Apple5-class Metal device
-    without simdgroup support) is refused at startup. `auto` then uses the CPU instead of
+  - A GPU that cannot run the core ops (for example a virtualized GPU without the
+    required features) is refused at startup. `auto` then uses the CPU instead of
     failing on the first request.
 - **Windows on ARM** (preview):
   - presets `msvc-release` (ARM64 prompt) and `windows-arm64` (clang-cl);
@@ -61,7 +61,7 @@ non-loopback `--host` without an API key (see Security).
   `DYNACORE_GPU_WEIGHTS=copy` restores copies.
 - **GPU prefill default:** steps without decode rows use 256-token prompt chunks
   (`kGpuSoloPrefillChunk`); `--solo-prefill-chunk` overrides it. CPU defaults are unchanged.
-  - **Single user:** paired sweep of chunks 0–512, 3 rounds, M4 Pro on AC. TTFT 1.56× / 1.66× /
+  - **Single user:** paired sweep of chunks 0–512, 3 rounds, Apple Silicon Mac on AC. TTFT 1.56× / 1.66× /
     1.64× faster at 128 / 512 / 2,048 prompt tokens, ITL unchanged.
   - **4 users:** no change.
   - **Why 256:** 512 was marginally faster for one user, but noisier, with a small 4-user
@@ -157,7 +157,7 @@ build).
   - **Accuracy:** bit-identical to that path in tests and in greedy tokens. DD-053 on
     Qwen2.5-1.5B (perplexity +0.003% / +0.005%) and Qwen3-4B (−0.012% / −0.003%), mean
     KL ≤ 0.000001.
-  - **Measured** on an i7-1255U (2P+8E, 15 W), Q4_K_M models, 10 threads, paired runs with
+  - **Measured** on an x86-64 hybrid laptop CPU, Q4_K_M models, 10 threads, paired runs with
     predeclared gates, each against the default:
 
   | workload | change | verdict |
@@ -171,7 +171,7 @@ build).
   | Qwen2.5-1.5B, 4 users, 128-token prompts | output tok/s +4.3% | PASS (no regression) |
   | 4 users, with `--policy latency` (both models, 6 pairs each) | ITL p99 −48%, TTFT −11 to −15%, output tok/s +5 to +7% | inconclusive by rule (baseline tok/s varied 9–10%) |
 
-  - These figures hold for this machine and these workloads only; they are not a general
+  - These figures hold for the measured machine and these workloads only; they are not a general
     guarantee.
   - On E-cores the AVX-VNNI unit runs integer dot products at half the fp32 FMA rate, which
     caps the gain.
@@ -187,7 +187,7 @@ build).
     - but at 12 users TTFT p50 rose 45% (FAIL; mean TTFT about +7% in a traced run). This is
       why wide decode stays opt-in.
   - Qwen3-4B moved the same way (+4 to +5% tok/s alone, +14 to +19% with split), but those
-    results are inconclusive: the baseline varied too much on this machine.
+    results are inconclusive: the baseline varied too much on the measured machine.
   - The 8-row tiles make decode steps 2–4% faster than the 4-row tiles.
   - It has no effect at 8 or fewer concurrent requests.
 - **Tail latency at a few users:**
@@ -412,7 +412,7 @@ build).
   at most measured points; end-to-end aggregate tok/s is unchanged within noise (attention is
   5–8% of a decode step). `DYNALM_ATTN_GROUPED=0` selects the per-head path.
 - Benchmark diagnostics on Windows report the effective CPU clock (PDH `% Processor
-  Performance`), not the constant base clock (1367 MHz on an i7-1255U).
+  Performance`), not the constant base clock (the CPU's rated base clock).
 - `bench_batch_decode` runs in-process old/new A/B with alternating order and a free-memory
   floor; new `bench_attn_accuracy` and `tools/ab_summary.py`.
 
@@ -591,7 +591,7 @@ build).
   - install scripts and Docker.
 
   `release.yml` builds packages on tags.
-- ARM64 NEON kernel tier (Apple Silicon, Graviton, Windows on ARM). SIMD options are now
+- ARM64 NEON kernel tier (Apple Silicon, ARM64 Linux, Windows on ARM). SIMD options are now
   architecture-aware.
 - macOS platform support: CPU topology (P/E cores), memory, process stats.
 - Presets `linux-clang-release` and `macos-release`. The dev image includes clang and builds

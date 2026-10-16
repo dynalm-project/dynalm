@@ -11,10 +11,10 @@
   commands (`pull`, `run`, `serve`).
 - **CPU support:**
   - AVX2, AVX-512 and AMX on Intel and AMD;
-  - NEON on Apple Silicon, Raspberry Pi, AWS Graviton and Windows on ARM (Snapdragon).
+  - NEON on Apple Silicon, ARM64 Linux and Windows on ARM.
 - **GPU support (preview):**
-  - Apple Metal (M1–M4);
-  - Vulkan (AMD Radeon, Intel Arc / Iris, NVIDIA, Qualcomm Adreno);
+  - Apple Metal (Apple Silicon);
+  - Vulkan (AMD, Intel, NVIDIA and Qualcomm GPUs);
   - NVIDIA CUDA.
 - **Automatic device choice:** `--backend auto` uses the GPU when it can run the model, otherwise the
   CPU. `--backend cpu|metal|vulkan|cuda` forces one device.
@@ -29,7 +29,7 @@
 - **Formats:** GGUF, SafeTensors, GPTQ, AWQ.
 - **Quantization:** Q2_K–Q8_0, F16, BF16, F32 (`Q4_K_M` recommended).
 
-## Measured results (Apple M4 Pro GPU, Qwen2.5-1.5B Q4_K_M, vs llama.cpp server)
+## Measured results (Apple Silicon GPU, Qwen2.5-1.5B Q4_K_M, vs llama.cpp server)
 - Memory, one user: 390 MB vs 1,113 MB (about 3× less).
 - Typical time to first token with 4–8 users: 1.9–2.5× faster.
 - Single-user speed: about 7 ms per token, within about 10% of llama.cpp.

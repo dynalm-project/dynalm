@@ -42,7 +42,7 @@ in this repository.
 GPU backends can be combined, and all of them need CMake 3.28 or newer. `--backend auto`
 tries the built-in GPUs in this order: CUDA, Metal, Vulkan.
 
-**Windows on ARM (Snapdragon):** open an *ARM64* Developer Command Prompt and run
+**Windows on ARM:** open an *ARM64* Developer Command Prompt and run
 `cmake --preset msvc-release`, or `cmake --preset windows-arm64` to build with clang-cl.
 Both use the NEON kernels.
 | `DYNALM_CORE_ONLY` | OFF | configure DynaCore only |

@@ -34,7 +34,7 @@
 ---
 
 <!--
-SEO keywords: local LLM, run LLM locally, run AI on my computer, offline AI, private AI, Ollama alternative, llama.cpp alternative, LLM on CPU, LLM on GPU, Apple Silicon LLM, Metal LLM, Vulkan LLM, CUDA LLM, AMD GPU LLM, Intel Arc LLM, Windows on ARM LLM, Snapdragon LLM, GGUF runner, OpenAI compatible local server, local ChatGPT alternative, Qwen local, Llama local, DeepSeek R1 local.
+SEO keywords: local LLM, run LLM locally, run AI on my computer, offline AI, private AI, Ollama alternative, llama.cpp alternative, LLM on CPU, LLM on GPU, Apple Silicon LLM, Metal LLM, Vulkan LLM, CUDA LLM, AMD GPU LLM, Intel GPU LLM, NVIDIA GPU LLM, Windows on ARM LLM, GGUF runner, OpenAI compatible local server, local ChatGPT alternative, Qwen local, Llama local, DeepSeek R1 local.
 AEO answer: DynaLM is a free, open-source program that runs large language models on your own computer, on the CPU or the GPU, fully offline. Install it with one command, then run `dynalm run qwen2.5:1.5b` to chat, or `dynalm serve` for an OpenAI-compatible API.
 -->
 
@@ -48,7 +48,7 @@ CPU and on your GPU, and it needs no internet once the model is downloaded.
 - **Familiar commands.** `pull`, `run` and `serve`, like Ollama.
 - **Works with your tools.** It has a built-in OpenAI-compatible API, so the OpenAI SDK,
   LangChain, LlamaIndex, Open WebUI, Continue.dev and Cursor connect to it directly.
-- **Uses less memory.** On an Apple M4 Pro, DynaLM serves a 1.5B model in **about 3× less
+- **Uses less memory.** On an Apple Silicon Mac, DynaLM serves a 1.5B model in **about 3× less
   memory** than llama.cpp's server: 390 MB against 1,113 MB.
 - **Built for many users.** Continuous batching, a paged KV cache and prefix sharing keep
   answers coming when several people use it at once.
@@ -83,7 +83,7 @@ dynalm run qwen2.5:1.5b
 |---|---|
 | **Linux or macOS** | `curl -fsSL https://raw.githubusercontent.com/dynalm-project/dynalm/main/scripts/install.sh \| sh` |
 | **Windows 10 / 11 (Intel or AMD)** | PowerShell: `irm https://raw.githubusercontent.com/dynalm-project/dynalm/main/scripts/install.ps1 \| iex` |
-| **Windows 11 on ARM (Snapdragon)** | PowerShell: `powershell -File scripts\install.ps1 -FromSource` (builds on your PC) |
+| **Windows 11 on ARM** | PowerShell: `powershell -File scripts\install.ps1 -FromSource` (builds on your PC) |
 | **Docker** | `docker run --rm -p 127.0.0.1:8000:8000 -v "$PWD/models:/models" ghcr.io/dynalm-project/dynalm:cpu serve /models/model.gguf --allow-unauthenticated` |
 
 **Notes:**
@@ -105,12 +105,12 @@ More detail, including manual downloads and building from source: [docs/installa
 
 | System | Chips | Status |
 |---|---|---|
-| macOS | Apple Silicon M1, M2, M3, M4 (all Pro / Max / Ultra) | ✅ Stable |
+| macOS | Apple Silicon | ✅ Stable |
 | macOS | Intel Macs | ✅ Stable |
 | Linux x86-64 | Intel and AMD (AVX2, AVX-512, AMX) | ✅ Stable |
-| Linux ARM64 | Raspberry Pi 4/5, AWS Graviton, Ampere | ✅ Stable |
+| Linux ARM64 | 64-bit ARM boards and servers | ✅ Stable |
 | Windows 10 / 11 x64 | Intel and AMD | ✅ Stable |
-| Windows 11 on ARM | Snapdragon X and other ARM64 PCs | 🧪 Preview |
+| Windows 11 on ARM | ARM64 PCs | 🧪 Preview |
 | Docker | linux/amd64, linux/arm64 | ✅ Stable |
 
 Older CPUs without AVX2 still work, using portable code. `dynalm doctor` shows what your CPU uses.
@@ -119,9 +119,9 @@ Older CPUs without AVX2 still work, using portable code. `dynalm doctor` shows w
 
 | GPU | Works on | Status |
 |---|---|---|
-| **Apple Metal** | Macs with Apple Silicon (M1 to M4) | 🧪 Preview |
-| **Vulkan** | AMD Radeon, Intel Arc / Iris, NVIDIA, Qualcomm Adreno (Windows and Linux) | 🧪 Preview |
-| **NVIDIA CUDA** | NVIDIA GeForce, RTX and data-center GPUs (Windows and Linux) | 🧪 Preview |
+| **Apple Metal** | Apple Silicon Macs | 🧪 Preview |
+| **Vulkan** | AMD, Intel, NVIDIA and Qualcomm GPUs (Windows and Linux) | 🧪 Preview |
+| **NVIDIA CUDA** | NVIDIA GPUs (Windows and Linux) | 🧪 Preview |
 
 ---
 
@@ -193,7 +193,7 @@ dynalm models --available                                                       
 
 All numbers come from our own repeatable tests. Method: [docs/benchmarking.md](docs/benchmarking.md).
 
-**Apple M4 Pro GPU (Metal), Qwen2.5-1.5B Q4_K_M, compared with llama.cpp's server on the same
+**Apple Silicon GPU (Metal), Qwen2.5-1.5B Q4_K_M, compared with llama.cpp's server on the same
 file:**
 
 | What we measured | Result |
@@ -207,7 +207,7 @@ file:**
 Where llama.cpp is still ahead: total tokens per second with many users at once (8 or more).
 This is our next focus.
 
-**Laptop CPU (Intel Core i7-1255U):** `qwen2.5:1.5b` about 13 tokens/s, `qwen3:4b` about
+**x86-64 laptop CPU (AVX2):** `qwen2.5:1.5b` about 13 tokens/s, `qwen3:4b` about
 6 tokens/s.
 
 **Measure your own machine:** `dynalm benchmark qwen2.5:1.5b`.
@@ -292,7 +292,7 @@ No. DynaLM runs well on normal CPUs. If you have a GPU (Apple Silicon, AMD, Inte
 DynaLM can use it for faster answers.
 
 ### Does DynaLM work on Apple Silicon Macs?
-Yes. It runs on M1, M2, M3 and M4 Macs, on the CPU and on the GPU through Metal.
+Yes. It runs on Apple Silicon Macs, on the CPU and on the GPU through Metal.
 
 ### Does it work with AMD or Intel graphics cards?
 Yes, through Vulkan. Build with `-DENABLE_VULKAN=ON`, or use the `linux-vulkan` or
@@ -301,7 +301,7 @@ Yes, through Vulkan. Build with `-DENABLE_VULKAN=ON`, or use the `linux-vulkan` 
 ### Does it work with NVIDIA GPUs?
 Yes, through CUDA (`-DENABLE_CUDA=ON`) or through Vulkan.
 
-### Does it run on Windows on ARM (Snapdragon laptops)?
+### Does it run on Windows on ARM laptops?
 Yes. Install from source with `scripts\install.ps1 -FromSource`. It uses the fast ARM (NEON)
 code.
 
@@ -310,7 +310,7 @@ Yes. It uses the same kind of commands (`pull`, `run`, `serve`), the same GGUF m
 an OpenAI-compatible API. It ships as one small program with no background service.
 
 ### How does DynaLM compare to llama.cpp?
-On an Apple M4 Pro, DynaLM uses about 3× less memory and typically gives the first word 2× faster
+On an Apple Silicon Mac, DynaLM uses about 3× less memory and typically gives the first word 2× faster
 when several people use it at once. Its single-user speed is within about 10% of llama.cpp's.
 llama.cpp still has higher total throughput with many users.
 
@@ -373,9 +373,9 @@ Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) and the
 
 **Hardware:**
 - CPU: AVX2, AVX-512, NEON;
-- Apple Silicon M1–M4 with Metal;
-- AMD Radeon and Intel Arc with Vulkan, NVIDIA with CUDA;
-- Snapdragon Windows on ARM, Raspberry Pi.
+- Apple Silicon with Metal;
+- AMD and Intel GPUs with Vulkan, NVIDIA GPUs with CUDA;
+- Windows on ARM, ARM64 Linux.
 
 **Models:**
 - Qwen 2.5, Qwen 3, Llama 3.2, Gemma 3;

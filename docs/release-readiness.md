@@ -5,7 +5,7 @@ evidence for each, as of 2026-10-16.
 
 - **Branch:** `feat/gpu-backend-design`, from the 0.1.4 release candidate `44a9851`;
   uncommitted.
-- **Machine:** Apple M4 Pro (8P + 4E), 24 GiB, macOS 26.7, on AC power for all benchmarks.
+- **Machine:** an Apple Silicon Mac, on AC power for all benchmarks.
 - **Raw evidence:** kept outside the repository, in the session's scratchpad
   (`evidence/`, `bench/`). Each benchmark directory has a manifest with executable, model and
   engine hashes.
@@ -91,7 +91,7 @@ unauthenticated loopback by default, model files not formally verified) are docu
 
 | ID | Check | Status | Evidence |
 |---|---|---|---|
-| E1 | Package builds from the verified source, installs into a fresh prefix, and the installed binary passes the CLI + API smoke test | PASS (CPU and Metal) | `tools/ci/package.sh` with `DYNALM_SMOKE_MODEL` (Qwen2.5-1.5B Q4_K_M). CPU: 18/18 smoke checks against the packaged binary, `doctor` OK, ISA selection OK (`package-cpu.log`). Metal (`-DENABLE_METAL=ON`, `DYNALM_BACKEND=metal`): 18/18 against a fresh extract of the archive; both server logs report `Device: compiled/Metal/Apple M4 Pro` (`smoke-pkg-metal.log`) |
+| E1 | Package builds from the verified source, installs into a fresh prefix, and the installed binary passes the CLI + API smoke test | PASS (CPU and Metal) | `tools/ci/package.sh` with `DYNALM_SMOKE_MODEL` (Qwen2.5-1.5B Q4_K_M). CPU: 18/18 smoke checks against the packaged binary, `doctor` OK, ISA selection OK (`package-cpu.log`). Metal (`-DENABLE_METAL=ON`, `DYNALM_BACKEND=metal`): 18/18 against a fresh extract of the archive; both server logs report `Device: compiled/Metal/<GPU>` (`smoke-pkg-metal.log`) |
 | E2 | Package contents, licences, checksums, SBOM, secret scan | PASS (after one fix) | Both archives: the content allowlist check passes (bin/dynalm, bin/dynacorec, share/doc only; licences, NOTICE and THIRD_PARTY_LICENSES present); SHA-256 file verifies; secret scan 0 findings in 24 files; CycloneDX SBOM lists cpp-httplib 0.61.0 (CPU) and cpp-httplib 0.61.0 + ggml 0.27.0 (Metal). **Found and fixed:** the first Metal package also shipped ggml's headers, static libraries and CMake files, because ggml's install rules ran. `cmake/Ggml.cmake` now declares ggml `EXCLUDE_FROM_ALL` (and requires CMake ≥ 3.28 for Metal builds); the rebuilt package passes the allowlist |
 | E3 | Deployment, health, monitoring and shutdown documented | PASS | `docs/deployment.md` (modes, API keys, reverse proxy, limits, `/health`, `/metrics`, logs, drain and stop, Metal notes, go-live checks) |
 | E4 | Smoke test matches each device's documented defaults | PASS (after one fix) | The Metal package first scored 17/18: the smoke test expected the CPU scheduler budgets, while Metal uses its documented GPU profile (prefill budget 256, max batch 321). The check now expects the exact budgets for the device in use. CPU and Metal both pass 18/18 |

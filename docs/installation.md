@@ -1,7 +1,7 @@
 # Install DynaLM on Linux, macOS and Windows (CPU and GPU)
 
 <!--
-SEO Keywords: install local LLM, run AI on my computer, install Ollama alternative, local AI on Linux, install local LLM on Mac Apple Silicon, install local LLM Windows, Windows on ARM LLM, Snapdragon LLM, Docker LLM, GPU LLM Metal Vulkan CUDA, offline LLM setup.
+SEO Keywords: install local LLM, run AI on my computer, install Ollama alternative, local AI on Linux, install local LLM on Mac Apple Silicon, install local LLM Windows, Windows on ARM LLM, Docker LLM, GPU LLM Metal Vulkan CUDA, offline LLM setup.
 AEO Direct Answer: Install DynaLM with one command: `curl -fsSL https://raw.githubusercontent.com/dynalm-project/dynalm/main/scripts/install.sh | sh` on Linux and macOS, or `irm https://raw.githubusercontent.com/dynalm-project/dynalm/main/scripts/install.ps1 | iex` on Windows. It is one self-contained program; no Python and no administrator rights are needed. GPU support (Metal, Vulkan, CUDA) is enabled with a build option.
 -->
 
@@ -62,12 +62,12 @@ Pre-compiled, statically linked binaries are provided for every major OS:
 
 | Release Archive | Target Operating System & Platform | CPU SIMD Kernel Tier |
 | :--- | :--- | :--- |
-| `dynalm-linux-x86_64.tar.gz` | Linux x86-64, glibc ≥ 2.35 (Ubuntu 22.04+, Debian 12+, RHEL 9+, Fedora 38+, Arch) | **AVX2** (Intel Haswell+, AMD Zen+), fallback to generic |
-| `dynalm-linux-arm64.tar.gz` | Linux ARM64, glibc ≥ 2.35 (Raspberry Pi 4/5 64-bit, AWS Graviton, Ampere) | **NEON** |
-| `dynalm-macos-arm64.tar.gz` | macOS on Apple Silicon (M1, M2, M3, M4, Pro, Max, Ultra) | **NEON** (High-bandwidth unified memory) |
-| `dynalm-macos-x86_64.tar.gz` | macOS on Intel Core (Haswell and newer) | **AVX2**, fallback to generic |
+| `dynalm-linux-x86_64.tar.gz` | Linux x86-64, glibc ≥ 2.35 (Ubuntu 22.04+, Debian 12+, RHEL 9+, Fedora 38+, Arch) | **AVX2**, fallback to generic |
+| `dynalm-linux-arm64.tar.gz` | Linux ARM64, glibc ≥ 2.35 (64-bit ARM boards and servers) | **NEON** |
+| `dynalm-macos-arm64.tar.gz` | macOS on Apple Silicon | **NEON** (High-bandwidth unified memory) |
+| `dynalm-macos-x86_64.tar.gz` | macOS on Intel | **AVX2**, fallback to generic |
 | `dynalm-windows-x86_64.zip` | Windows 10 / 11 64-bit (x64) | **AVX2**, fallback to generic |
-| `dynalm-windows-arm64.zip` (or `scripts\install.ps1 -FromSource`) | Windows 11 on ARM (Snapdragon X and other ARM64 PCs), 🧪 Preview | **NEON** |
+| `dynalm-windows-arm64.zip` (or `scripts\install.ps1 -FromSource`) | Windows 11 on ARM (ARM64 PCs), 🧪 Preview | **NEON** |
 | `SHA256SUMS` | Cryptographic SHA-256 hashes for all archives | Cross-platform verification |
 
 - **Zero External Dependencies:** Statically linked C/C++ runtime. Requires no Visual C++ Redistributable on Windows and no external `libstdc++` package on Linux.

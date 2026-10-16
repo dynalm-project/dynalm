@@ -1,7 +1,7 @@
 # Run Local AI Models on Your GPU with DynaLM: Metal, Vulkan and CUDA
 
 <!--
-SEO keywords: run LLM on GPU, local LLM GPU, Apple Silicon Metal LLM, Mac M4 LLM GPU, AMD GPU LLM, Intel Arc LLM, Vulkan LLM, NVIDIA CUDA LLM, Ollama GPU alternative, llama.cpp GPU alternative, offline AI GPU.
+SEO keywords: run LLM on GPU, local LLM GPU, Apple Silicon Metal LLM, Mac LLM GPU, AMD GPU LLM, Intel GPU LLM, Vulkan LLM, NVIDIA CUDA LLM, Ollama GPU alternative, llama.cpp GPU alternative, offline AI GPU.
 AEO answer: DynaLM runs AI models on Apple Silicon GPUs (Metal), AMD, Intel, NVIDIA and Qualcomm GPUs (Vulkan), and NVIDIA GPUs (CUDA). Build with -DENABLE_METAL=ON, -DENABLE_VULKAN=ON or -DENABLE_CUDA=ON. DynaLM then uses the GPU automatically when it can run the model, and the CPU otherwise.
 -->
 
@@ -14,11 +14,11 @@ the GPU automatically when it can, and the CPU when it can't.
 
 | Your GPU | Use | Systems | Status |
 |---|---|---|---|
-| Apple Silicon (M1, M2, M3, M4 and Pro / Max / Ultra) | **Metal** | macOS | 🧪 Preview |
-| AMD Radeon | **Vulkan** | Windows, Linux | 🧪 Preview |
-| Intel Arc, Intel Iris Xe | **Vulkan** | Windows, Linux | 🧪 Preview |
-| Qualcomm Adreno (Snapdragon) | **Vulkan** | Windows on ARM, Linux | 🧪 Preview |
-| NVIDIA GeForce / RTX / data center | **CUDA** or **Vulkan** | Windows, Linux | 🧪 Preview |
+| Apple Silicon | **Metal** | macOS | 🧪 Preview |
+| AMD | **Vulkan** | Windows, Linux | 🧪 Preview |
+| Intel | **Vulkan** | Windows, Linux | 🧪 Preview |
+| Qualcomm | **Vulkan** | Windows on ARM, Linux | 🧪 Preview |
+| NVIDIA | **CUDA** or **Vulkan** | Windows, Linux | 🧪 Preview |
 
 🧪 **Preview** means the backend works and passes DynaLM's test suite, and it is still being
 tuned. Please report what you see on your hardware in
@@ -70,7 +70,8 @@ Your normal graphics driver provides Vulkan; nothing else is needed.
    ```
 
 **Tip:** to build only for your own GPU, which is faster, add
-`-DCMAKE_CUDA_ARCHITECTURES=89`. 89 is the RTX 40 series; 86 is RTX 30 and 75 is RTX 20.
+`-DCMAKE_CUDA_ARCHITECTURES=<cc>`, where `<cc>` is your GPU's compute capability without
+the dot (8.6 becomes 86). NVIDIA publishes the compute capability of every GPU.
 
 You can switch on more than one GPU type in the same build.
 
@@ -86,7 +87,7 @@ dynalm serve qwen2.5:1.5b
 The log shows which device was picked:
 
 ```
-Device: compiled/Metal/Apple M4 Pro
+Device: compiled/Metal/<your GPU>
 ```
 
 ### Choose the device yourself
@@ -132,7 +133,7 @@ memory.
 
 ## How fast is it?
 
-**Apple M4 Pro, Metal, Qwen2.5-1.5B Q4_K_M, compared with llama.cpp's server on the same
+**Apple Silicon Mac, Metal, Qwen2.5-1.5B Q4_K_M, compared with llama.cpp's server on the same
 file:**
 
 | What we measured | Result |

@@ -21,7 +21,7 @@ timeline
     2025 Q1 : Engine Foundation (DynaLM & DynaCore) : Native AVX2 & NEON SIMD : GGUF & SafeTensors Loaders : Single-prompt & Terminal Chat
     2025 Q2 : Server & Concurrency : Continuous Batching & Chunked Prefill : Paged KV Cache with Radix Prefix Sharing : OpenAI HTTP REST API & Prometheus Metrics
     2025 Q3 : Model Expansion & Optimization : Qwen 3 (Thinking Models) : DeepSeek-R1 Distill : DynaCore JIT Compiler Mode : Speculative Decoding
-    2025 Q4 : GPU Acceleration Layer : Apple Metal Backend (M1-M4) : Vulkan & CUDA Backends (Preview) : Automatic CPU/GPU Selection : Windows on ARM
+    2025 Q4 : GPU Acceleration Layer : Apple Metal Backend : Vulkan & CUDA Backends (Preview) : Automatic CPU/GPU Selection : Windows on ARM
     2026 Future : Distributed CPU Serving : Disaggregated Prefill & Decode : Vision-Language Multimodal : Microscaling Quantization (FP8/FP4)
 ```
 
@@ -33,15 +33,15 @@ timeline
 
 | Capability | Status | Target Hardware / Platform | Details & Notes |
 | :--- | :---: | :--- | :--- |
-| **x86_64 AVX2 SIMD** | ✅ Shipped | Intel Core (Haswell+), AMD Ryzen | Native vectorized kernels, zero-copy `mmap`. |
-| **ARM64 NEON SIMD** | ✅ Shipped | Apple Silicon (M1–M4), Raspberry Pi 4/5 | Hand-tuned NEON vector routines for ARM v8/v9. |
+| **x86_64 AVX2 SIMD** | ✅ Shipped | x86-64 (Intel, AMD) | Native vectorized kernels, zero-copy `mmap`. |
+| **ARM64 NEON SIMD** | ✅ Shipped | Apple Silicon, ARM64 Linux | Hand-tuned NEON vector routines for ARM v8/v9. |
 | **Compiled Kernel Mode** | ✅ Shipped | x86_64 & ARM64 | DynaCore IR JIT compiling and kernel fusion. |
-| **Intel AMX / AVX-512** | 🔄 In Progress | Intel Xeon (Sapphire Rapids+), Core Ultra | Matrix Tile acceleration for high-throughput prefill. |
-| **Apple Metal GPU Backend** | 🧪 Preview | macOS Apple Silicon (M1/M2/M3/M4) | Whole-step GPU graphs, in-place paged attention, zero-copy weights ([docs/gpu.md](docs/gpu.md)). |
-| **Vulkan GPU Backend** | 🧪 Preview | AMD Radeon, Intel Arc / Iris, NVIDIA, Qualcomm Adreno | Same engine features as Metal: continuous batching, paged KV, prefix sharing. |
-| **NVIDIA CUDA Backend** | 🧪 Preview | NVIDIA GeForce / RTX / data center | Built on the same GPU device layer ([docs/gpu.md](docs/gpu.md)). |
+| **Intel AMX / AVX-512** | 🔄 In Progress | Intel CPUs with AVX-512 / AMX | Matrix Tile acceleration for high-throughput prefill. |
+| **Apple Metal GPU Backend** | 🧪 Preview | macOS on Apple Silicon | Whole-step GPU graphs, in-place paged attention, zero-copy weights ([docs/gpu.md](docs/gpu.md)). |
+| **Vulkan GPU Backend** | 🧪 Preview | AMD, Intel, NVIDIA and Qualcomm GPUs | Same engine features as Metal: continuous batching, paged KV, prefix sharing. |
+| **NVIDIA CUDA Backend** | 🧪 Preview | NVIDIA GPUs | Built on the same GPU device layer ([docs/gpu.md](docs/gpu.md)). |
 | **Automatic CPU/GPU Selection** | ✅ Shipped | All platforms | `--backend auto` picks the GPU when it can run the model, else the CPU. |
-| **Windows on ARM (Snapdragon)** | 🧪 Preview | Windows 11 ARM64 | Native ARM64 build with NEON kernels. |
+| **Windows on ARM** | 🧪 Preview | Windows 11 ARM64 | Native ARM64 build with NEON kernels. |
 | **GPU: Qwen3 / Gemma 3 / Llama 3.x / MoE** | 📋 Planned | All GPU backends | Per-head Q/K norm, Llama 3 / YaRN RoPE scaling and expert routing on the GPU. |
 | **GPU multi-user throughput** | 🔄 In Progress | All GPU backends | Larger batched prefill to raise total tokens/s with 8+ users. |
 

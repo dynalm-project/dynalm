@@ -41,7 +41,7 @@ option(ENABLE_AMX    "Compile AMX CPU kernels"           OFF)
 option(ENABLE_NEON   "Compile NEON CPU kernels (ARM64)"   ON)
 
 # SIMD tiers follow the target architecture: AVX2/AVX-512/AMX exist only on
-# x86-64, NEON only on ARM64 (Apple Silicon, Graviton, Windows on ARM). The
+# x86-64, NEON only on ARM64 (Apple Silicon, ARM64 Linux, Windows on ARM). The
 # per-file ISA flags (-mavx2, ...) would be compile errors elsewhere.
 string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" _dynalm_proc)
 if(CMAKE_OSX_ARCHITECTURES)

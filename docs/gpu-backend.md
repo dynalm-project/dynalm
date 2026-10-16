@@ -4,7 +4,7 @@ How DynaLM can run inference on a GPU without giving up what makes it different 
 batching, paged KV, prefix sharing): the layers, contracts, risks, and the smallest prototype
 that proves or disproves the design.
 
-Status: **experimental, implemented and validated on Apple M4 Pro** (section 0): in-place
+Status: **experimental, implemented and validated on Apple Silicon** (section 0): in-place
 paged attention, zero-copy weights, a GPU prefill policy, concurrency and prefix sharing
 through DynaLM's own scheduler. It is opt-in at build time (`-DENABLE_METAL=ON`) and at run
 time (`--backend metal`); CPU defaults are unchanged. Release status:
@@ -16,8 +16,8 @@ Every statement is labelled:
 | Label | Meaning |
 |---|---|
 | **[code]** | Verified by reading the source at `44a9851` (file and function given) |
-| **[verified]** | Built, run or measured on the M4 Pro during stage 1 (section 0) |
-| **[history]** | A measurement recorded in the repository (CHANGELOG, docs); not repeated on the M4 Pro |
+| **[verified]** | Built, run or measured on the Apple Silicon reference machine during stage 1 (section 0) |
+| **[history]** | A measurement recorded in the repository (CHANGELOG, docs); not repeated on the reference machine |
 | **[proposal]** | A design decision of this document; not implemented |
 | **[assumption]** | Believed true but not verified here: ggml API details, Metal behaviour, hardware figures. Each one must be verified before the work that depends on it |
 
@@ -34,7 +34,7 @@ Every statement is labelled:
 | D5 | `--backend metal` that cannot initialize, or cannot run the model, is an error at startup (never a silent CPU run). `--backend auto` (the CLI default) selects the GPU in a Metal build when `gpu_model_support` accepts the model and the device starts; otherwise it selects the CPU and logs the reason. CPU-only builds are unchanged | **[verified]** `test_engine` device-selection test (tiny Qwen2 → GPU, tiny Qwen3 → CPU, explicit metal + Qwen3 → Unsupported) |
 | D6 | The DD-053 contract against the CPU fp32 reference (perplexity ≤ +1%, mean KL ≤ 0.0025 nats), plus GPU run-to-run determinism and a greedy-divergence report. Greedy token identity is reported, not gated: the CPU contract does not require it (DD-031 makes no batch-invariance promise for accelerated paths) | **[verified]** all pass, section 0 results |
 | D7 | Work on `feat/gpu-backend-design` from the 0.1.4 release candidate | done; nothing committed |
-| D8 | **More GPU providers, one device implementation.** `GgmlDevice` serves Metal, Vulkan and CUDA (`ENABLE_METAL` / `ENABLE_VULKAN` / `ENABLE_CUDA`), each chosen by its ggml registry; `DYNACORE_GPU_INDEX` picks a device. Providers other than Metal do not give each buffer a unique address (ggml-vulkan uses one placeholder for all), so the runtime gets a reserved no-access address range per buffer and the backend address is used only to bind ggml tensors; their weights are copied, not mapped. Matmul and attention request fp32 precision (`GGML_PREC_F32`): Vulkan's default fp16 accumulation failed DD-053 on prefill (mean KL 0.0056), and passes with it (0.000004). Auto KV capacity also respects free device memory on these providers | **[verified]** Vulkan on this Mac through MoltenVK: `test_ggml_device` 283,567 checks, `test_engine`, `bench_gpu_accuracy` PASS (decode +0.015%, prefill −0.010%, 4/4 greedy, deterministic), API smoke 18/18. **CUDA:** same device layer; CI builds it; hardware validation on NVIDIA GPUs is the next step |
+| D8 | **More GPU providers, one device implementation.** `GgmlDevice` serves Metal, Vulkan and CUDA (`ENABLE_METAL` / `ENABLE_VULKAN` / `ENABLE_CUDA`), each chosen by its ggml registry; `DYNACORE_GPU_INDEX` picks a device. Providers other than Metal do not give each buffer a unique address (ggml-vulkan uses one placeholder for all), so the runtime gets a reserved no-access address range per buffer and the backend address is used only to bind ggml tensors; their weights are copied, not mapped. Matmul and attention request fp32 precision (`GGML_PREC_F32`): Vulkan's default fp16 accumulation failed DD-053 on prefill (mean KL 0.0056), and passes with it (0.000004). Auto KV capacity also respects free device memory on these providers | **[verified]** Vulkan on Apple Silicon through MoltenVK: `test_ggml_device` 283,567 checks, `test_engine`, `bench_gpu_accuracy` PASS (decode +0.015%, prefill −0.010%, 4/4 greedy, deterministic), API smoke 18/18. **CUDA:** same device layer; CI builds it; hardware validation on NVIDIA GPUs is the next step |
 
 ### What was built [verified]
 
@@ -83,7 +83,7 @@ There is no CPU fallback inside a step.
 
 ### Environment facts [verified]
 
-- Apple M4 Pro (8P + 4E), 24 GiB, macOS 26.7, Command Line Tools 26.6.
+- An Apple Silicon Mac with the Xcode Command Line Tools.
 - CMake 4.4.4 and Ninja 1.13.2 were installed with Homebrew for this work.
 - **SDK mismatch:** `xcrun` selects a leftover `MacOSX27.0.sdk` whose `.tbd` files the installed linker cannot read ("unknown architecture arm64e.x1-macos"). Every build here therefore sets `SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk`. Fixing the toolchain installation (reinstalling the Command Line Tools) is an alternative; it was not done.
 - The ggml CPU backend is built as part of ggml but not used (`GGML_CPU` default). OpenMP is not found, and ggml warns but continues.
@@ -91,7 +91,7 @@ There is no CPU fallback inside a step.
 ### Build and validation commands
 
 ```sh
-export SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk   # this machine only
+export SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk   # only if the default SDK fails to link
 cmake --preset macos-metal && cmake --build --preset macos-metal         # fetches pinned ggml
 bash tools/ci/run_tests.sh build/macos-metal                             # model-free, incl. test_ggml_device
 build/macos-metal/bin/dynalm run qwen2.5:1.5b -p "..." --temp 0 --backend metal
@@ -122,7 +122,7 @@ cmake --preset macos-release && cmake --build --preset macos-release     # CPU-o
   - **Two sequences in one batch** (different lengths, positions and blocks) give the same logits as each run alone (max diff 0.0).
   - **Graph reuse:** 664 segments, 34 graphs built, 0 errors.
   - **Why prefill differs more than decode:** prefill rows go through ggml's Metal matrix-matrix kernels, which round activations to half precision inside the tile [assumption from the kernel design, consistent with the measured gap]. That is a different precision class from DynaLM's fp32 activations. It is within DD-053 here, and it must be re-checked per model.
-- **CLI and API:** `dynalm run --backend metal` loads, prefills, decodes, samples, streams and shuts down. `tools/ci/smoke_api.py` passes 18 of 18 with `DYNALM_BACKEND=metal`; both of its server logs report `Device: compiled/Metal/Apple M4 Pro`. That run includes 4 concurrent users decoding together, which completed correctly but was not measured.
+- **CLI and API:** `dynalm run --backend metal` loads, prefills, decodes, samples, streams and shuts down. `tools/ci/smoke_api.py` passes 18 of 18 with `DYNALM_BACKEND=metal`; both of its server logs report `Device: compiled/Metal/<GPU>`. That run includes 4 concurrent users decoding together, which completed correctly but was not measured.
 - **Found and fixed during validation:**
   - Prepared graphs outlived a freed KV pool, and a new pool at the same address ran through the stale graph. This made 3 of 4 greedy prompts diverge at token 0. Fixed with the free epoch.
   - A false aliasing report on Q/K/V column slices. Fixed with an exact strided overlap test.
@@ -144,7 +144,7 @@ cmake --preset macos-release && cmake --build --preset macos-release     # CPU-o
   - 128 output tokens with `ignore_eos`, greedy;
   - 1 warm-up and 4 measured requests per point.
 - **Rounds:** 3 paired rounds with the arm order rotated. Every request produced exactly the requested prompt and output token counts on both engines.
-- **Machine:** M4 Pro **on battery** (22% → 15% during the runs; it was not possible to plug in). Absolute numbers may be lower than on AC; both arms ran under the same conditions.
+- **Machine:** the reference Mac **on battery** (it could not be plugged in). Absolute numbers may be lower than on AC; both arms ran under the same conditions.
 - **Verdict rule:**
   - "better" or "slower" only when all 3 rounds agree beyond ±5%;
   - INCONCLUSIVE when the rounds disagree or an arm varied more than 10% across rounds.
@@ -353,7 +353,7 @@ Gate statuses and evidence for every row: [release-readiness.md](release-readine
 
 ### Vulkan and CUDA status
 
-- **Vulkan (preview; correctness validated through MoltenVK on Apple M4 Pro).**
+- **Vulkan (preview; correctness validated through MoltenVK on Apple Silicon).**
   - Every check passes: the device suite, the engine tests, DD-053 accuracy, and the API
     smoke test.
   - MoltenVK translates Vulkan into Metal, so its speed (20.8 ms per token, against about
@@ -388,7 +388,7 @@ Gate statuses and evidence for every row: [release-readiness.md](release-readine
 
 ## 1. Executive summary
 
-- **Goal.** Run DynaLM models on Apple Metal (M4 Pro), then CUDA. Reach single-user parity
+- **Goal.** Run DynaLM models on Apple Metal, then CUDA. Reach single-user parity
   with llama.cpp on the same GPU first. Then pursue multi-user throughput and tail latency as
   separate objectives. A 2–2.5× multi-user throughput gain over llama.cpp / Ollama on selected
   workloads is an **aspirational target**, not a prediction.
@@ -428,7 +428,7 @@ Gate statuses and evidence for every row: [release-readiness.md](release-readine
 |---|---|
 | Design branch `feat/gpu-backend-design`, created from `origin/release/dynalm-release-candidate` @ `44a9851`; version 0.1.4 (`CMakeLists.txt`); contains the last CI fix `ef6fd28` | [code] git |
 | `main` is v0.1.3 and lacks the 0.1.4 kernel registry, tests and thread-pool guard; GPU work must not start from it | [code] git |
-| Machine: Apple M4 Pro (8 P + 4 E cores), 24 GiB unified memory, macOS 26.7, arm64 | [code] `sysctl`, `sw_vers` (read-only) |
+| Machine: an Apple Silicon Mac (arm64, unified memory) | [code] `sysctl`, `sw_vers` (read-only) |
 | CMake and Ninja are **not installed**; the presets require Ninja and CMake ≥ 3.24 | [code] `command -v`, `CMakePresets.json`, `CMakeLists.txt` |
 | Only the Command Line Tools are installed; `xcrun -f metal` fails, so there is **no offline Metal shader compiler**. The macOS SDK (with the Metal framework) is present | [code] `xcrun` (read-only) |
 | No ggml source, submodule or fetch step exists in the repository. "GGML" appears only as the name of the block formats DynaCore implements itself | [code] `git grep`, `dynacore/include/dynacore/quantization/quant_formats.h` |
@@ -522,9 +522,9 @@ Gate statuses and evidence for every row: [release-readiness.md](release-readine
 |---|---|
 | Throughput at parity or ahead of llama.cpp at every point; TTFT 2–3× lower under concurrency (Phase 21, Intel CPU) | **[history]** git log, Phase 21 commit |
 | Single-prompt prefill about 30% slower than llama.cpp; the gap is attributed to llama.cpp's int8 activations, which DD-053 rejects on Qwen3-4B | **[history]** `docs/dynakernel.md` |
-| All 0.1.4 opt-in kernel figures: i7-1255U, Windows, CPU | **[history]** `CHANGELOG.md` 0.1.4 |
+| All 0.1.4 opt-in kernel figures: an x86-64 laptop CPU, Windows | **[history]** `CHANGELOG.md` 0.1.4 |
 
-None of these describe GPU behaviour or the M4 Pro.
+None of these describe GPU behaviour or Apple Silicon.
 
 ## 3. Architecture
 
@@ -1053,8 +1053,8 @@ There is no per-kernel optimizer for kernels ggml selects internally.
 | ggml API churn | Breakage on update | Pin plus hash; adapter test suite; deliberate updates |
 | Graph rebuilds every step (dynamic shapes) | Host overhead kills decode | Attention-span buckets and masks; measure misses per 1,000 steps |
 | Numerical divergence from the CPU | Confusing results, broken trust | DD-053 gate, divergence report, documented non-invariance |
-| Memory pressure on 24 GiB unified memory | OOM, swapping | Device budget, warm-up reservation, admission limits |
-| Shader toolchain (Command Line Tools only) | Build or startup failures | Decision D2; verify on this machine before stage 1 |
+| Memory pressure on unified memory | OOM, swapping | Device budget, warm-up reservation, admission limits |
+| Shader toolchain (Command Line Tools only) | Build or startup failures | Decision D2; verify on the target machine before stage 1 |
 | No GPU in hosted CI runners [assumption] | GPU tests never run in CI | A local GPU test script plus CPU-only CI; tests skip without a device |
 | Benchmark unfairness (Ollama templates, early EOS) | Misleading claims | Section 10 rules; `compare_engines.py` comparability marking |
 

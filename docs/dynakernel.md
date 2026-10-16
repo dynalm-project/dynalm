@@ -111,7 +111,7 @@ Bounds are derived per element, not fitted. With `u = 2⁻²⁴`, `T = |d·sc·q
 
 The int8 paths are also required to change the bits relative to `f32`, which is evidence that they ran.
 
-Measured on the i7-1255U (2026-10-10). Max rel is relative to the case's largest |y_ref|; err/bound is the largest ratio over all elements.
+Measured on the x86-64 reference laptop CPU (2026-10-10). Max rel is relative to the case's largest |y_ref|; err/bound is the largest ratio over all elements.
 
 | Tier | dtype | Path (rows) | Cases | max \|err\| | max rel | err/bound |
 |---|---|---|---|---|---|---|
@@ -190,7 +190,7 @@ Everything else is rejected before execution (`validate_spec`, `GeneratedBackend
 - Accuracy: every one of the 56 specializations against the independent double-precision Q4_K decode, with bound `(K+5)·u·(S+|bias|)`. The reference backend's f32, per-32, sub-scaled and prepacked paths run on the same data, each within its own bound.
 - Strided x/y with bias, 1 vs 4 threads bit-identical, and the rejections.
 
-Measured on the i7-1255U (2026-10-10), err/bound as the largest ratio over all elements:
+Measured on the x86-64 reference laptop CPU (2026-10-10), err/bound as the largest ratio over all elements:
 
 | Implementation | Tier | Cases | max \|err\| | max rel | err/bound |
 |---|---|---|---|---|---|
@@ -224,7 +224,7 @@ Model-free. It compares gen_scalar, gen_avx2, ref_f32 (fused dot or fp32 panel),
 
 Every output is verified against the double-precision reference within its path's bound before timing, and must be reproduced bit for bit after timing. Samples of about 20 ms are interleaved across implementations, after 3 warm-up rounds; 15 samples per point. It reports median, p10, p90, spread, GFLOP/s and weight GB/s.
 
-Results from 2026-10-10 on the i7-1255U (MSVC 19.44, Release). Two repetitions per configuration agreed. Threads=1 runs used `DYNACORE_PIN_THREADS=1` (median spread 12%). Threads=10 runs were unpinned (median spread 21–28%); a pinned 10-thread run had tens-of-ms stalls and was excluded.
+Results from 2026-10-10 on the x86-64 reference laptop CPU (MSVC 19.44, Release). Two repetitions per configuration agreed. Threads=1 runs used `DYNACORE_PIN_THREADS=1` (median spread 12%). Threads=10 runs were unpinned (median spread 21–28%); a pinned 10-thread run had tens-of-ms stalls and was excluded.
 
 | | gen_avx2 ÷ gen_scalar | gen_avx2 ÷ ref_f32 (same fp32 numerics) | fastest overall (int8 numerics) |
 |---|---|---|---|
@@ -302,7 +302,7 @@ The row kernel `dot_rows_sx_q4_K` uses the same integer scheme on GGUF rows: 8 l
 - **Rejections:** `f32` contract, M 9, N 33, missing shape, Q6_K, weight not prepacked, stale source, released copy, and prepack validation.
 - **Other:** strided x/y, bias and the explicit `int8` contract; 1 and 4 threads give identical bits.
 
-**Benchmark** (i7-1255U, MSVC 19.44 Release, 2026-10-10). `--int8-only`: 15 interleaved samples of about 20 ms after 3 warm-up rounds. Every output was verified before timing and reproduced bit for bit after. Two repetitions per configuration agreed.
+**Benchmark** (x86-64 reference laptop CPU, MSVC 19.44 Release, 2026-10-10). `--int8-only`: 15 interleaved samples of about 20 ms after 3 warm-up rounds. Every output was verified before timing and reproduced bit for bit after. Two repetitions per configuration agreed.
 
 - **Configurations:** 1 thread pinned (median spread 10%); 10 threads unpinned (median 15%).
 - **Speedup** = reference p50 ÷ gen_int8 p50, same synthetic weights and inputs:
@@ -338,7 +338,7 @@ A separate configuration; the default cases are unchanged. It compares `ref_int8
 
 **Method.** Same as the default mode: every copy's output is verified against the double-precision reference within the sub-scaled bound before timing, and the first and last copy are re-checked bit for bit after timing. There are 3 warm-up rounds and 15 samples of about 20 ms (whole rotations). Two repetitions per configuration were run: 1 thread pinned, 10 threads unpinned.
 
-**Results** (2026-10-10, i7-1255U). Speedup = `ref_int8_pk` p50 ÷ `gen_int8` p50, for both repetitions. err/bound ≤ 0.139 for both kernels, identical per case.
+**Results** (2026-10-10, x86-64 reference laptop CPU). Speedup = `ref_int8_pk` p50 ÷ `gen_int8` p50, for both repetitions. err/bound ≤ 0.139 for both kernels, identical per case.
 
 | M | 10 threads: speedup | 10 threads: weight GB/s (% of probe) | 1 thread: speedup | 1 thread: % of probe |
 |---|---|---|---|---|
@@ -465,7 +465,7 @@ Results (2026-10-11):
 
 Optimization (O3) and code generation take about equal shares; parsing and verification together take at most 7.4 ms. One lowering for 4 projection shapes × M 1..8 is roughly 2–3 s of compilation per process.
 
-**Microbenchmark.** `bench_dynakernel_llvm`, i7-1255U (2 P + 8 E cores), Qwen2.5-1.5B projection shapes, weights cache-resident (≤ 7.7 MB), 15–21 interleaved samples. Every output was checked against the double-precision decode before and after timing, and LLVM == generated C++ bit for bit wherever both exist. Raw data: `results/dynakernel-llvm/bench-20261011-084712.*` (unpinned, 1 and 10 threads) and `bench-pinned-20261011-084837.*` (`DYNACORE_PIN_THREADS=1`, 1 thread).
+**Microbenchmark.** `bench_dynakernel_llvm`, the x86-64 reference laptop CPU, Qwen2.5-1.5B projection shapes, weights cache-resident (≤ 7.7 MB), 15–21 interleaved samples. Every output was checked against the double-precision decode before and after timing, and LLVM == generated C++ bit for bit wherever both exist. Raw data: `results/dynakernel-llvm/bench-20261011-084712.*` (unpinned, 1 and 10 threads) and `bench-pinned-20261011-084837.*` (`DYNACORE_PIN_THREADS=1`, 1 thread).
 
 Single thread, p50 speedup of `llvm_avx2` (range over the 3 shapes, both runs):
 
@@ -617,7 +617,7 @@ With weights in DRAM at 10 threads, every implementation converges to roughly th
 - **Temporary buffers and memory movement:** the kernel path has none to remove. The executor reuses its activation buffer and writes outputs in place.
 - **Synchronization:** one region costs 6.5–16 µs (Phase 2). That is ~10 % of a 1536 × 1536 DRAM call at 10 threads and 2–3 % of the 7.8 MB shapes. Cutting it means grouping several matmuls into one region, not a kernel change.
 
-**Conclusion.** On this machine the LLVM kernel is not leaving DRAM bandwidth unused at 10 threads for M ≤ 5, and at M = 8 the limit is power-limited compute on hybrid cores. Next: fewer bytes per weight in the packed layout. `BlockQ4_Kx8` stores d/dmin as fp32 and the scales and mins as whole bytes: 1216 B per 8 × 256 values against GGUF's 1152 B.
+**Conclusion.** On the reference CPU the LLVM kernel is not leaving DRAM bandwidth unused at 10 threads for M ≤ 5, and at M = 8 the limit is power-limited compute on hybrid cores. Next: fewer bytes per weight in the packed layout. `BlockQ4_Kx8` stores d/dmin as fp32 and the scales and mins as whole bytes: 1216 B per 8 × 256 values against GGUF's 1152 B.
 
 ### Phase 4: compact packed layouts (2026-10-11)
 
