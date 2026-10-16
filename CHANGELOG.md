@@ -2,6 +2,117 @@
 
 ## [Unreleased]
 
+CPU-only builds behave as before. GPU backends (Metal, Vulkan, CUDA) are opt-in at build
+time. **In a GPU build, `--backend auto` (the default) now selects the GPU** when the model
+runs on it. Otherwise it selects the CPU and logs why. `--backend cpu` and
+`--backend metal` are always obeyed. **One security default changed:** `serve` refuses a
+non-loopback `--host` without an API key (see Security).
+
+### Vulkan and CUDA GPU backends, Windows on ARM (preview)
+- **Vulkan** (preview; `-DENABLE_VULKAN=ON`, `--backend vulkan`): AMD, Intel, NVIDIA and
+  Qualcomm GPUs through the same ggml device as Metal.
+  - Passes the GPU device suite, the engine tests, DD-053 accuracy and the API smoke test
+    (validated through MoltenVK).
+  - CI runs it on Mesa lavapipe.
+- **CUDA** (preview; `-DENABLE_CUDA=ON`, `--backend cuda`): the same device layer. CI builds
+  it.
+- **Shared GPU changes:**
+  - Matmul and attention request fp32 precision on every GPU (DD-053).
+  - Buffers get unique handle addresses on providers that do not provide them.
+  - Auto KV capacity respects free device memory.
+  - `DYNACORE_GPU_INDEX` selects a GPU.
+  - `ENABLE_HIP` is refused with a pointer to Vulkan.
+- **Windows on ARM** (preview):
+  - presets `msvc-release` (ARM64 prompt) and `windows-arm64` (clang-cl);
+  - CI build, test and package jobs on `windows-11-arm`;
+  - a `dynalm-windows-arm64.zip` release asset;
+  - the installer detects ARM64.
+- **Portability fix:** `TensorLayout::contiguous` no longer uses `__builtin_mul_overflow`,
+  which MSVC lacks.
+
+### Metal GPU backend (preview; docs/gpu.md, docs/gpu-backend.md)
+- **Device choice:** `--backend auto|cpu|metal` on `run`, `serve` and `benchmark`;
+  `runtime.device` in the config file; or `DYNALM_BACKEND`.
+  - `auto` checks the model at startup (`gpu_model_support`). Unsupported models fall back to
+    the CPU: MoE, per-head Q/K norm (Qwen3, Gemma 3), YaRN or Llama 3 RoPE scaling, and KV
+    types other than f16, f32 and q8_0.
+  - `auto` also falls back to the CPU when the GPU fails to start. It logs
+    `Device: auto selects the CPU: <reason>`.
+  - `--backend metal` with an unsupported model now fails at startup, not on the first
+    request.
+- **Execution:** each forward step runs on the GPU as one ggml graph (pinned ggml v0.27.0,
+  `a05c992`, MIT; Metal shaders embedded and compiled at run time, so no Xcode is needed).
+  - The step is recorded by DynaIR and handed over whole (`SegmentExecutor`, `DeviceCall`).
+  - Prepared graphs are cached by structure and padded KV span; only token ids, positions, KV
+    indices and masks are uploaded per step.
+- **Paged KV read in place:** the GPU KV pool uses a slot-major block layout
+  (`KvLayout::kSlotMajor`) and flash attention reads it directly.
+  - The block tables, causality and sliding window become a mask; fully masked chunks are
+    skipped by the kernel.
+  - Nothing is gathered or copied. Prefix sharing and copy-on-write work unchanged.
+  - The stage-1 gather path remains for A/B (`DYNALM_KV_LAYOUT=head`).
+  - f16, f32 and q8_0 KV are supported.
+- **Zero-copy weights:** weights borrowed from the GGUF mmap are wrapped in place as shared
+  Metal buffers. Peak memory footprint for Qwen2.5-1.5B Q4_K_M: 1,354 → 291 MiB.
+  `DYNACORE_GPU_WEIGHTS=copy` restores copies.
+- **GPU prefill default:** steps without decode rows use 256-token prompt chunks
+  (`kGpuSoloPrefillChunk`); `--solo-prefill-chunk` overrides it. CPU defaults are unchanged.
+  - **Single user:** paired sweep of chunks 0–512, 3 rounds, M4 Pro on AC. TTFT 1.56× / 1.66× /
+    1.64× faster at 128 / 512 / 2,048 prompt tokens, ITL unchanged.
+  - **4 users:** no change.
+  - **Why 256:** 512 was marginally faster for one user, but noisier, with a small 4-user
+    ITL regression.
+- **Accuracy:** within DD-053 against the CPU fp32 reference — decode perplexity +0.011%,
+  prefill +0.150%, greedy-identical on the reference prompts; deterministic.
+- **Not supported on the GPU (named errors, no CPU fallback):** MoE models, YaRN or Llama 3
+  RoPE scaling, Qwen3-style per-head Q/K norm.
+
+### Security (docs/security.md)
+- **API key authentication:** `--api-key-file FILE` or `DYNALM_API_KEY`, at least 16
+  characters. Bearer authentication applies to every endpoint except `GET /health`, compared in
+  constant time and never logged. `dynalm stop` and `dynalm benchmark --url` send the key.
+- **Non-loopback binds:** `serve` refuses a non-loopback `--host` without a key, unless
+  `--allow-unauthenticated` is given (for deployments behind an authenticating gateway).
+- **Browser attacks on localhost:**
+  - on a loopback bind, requests need a loopback `Host` header (DNS-rebinding protection,
+    403);
+  - POST bodies must be `application/json` (415), so web pages cannot drive the API or
+    `/admin/shutdown` with simple cross-origin requests.
+- **Error messages:** errors raised while generating are reported to clients by category;
+  details go to the log.
+- **Fixed, found by fuzzing under UBSan:**
+  - undefined behaviour on NaN weights (`fast_exp`, int8 activation and q8_0 quantization);
+  - signed overflow in tensor strides for a GGUF tensor with a zero dimension.
+- **Logs:** control characters in log messages are escaped (log injection through model
+  metadata).
+- **Model metadata limits:** dimensions that size allocations are bounded
+  (`ModelConfig::check_limits`; for example at most 1,024 layers), and a GGUF `block_count`
+  may not exceed the file's tensor count. A fuzzed file that declared 67 million layers
+  previously exhausted memory.
+- **cpp-httplib upgraded from v0.18.3 to v0.61.0:** v0.18.3 is in the affected range of
+  published advisories, including critical header shadowing and CRLF injection, and high
+  unbounded-memory issues. A cached header that does not match the pinned SHA-256 is now
+  fetched again instead of being trusted.
+- **`dynalm pull`:** the saved file name must be a plain name (`[A-Za-z0-9._-]`), so a link
+  cannot write outside the model store on Windows.
+
+### Tests and CI
+- **New model-free tests on a synthetic GGUF model** (`dynalm/tests/tiny_gguf.h`), in
+  `tools/ci/run_tests.sh`:
+  - `test_engine`: determinism, concurrent == alone, prefix cache, cancellation, deadlines,
+    the solo-prefill non-starvation trace, bounded memory; CPU and Metal;
+  - `test_server`: access control, limits, overload, disconnect, drain;
+  - `test_fuzz_parsers`: GGUF, SafeTensors and JSON mutation fuzzing.
+- **`test_ggml_device`:** every GPU op against the CPU, paged attention in both layouts,
+  failure paths, buffer reuse, zero-copy weights.
+- **`bench_gpu_accuracy`:** model-based DD-053, determinism, multi-sequence and
+  copy-on-write checks.
+- **CI jobs:**
+  - `macos-metal`: reports whether a real Metal device ran the GPU tests;
+  - `security`: secret scan, CycloneDX SBOM, 20,000-iteration fuzzing under ASan+UBSan.
+- **Package checks:** `package.sh` checks the package contents and licences, secret-scans the
+  archive and writes an SBOM.
+
 ### Removed
 - Internal benchmark campaign scripts: `tools/next_sweep*.ps1`, `tools/phase8_sweep.ps1`,
   `tools/phase9_sweep.ps1`, `tools/pk8_validation.ps1`, `tools/pk8_analyze.py`,

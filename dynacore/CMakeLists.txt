@@ -15,6 +15,7 @@ add_library(dynacore STATIC
   src/dynakernel/program.cpp
   src/dynakernel/reference_backend.cpp
   src/execution/thread_pool.cpp
+  src/gpu/ggml_device.cpp
   src/hardware/cpu_info.cpp
   src/hardware/isa.cpp
   src/hardware/perf_counters.cpp
@@ -56,6 +57,22 @@ target_compile_definitions(dynacore PUBLIC
   ENGINE_HAS_AMX=$<BOOL:${ENABLE_AMX}>
   ENGINE_HAS_NEON=$<BOOL:${ENABLE_NEON}>)
 
+# GPU backend through pinned ggml (docs/gpu-backend.md). ggml headers stay
+# private to src/gpu; DynaLM never sees them.
+if(DYNALM_WITH_GGML)
+  target_link_libraries(dynacore PRIVATE ggml ggml-base)
+  target_compile_definitions(dynacore PRIVATE DYNACORE_HAS_GGML=1 DYNACORE_GGML_REVISION="${DYNALM_GGML_COMMIT}")
+  foreach(_gpu METAL VULKAN CUDA)
+    string(TOLOWER ${_gpu} _lib)  # ggml-metal, ggml-vulkan, ggml-cuda
+    if(ENABLE_${_gpu})
+      target_link_libraries(dynacore PRIVATE ggml-${_lib})
+      target_compile_definitions(dynacore PUBLIC DYNACORE_HAS_${_gpu}=1)
+    endif()
+  endforeach()
+else()
+  target_compile_definitions(dynacore PRIVATE DYNACORE_HAS_GGML=0)
+endif()
+
 # SIMD tiers: per-file ISA flags only (DD-003).
 if(ENABLE_AVX2)
   engine_set_isa(AVX2 cpu/avx2/kernels_avx2.cpp)
@@ -89,6 +106,9 @@ if(ENABLE_BENCHMARKS)
   target_link_libraries(test_int16_prefill PRIVATE dynacore)
   add_executable(test_thread_pool tests/test_thread_pool.cpp)
   target_link_libraries(test_thread_pool PRIVATE dynacore)
+  # GPU device through pinned ggml (docs/gpu-backend.md); skips without a GPU backend.
+  add_executable(test_ggml_device tests/test_ggml_device.cpp)
+  target_link_libraries(test_ggml_device PRIVATE dynacore)
   # CPU matmul kernel registry (DynaLM Next): selection, execution, diagnostics.
   add_executable(test_matmul_registry tests/test_matmul_registry.cpp)
   target_link_libraries(test_matmul_registry PRIVATE dynacore)

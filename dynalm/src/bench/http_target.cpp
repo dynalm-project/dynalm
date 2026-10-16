@@ -2,6 +2,7 @@
 // llama.cpp's llama-server, Ollama's /v1 API). Built with the server.
 
 #include <cstdio>
+#include <cstdlib>
 
 #include "api/json.h"
 #include "bench/loadgen.h"
@@ -40,6 +41,10 @@ class HttpTarget final : public Target {
     req.path = "/v1/completions";
     req.body = json::dump(body);
     req.set_header("Content-Type", "application/json");
+    // An authenticated server (docs/security.md): the key from the environment.
+    if (const char* key = std::getenv("DYNALM_API_KEY"); key != nullptr && *key != '\0') {
+      req.set_header("Authorization", std::string("Bearer ") + key);
+    }
 
     std::string buf;
     int32_t deltas = 0;

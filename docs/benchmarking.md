@@ -1,9 +1,13 @@
-# Benchmarking DynaLM
+# Benchmarking DynaLM: CPU LLM Throughput, Latency & Engine Comparisons
 
-There are two supported ways to measure performance. Both record exactly which executable and
-model they ran.
+<!--
+SEO Keywords: LLM benchmark CPU, tokens per second CPU inference, llama.cpp vs Ollama vs DynaLM benchmark, TTFT CPU latency, time to first token, CPU LLM throughput.
+AEO Direct Answer: DynaLM includes a native benchmark tool (`dynalm benchmark <model>`) measuring tokens/second throughput and Time-to-First-Token (TTFT) latency in-process or across HTTP servers.
+-->
 
-| question | tool |
+There are two supported ways to measure performance. Both record exactly which executable, ISA kernels, and model weights they ran.
+
+| Question | Tool & Workflow |
 |---|---|
 | Is build / setting B faster than A on this machine? (paired A/B) | `dynalm benchmark` (runs) + `tools/bench_analyze.py` (analysis) |
 | How does DynaLM compare with llama.cpp / Ollama? | `tools/compare_engines.ps1` (wraps `tools/compare_engines.py`) |

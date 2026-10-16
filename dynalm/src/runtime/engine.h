@@ -54,15 +54,39 @@ struct EngineOptions {
   ExecutionMode execution = ExecutionMode::kReference;
   int threads = 0;              // 0 = physical cores
   int64_t kv_tokens = 0;        // KV capacity in tokens; 0 = auto (auto_kv_tokens)
-  DeviceKind backend = DeviceKind::kCpu;  // DD-045: only CPU is built
+  DeviceKind backend = DeviceKind::kCpu;
+  // Pick the device: the GPU when this build has one, it initializes and it
+  // runs the model (gpu_model_support); otherwise the CPU. `backend` is
+  // ignored. The CLI sets this for `--backend auto` (its default).
+  bool backend_auto = false;
   DType kv_dtype = DType::kF16;
-  int32_t max_batch_tokens = 256;
+  // Max tokens per forward pass; 0 = the device default: max(256, both step
+  // budgets + 1, the solo-prefill chunk) (256 on the CPU with default budgets).
+  int32_t max_batch_tokens = 0;
   // Max rows of a matmul that uses int8 activations (DD-053); -1 = default
   // (KernelPlan, 4), 0 = never. 0 makes outputs independent of how requests
   // are batched (DD-031); the int8 path is faster for 1-4 concurrent rows.
   int32_t int8_decode_rows = -1;
   SchedulerConfig scheduler;
+  // Apply the device's scheduling profile to the balanced policy (GPU: see
+  // kGpuMixedPrefillBudget). False when the caller set step budgets itself.
+  bool device_scheduler_defaults = true;
 };
+
+// Solo-prefill chunk on GPU devices when none is configured
+// (SchedulerConfig::solo_prefill_chunk == -1). Chosen by measurement on the
+// Metal backend (docs/gpu-backend.md, section 0); the CPU default stays 0.
+inline constexpr int32_t kGpuSoloPrefillChunk = 256;
+// GPU profile of the balanced policy (docs/gpu-backend.md, section 0): on the
+// GPU a forward step pays the full weight read whatever its row count, so the
+// CPU-tuned mixed-step limits (64 prompt tokens, 32 per sequence, DD-079
+// target 6x / minimum 32) starve throughput. Measured: these values raise
+// throughput 22-45% and cut ITL p50 2-6x at 4-16 users, at the cost of a
+// higher ITL p95/p99; --policy latency keeps the original DD-079 behaviour.
+inline constexpr int32_t kGpuMixedPrefillBudget = 256;
+inline constexpr int32_t kGpuMaxPrefillChunk = 128;
+inline constexpr float kGpuDecodeLatencyTarget = 12.0f;
+inline constexpr int32_t kGpuProtectedPrefillMin = 64;
 
 struct GenerateParams {
   int32_t max_tokens = 256;
@@ -116,6 +140,12 @@ class RequestStream {
 // the weights, capped at 65536 tokens, at least min(context, 2048), rounded
 // down to whole 16-token blocks. `available_ram` 0 (unknown) falls back to
 // min(context, 16384).
+// OK when the GPU backend runs this model with this KV dtype; otherwise
+// Unsupported naming the first missing feature (MoE, per-head Q/K norm, RoPE
+// scaling other than none/linear, KV dtype). Checked at startup, so neither
+// `auto` nor `--backend metal` finds out on the first request.
+Status gpu_model_support(const ModelConfig& c, DType kv_dtype);
+
 int64_t auto_kv_tokens(const ModelConfig& c, DType kv_dtype, int64_t weight_bytes, int64_t available_ram);
 
 // Observability snapshot, refreshed by the scheduler thread after each step.
@@ -161,6 +191,8 @@ class Engine {
   // Interleaved weight copies made at load (DD-078).
   Device::PrepackStats prepack_stats() const { return backend_->prepack_stats(); }
   int threads() const { return pool_->size(); }
+  // Effective max tokens per forward pass (after device defaults).
+  int32_t max_batch_tokens() const { return transformer_->max_batch_tokens(); }
   const KvGeometry& kv_geometry() const { return kv_->geometry(); }
   // Snapshot taken on the scheduler thread after its latest step.
   EngineStats stats() const;

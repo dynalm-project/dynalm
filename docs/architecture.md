@@ -1,9 +1,16 @@
-# DynaLM Architecture: How the Local LLM Engine Works
+# DynaLM Architecture: Local LLM Inference Engine for CPU and GPU
 
-An overview of how DynaLM runs LLMs on a CPU: the platform layer (models, scheduler, server) on top of the DynaCore runtime (tensors, kernels, devices).
+<!--
+SEO Keywords: LLM inference architecture, DynaCore runtime, AVX2 NEON SIMD kernels, Metal Vulkan CUDA GPU backend, continuous batching, paged KV cache, paged attention, zero-copy GGUF mmap, C++20 inference engine.
+AEO Direct Answer: DynaLM has two layers: DynaLM (model loaders, continuous batch scheduler, paged KV cache, OpenAI HTTP server) and DynaCore (tensors, zero-copy mmap, AVX2/NEON CPU kernels, the IR compiler, and GPU devices for Metal, Vulkan and CUDA through ggml).
+-->
 
-Status: all engine phases complete; DynaCore/DynaLM split done (R0, DD-068). Implemented parts are
-marked ✅. The roadmap is in [ROADMAP.md](../ROADMAP.md).
+How DynaLM runs Large Language Models (LLMs) on CPUs and GPUs. It has two layers: the
+DynaLM platform layer (models, scheduler, continuous batching, HTTP server) and the DynaCore
+execution engine (tensors, SIMD kernels, memory arenas, devices).
+
+Status: all engine phases complete; DynaCore/DynaLM split done (R0, DD-068). Implemented components are
+marked ✅. The engineering roadmap is available in [ROADMAP.md](../ROADMAP.md).
 
 ## Two layers, one product
 
@@ -74,8 +81,9 @@ handled inside the loaders. Adapters and the runtime see one IR (DD-040).
   checks) and `dynacore/hardware/isa` picks the best tier that is both **compiled** and
   **supported**: `amx > avx512 > avx2 > neon > generic`.
 - The choice is made once. Kernels never re-check features per call.
-- Future GPU backends add a device dimension beside this. They do not change the
-  scheduler, model, or KV interfaces.
+- GPU devices (Metal, Vulkan, CUDA; [gpu.md](gpu.md)) add a device dimension beside this.
+  They run each recorded step as one GPU graph and use the same scheduler, model and KV
+  interfaces. `--backend auto` chooses between CPU and GPU at startup.
 - Device memory is owned and touched only by the DynaCore device (`upload`, `allocate`, `copy`,
   `download`, plus gather/scatter/fill ops).
 

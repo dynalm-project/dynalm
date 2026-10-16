@@ -9,7 +9,7 @@
 #
 # Assets: dynalm-linux-x86_64.tar.gz, dynalm-linux-arm64.tar.gz,
 #         dynalm-macos-arm64.tar.gz, dynalm-macos-x86_64.tar.gz,
-#         dynalm-windows-x86_64.zip, SHA256SUMS
+#         dynalm-windows-x86_64.zip, dynalm-windows-arm64.zip, SHA256SUMS
 name: release
 
 on:
@@ -38,6 +38,8 @@ jobs:
           # Intel build on Apple Silicon; tests run under Rosetta 2.
           - { name: macos-x86_64, os: macos-14, preset: macos-release, cmake_args: -DCMAKE_OSX_ARCHITECTURES=x86_64 }
           - { name: windows-x86_64, os: windows-2022, preset: msvc-release }
+          # Windows on ARM (Snapdragon class), native ARM64 build.
+          - { name: windows-arm64, os: windows-11-arm, preset: msvc-release, msvc_arch: arm64 }
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain (Linux, GCC 13)
@@ -52,6 +54,8 @@ jobs:
         run: brew install ninja
       - if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.msvc_arch || 'x64' }}
       - name: Build
         shell: bash
         run: |

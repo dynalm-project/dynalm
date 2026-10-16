@@ -15,7 +15,7 @@ namespace {
 constexpr YamlKey kYamlKeys[] = {
     {"model.path", "model", "", "model file, directory or name (qwen3:4b)"},
     {"model.id", "model-id", "file name", "id reported by /v1/models"},
-    {"runtime.device", "backend", "auto", "auto | cpu (GPU devices are not built yet)"},
+    {"runtime.device", "backend", "auto", "auto | cpu | metal | vulkan | cuda (auto = a built-in GPU that runs the model, else the CPU)"},
     {"runtime.execution", "execution", "reference", "reference | compiled (DynaCore IR + fusion)"},
     {"runtime.threads", "threads", "auto", "compute threads; auto = physical cores"},
     {"runtime.context_length", "ctx", "auto", "KV cache capacity in tokens; auto = from free RAM"},
@@ -212,7 +212,6 @@ Result<std::vector<std::string>> parse_config_text(std::string_view text, std::s
       }
       if (opt == nullptr) continue;  // a documented key this command does not use
       std::string_view value = e.value;
-      if (option_name == "backend" && value == "auto") continue;  // auto = the default device
       if (yk != nullptr && yk->inverted_flag) {
         if (!truthy(value) && !falsy(value)) return InvalidArgument(where + ": '" + e.key + "' is true/false");
         if (falsy(value)) args.push_back("--" + std::string(opt->name));

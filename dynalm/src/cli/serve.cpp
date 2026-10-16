@@ -31,6 +31,7 @@ constexpr OptionSpec kServeOptions[] = {
     {"model"},        {"host"},        {"port"},           {"model-id"},         {"threads"},
     {"ctx"},          {"batch"},       {"kv"},             {"http-threads"},     {"max-tokens"},
     {"max-active"},   {"request-timeout"}, {"temperature"}, {"backend"}, {"execution"}, {"shutdown-timeout"}, {"disable-admin", false}, {"int8-decode"}, {"policy"},
+    {"api-key-file"}, {"allow-unauthenticated", false},
     {"solo-prefill-chunk"}, {"solo-prefill-split", false}, {"prefill-order"}, {"prefill-aging-ms"},
 };
 
@@ -54,7 +55,8 @@ void usage() {
                "  --solo-prefill-split    with --solo-prefill-chunk: split it across waiting prompts\n"
                "  --prefill-order O       EXPERIMENTAL: fifo (default) | srpt (shortest remaining prompt first)\n"
                "  --prefill-aging-ms N    with srpt: prompts prefilling longer than N ms go first (default 20000)\n"
-               "  --backend cpu           compute backend (GPU backends are not built yet)\n"
+               "  --backend B             auto | cpu | metal | vulkan | cuda (default auto: a GPU when one\n"
+               "                          is built in and runs the model, else the CPU)\n"
                "  --execution MODE        reference (default) | compiled: DynaCore IR + fusion (DD-072)\n"
                "  --max-active N          concurrent requests before 503 (default 64)\n"
                "  --http-threads N|auto   HTTP workers (auto: max-active + 8)\n"
@@ -63,6 +65,10 @@ void usage() {
                "  --request-timeout S     per-request timeout in seconds, 0 = none (default 600)\n"
                "  --shutdown-timeout S    drain time for in-flight requests on stop (default 30)\n"
                "  --disable-admin         turn off POST /admin/shutdown (used by `dynalm stop`)\n"
+               "  --api-key-file FILE     require \"Authorization: Bearer <key>\" (key: first line of FILE;\n"
+               "                          or set DYNALM_API_KEY); required to bind a non-loopback --host\n"
+               "  --allow-unauthenticated bind a non-loopback --host without an API key (trusted networks\n"
+               "                          behind an authenticating gateway only; see docs/security.md)\n"
                "Every option can also be set as DYNALM_<OPTION> (e.g. DYNALM_HTTP_THREADS=32)\n"
                "or in the config file; precedence: command line > environment > file.\n");
 }
@@ -89,8 +95,11 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
   const std::vector<std::string>& args = *merged;
 
   EngineOptions eo;
+  eo.backend_auto = true;  // --backend auto
   ServerOptions so;
   int threads = 0, ctx = 0, batch = 0, http_threads = 0, max_tokens = 1024, max_active = 64;
+  std::string api_key_file;
+  bool allow_unauthenticated = false;
   int request_timeout_s = 600, shutdown_timeout_s = 30;
   for (size_t i = 0; i < args.size(); ++i) {
     const std::string_view a = args[i];
@@ -121,8 +130,12 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
     else if (a == "--request-timeout") ok = parse_int(value(), request_timeout_s);
     else if (a == "--shutdown-timeout") ok = parse_int(value(), shutdown_timeout_s);
     else if (a == "--disable-admin") so.enable_admin = false;
+    else if (a == "--api-key-file") api_key_file = value();
+    else if (a == "--allow-unauthenticated") allow_unauthenticated = true;
     else if (a == "--backend") {
-      auto k = parse_device_kind(value());
+      const std::string_view v = value();
+      eo.backend_auto = v == "auto";
+      auto k = eo.backend_auto ? Result<DeviceKind>(DeviceKind::kCpu) : parse_device_kind(v);
       ok = k.ok();
       if (ok) eo.backend = *k;
     } else if (a == "--execution") {
@@ -157,9 +170,23 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
     std::fprintf(stderr, "serve: %s\n", resolved.status().message().c_str());
     return 1;
   }
+  // Authentication (docs/security.md): a non-loopback bind needs a key.
+  auto key = load_api_key(api_key_file);
+  if (!key.ok()) {
+    std::fprintf(stderr, "serve: %s\n", key.status().message().c_str());
+    return 1;
+  }
+  so.api_key = std::move(*key);
+  if (!is_loopback_host(so.host) && so.api_key.empty() && !allow_unauthenticated) {
+    std::fprintf(stderr,
+                 "serve: --host %s exposes the server beyond this machine; set an API key (--api-key-file or "
+                 "DYNALM_API_KEY), or pass --allow-unauthenticated behind an authenticating gateway\n",
+                 so.host.c_str());
+    return 1;
+  }
   eo.threads = threads;
   eo.kv_tokens = ctx;
-  eo.max_batch_tokens = batch > 0 ? batch : 256;
+  eo.max_batch_tokens = batch;  // 0 = the device default (Engine)
   so.http_threads = http_threads;
   so.max_active = max_active;
   so.default_max_tokens = max_tokens;
@@ -185,11 +212,10 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
   // The scheduler's effective budgets: --policy latency / throughput override the requested ones.
   const SchedulerConfig& sc = e.scheduler_config();
   LOG_INFO("Scheduler: continuous batching, {} policy (prefill budget {}, decode budget {}, max batch {})",
-           scheduler_policy_name(sc.policy), sc.prefill_token_budget, sc.decode_token_budget, eo.max_batch_tokens);
-  if (eo.scheduler.solo_prefill_chunk > 0) {
-    LOG_INFO("Solo prefill (experimental): chunk and budget {} in steps without decode rows, {}",
-             std::min(eo.scheduler.solo_prefill_chunk, eo.max_batch_tokens),  // the scheduler clamps it to the batch
-             eo.scheduler.solo_prefill_split ? "split across prompts" : "FIFO");
+           scheduler_policy_name(sc.policy), sc.prefill_token_budget, sc.decode_token_budget, e.max_batch_tokens());
+  if (sc.solo_prefill_chunk > 0) {  // effective (device default or --solo-prefill-chunk), clamped to the batch
+    LOG_INFO("Solo prefill: chunk and budget {} in steps without decode rows, {}", sc.solo_prefill_chunk,
+             sc.solo_prefill_split ? "split across prompts" : "FIFO");
   }
   LOG_INFO("Prefix cache: {}", eo.scheduler.enable_prefix_cache ? "enabled (radix)" : "disabled");
 
@@ -197,6 +223,13 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
   if (Status st = server.start(); !st.ok()) {
     std::fprintf(stderr, "serve: %s\n", st.to_string().c_str());
     return 1;
+  }
+  if (!so.api_key.empty()) {
+    LOG_INFO("Authentication: API key required");
+  } else if (is_loopback_host(so.host)) {
+    LOG_INFO("Authentication: off (loopback bind)");
+  } else {
+    LOG_WARN("Authentication: OFF on non-loopback address {} (--allow-unauthenticated)", so.host);
   }
   LOG_INFO("Listening on http://{}:{} (max {} concurrent requests, timeout {} s)", so.host, server.port(), max_active,
            request_timeout_s);

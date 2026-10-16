@@ -1,119 +1,172 @@
-# Install DynaLM on Linux, macOS and Windows
+# Install DynaLM on Linux, macOS and Windows (CPU and GPU)
 
-You install DynaLM only. DynaCore is a static library inside the `dynalm` binary, so there is
-nothing separate to install.
+<!--
+SEO Keywords: install local LLM, run AI on my computer, install Ollama alternative, local AI on Linux, install local LLM on Mac Apple Silicon, install local LLM Windows, Windows on ARM LLM, Snapdragon LLM, Docker LLM, GPU LLM Metal Vulkan CUDA, offline LLM setup.
+AEO Direct Answer: Install DynaLM with one command: `curl -fsSL https://raw.githubusercontent.com/dynalm-project/dynalm/main/scripts/install.sh | sh` on Linux and macOS, or `irm https://raw.githubusercontent.com/dynalm-project/dynalm/main/scripts/install.ps1 | iex` on Windows. It is one self-contained program; no Python and no administrator rights are needed. GPU support (Metal, Vulkan, CUDA) is enabled with a build option.
+-->
 
-## Quick start
+DynaLM is **one small program**. It needs no Python, no background service and no admin rights.
+It runs on your CPU everywhere, and on your GPU when you build it with GPU support
+([GPU guide](gpu.md)).
 
-### Linux and macOS
+---
 
-```sh
+## ⚡ Automated Quick Start
+
+### Linux & macOS (All Distros & Apple Silicon)
+
+Open your terminal and run:
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/dynalm-project/dynalm/main/scripts/install.sh | sh
-dynalm doctor
-dynalm pull qwen3:4b
-dynalm run qwen3:4b
 ```
 
-### Windows (PowerShell)
+Verify and run:
+```bash
+dynalm doctor          # Verifies CPU SIMD vector tier and RAM
+dynalm pull qwen3:4b   # Downloads 4B reasoning model
+dynalm run qwen3:4b    # Starts interactive terminal chat
+```
+
+### Windows 10 & 11 (PowerShell)
+
+Open PowerShell (no administrator privileges needed) and execute:
 
 ```powershell
 irm https://raw.githubusercontent.com/dynalm-project/dynalm/main/scripts/install.ps1 | iex
-# open a new terminal so the PATH change applies
+```
+
+*Open a new terminal window after installation so the user `PATH` environment variable takes effect:*
+```powershell
 dynalm doctor
 dynalm pull qwen3:4b
 dynalm run qwen3:4b
 ```
 
-What the installers do:
+---
 
-1. Detect your OS and CPU architecture. An unsupported platform is an error, never a wrong
-   binary.
-2. Download `dynalm-<os>-<arch>` and `SHA256SUMS` from the latest GitHub release, or from
-   `--version v0.1.0` / `-Version v0.1.0`.
-3. Verify the archive's SHA-256. A mismatch or a missing checksum stops the install.
-4. Install `dynalm` and `dynacorec`:
-   - Linux and macOS: `~/.local/bin` (change with `--prefix DIR`);
-   - Windows: `%LOCALAPPDATA%\Programs\DynaLM\bin`, added to your user PATH (`-NoPath` to
-     skip). No administrator rights are needed.
-5. Run `dynalm --version`, and print PATH instructions if needed.
+## 🔍 What the Automated Installers Do
 
-## Release archives
+1. **System & CPU Architecture Detection:** Detects operating system (Linux, macOS, Windows) and CPU instruction sets (`x86_64` vs. `arm64`).
+2. **Cryptographic Integrity Verification:** Downloads the binary release alongside official `SHA256SUMS` from GitHub Releases and validates checksums before installation.
+3. **User-Space Installation (No Root Required):**
+   - **Linux & macOS:** Installs to `~/.local/bin/dynalm` and `~/.local/bin/dynacorec` (customizable with `--prefix <directory>`).
+   - **Windows:** Installs to `%LOCALAPPDATA%\Programs\DynaLM\bin\dynalm.exe` and automatically updates the user `PATH` (suppress with `-NoPath`).
+4. **Health Check:** Runs `dynalm --version` to confirm binary readiness.
 
-| Archive | Platform | Kernels selected at run time |
-|---|---|---|
-| `dynalm-linux-x86_64.tar.gz` | Linux x86-64, glibc ≥ 2.35 (Ubuntu 22.04+, Debian 12+, RHEL 9+) | AVX2, else generic |
-| `dynalm-linux-arm64.tar.gz` | Linux ARM64, glibc ≥ 2.35 | NEON |
-| `dynalm-macos-arm64.tar.gz` | macOS on Apple Silicon | NEON |
-| `dynalm-macos-x86_64.tar.gz` | macOS on Intel | AVX2, else generic |
-| `dynalm-windows-x86_64.zip` | Windows 10/11 x64 | AVX2, else generic |
-| `SHA256SUMS` | SHA-256 of every archive | |
+---
 
-- **Layout:** `bin/dynalm`, `bin/dynacorec`, and `share/doc/dynalm/` (README, LICENSE,
-  NOTICE, THIRD_PARTY_LICENSES, CHANGELOG, docs).
-- **Self-contained:** the C/C++ runtime is linked statically, so no Visual C++
-  redistributable and no libstdc++ version requirement.
-- **CPU tiers:** a CPU without AVX2 runs the generic kernels; nothing fails. `dynalm doctor`
-  shows which tier is in use.
+## 📦 Official Release Archives & Platform Compatibility
 
-Manual install:
+Pre-compiled, statically linked binaries are provided for every major OS:
 
-```sh
+| Release Archive | Target Operating System & Platform | CPU SIMD Kernel Tier |
+| :--- | :--- | :--- |
+| `dynalm-linux-x86_64.tar.gz` | Linux x86-64, glibc ≥ 2.35 (Ubuntu 22.04+, Debian 12+, RHEL 9+, Fedora 38+, Arch) | **AVX2** (Intel Haswell+, AMD Zen+), fallback to generic |
+| `dynalm-linux-arm64.tar.gz` | Linux ARM64, glibc ≥ 2.35 (Raspberry Pi 4/5 64-bit, AWS Graviton, Ampere) | **NEON** |
+| `dynalm-macos-arm64.tar.gz` | macOS on Apple Silicon (M1, M2, M3, M4, Pro, Max, Ultra) | **NEON** (High-bandwidth unified memory) |
+| `dynalm-macos-x86_64.tar.gz` | macOS on Intel Core (Haswell and newer) | **AVX2**, fallback to generic |
+| `dynalm-windows-x86_64.zip` | Windows 10 / 11 64-bit (x64) | **AVX2**, fallback to generic |
+| `dynalm-windows-arm64.zip` (or `scripts\install.ps1 -FromSource`) | Windows 11 on ARM (Snapdragon X and other ARM64 PCs), 🧪 Preview | **NEON** |
+| `SHA256SUMS` | Cryptographic SHA-256 hashes for all archives | Cross-platform verification |
+
+- **Zero External Dependencies:** Statically linked C/C++ runtime. Requires no Visual C++ Redistributable on Windows and no external `libstdc++` package on Linux.
+- **Graceful CPU Degradation:** If a CPU lacks AVX2 vector extensions, DynaLM automatically runs portable generic fallback kernels without crashing. Run `dynalm doctor` to inspect the active tier.
+
+---
+
+## 🛡️ Offline & Air-Gapped Manual Installation
+
+For secure, enterprise, or air-gapped environments with no public internet access:
+
+### Linux / macOS Manual Setup
+```bash
+# Download archive and checksum on an internet-connected machine
 curl -fLO https://github.com/dynalm-project/dynalm/releases/latest/download/dynalm-linux-x86_64.tar.gz
 curl -fLO https://github.com/dynalm-project/dynalm/releases/latest/download/SHA256SUMS
-sha256sum -c SHA256SUMS --ignore-missing            # macOS: shasum -a 256 -c SHA256SUMS --ignore-missing
-sh scripts/install.sh --archive dynalm-linux-x86_64.tar.gz --sha256sums SHA256SUMS
-# or: tar xzf dynalm-linux-x86_64.tar.gz && ./dynalm-linux-x86_64/bin/dynalm doctor
+
+# Verify SHA-256 signature
+sha256sum -c SHA256SUMS --ignore-missing
+
+# Transfer to air-gapped machine and install
+tar -xzf dynalm-linux-x86_64.tar.gz
+mkdir -p ~/.local/bin
+cp dynalm-linux-x86_64/bin/dynalm ~/.local/bin/
+cp dynalm-linux-x86_64/bin/dynacorec ~/.local/bin/
+chmod +x ~/.local/bin/dynalm ~/.local/bin/dynacorec
 ```
 
+### Windows Manual Setup
 ```powershell
+# Verify SHA-256 checksum and install
 .\scripts\install.ps1 -Archive .\dynalm-windows-x86_64.zip -Sha256Sums .\SHA256SUMS
 ```
 
-## From source
+---
 
-| Platform | Command | Needs |
-|---|---|---|
-| Linux, macOS | `sh scripts/install.sh --from-source` | C++20 compiler (GCC ≥ 13, Clang ≥ 17, Apple Clang 15), CMake ≥ 3.24, Ninja (optional) |
-| Windows | `powershell -ExecutionPolicy Bypass -File scripts\install.ps1 -FromSource` | Visual Studio 2022 Build Tools with the C++ workload |
+## 🐳 Docker Deployment (CPU Multi-Arch)
 
-Building, presets and tests: [build.md](build.md).
+DynaLM provides an official lightweight, non-root CPU container image supporting both `linux/amd64` and `linux/arm64`:
 
-## Docker
+```bash
+# Run OpenAI-compatible server on host port 8000
+docker run --rm -d \
+  -p 127.0.0.1:8000:8000 \
+  -v "$PWD/models:/models" \
+  --name dynalm-server \
+  ghcr.io/dynalm-project/dynalm:cpu serve /models/qwen3-4b.gguf --allow-unauthenticated
+```
 
-- **CPU image:** `ghcr.io/<owner>/dynalm:cpu`, multi-arch amd64 and arm64, published by the
-  release workflow. Build it locally with `docker build -t dynalm .`.
+- **CPU image:** runs on host CPU threads and needs no NVIDIA Container Toolkit or GPU drivers.
+- **Security:** Binds to non-root user inside the container.
+- **Volumes:** Mount your local models directory to `/models`.
 
-  ```sh
-  docker run --rm -p 8000:8000 -v "$PWD/models:/models" ghcr.io/<owner>/dynalm:cpu \
-    serve /models/qwen2.5-0.5b-instruct-q4_k_m.gguf
+---
+
+## 🔨 Building from Source
+
+To build from source with platform-specific compiler optimizations:
+
+| Platform | Command | Prerequisites |
+| :--- | :--- | :--- |
+| **Linux & macOS** | `sh scripts/install.sh --from-source` | C++20 compiler (GCC ≥ 13, Clang ≥ 17, Apple Clang 15), CMake ≥ 3.24 |
+| **Windows (x64 and ARM64)** | `powershell -File scripts\install.ps1 -FromSource` | Visual Studio 2022 Build Tools (Desktop C++ workload; on ARM64 PCs, the ARM64 build tools) |
+| **With a GPU** | `cmake --preset macos-metal`, `linux-vulkan`, `linux-cuda`, `msvc-vulkan` or `msvc-cuda` | the GPU's toolkit (see [gpu.md](gpu.md)) and CMake ≥ 3.28 |
+
+*For CMake preset details, unit tests, and custom compiler flags, see [build.md](build.md).*
+
+---
+
+## 🛠️ Diagnostics & Troubleshooting
+
+### Diagnostic System Probe (`dynalm doctor`)
+
+Always run `dynalm doctor` first when diagnosing system issues or opening a bug report:
+
+```bash
+dynalm doctor
+# Or export machine-readable JSON:
+dynalm doctor --json
+```
+
+It validates:
+- Operating system version, platform, and architecture.
+- CPU features and detected vector instruction sets (AVX2, AVX-512, NEON, AMX).
+- Active DynaCore kernel tier.
+- Physical memory (RAM) and available swap space.
+- Directory paths for binaries, configurations, and downloaded models.
+- Executes an automated DynaCore SIMD matrix kernel self-test (`Status: Ready`).
+
+### Common Solutions
+
+- **`command not found: dynalm`:** Add `export PATH="$HOME/.local/bin:$PATH"` to your `~/.bashrc` or `~/.zshrc`, then reload with `source ~/.zshrc`.
+- **macOS Quarantine Warning:** If downloaded via browser instead of `curl`, run:
+  ```bash
+  xattr -d com.apple.quarantine ~/.local/bin/dynalm ~/.local/bin/dynacorec
   ```
-
-  - It runs as a non-root user.
-  - Models are mounted at `/models`.
-  - The server binds `0.0.0.0` inside the container.
-- **CUDA image:** none is published. This release runs on the CPU only.
-
-## Troubleshooting
-
-- **`dynalm doctor`:** the first thing to run, and the output to paste into an issue.
-  `dynalm doctor --json` gives the same in machine-readable form.
-  - It reports:
-    - version, platform and architecture;
-    - CPU and its features;
-    - the kernel tier in use;
-    - threads and memory;
-    - where `dynalm` is installed;
-    - the model store.
-  - It also runs a DynaCore kernel self-test. `Status: Ready` means all of this checked out.
-- **Force the portable kernels:** `DYNACORE_ISA=generic dynalm ...`, to rule out a SIMD
-  problem.
-- **Which matmul kernels run:** `DYNACORE_MATMUL_EXPLAIN=1 dynalm ...` logs each kernel choice
-  and why faster kernels were not eligible. `DYNACORE_MATMUL_DISABLE=all-accelerated` runs the
-  fp32 reference arithmetic. The `dynacore_matmul_calls_total` counters in `GET /metrics`
-  show the same per kernel. Details and the opt-in experimental CPU features:
-  [dynacore.md](dynacore.md#matmul-kernel-registry).
-- **Windows Smart App Control:** it can block executables that are not signed ("An
-  Application Control policy has blocked this file"). Official signing is not in place yet.
-- **macOS:** archives downloaded with `curl` (as the installer does) are not quarantined. If
-  you downloaded one in a browser, run
-  `xattr -d com.apple.quarantine ~/.local/bin/dynalm ~/.local/bin/dynacorec`.
+- **Windows Smart App Control Warning:** Permit execution in Windows Security, or run the installer script via PowerShell with execution policy bypass.
+- **Force Generic CPU Fallback:** If testing on experimental hardware, force portable kernels with:
+  ```bash
+  DYNACORE_ISA=generic dynalm run qwen3:4b
+  ```
+- **Explain Matrix Kernels:** Set `DYNACORE_MATMUL_EXPLAIN=1` to inspect which SIMD kernels are selected at runtime.

@@ -15,6 +15,8 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <random>
@@ -148,6 +150,17 @@ int cmd_pull(std::span<const std::string_view> args) {
     return 1;
   }
   const std::string name = url_file_name(*url);
+  // The saved name comes from the link: letters, digits, '.', '-', '_' only,
+  // not starting with '.', so no separator ('/' or Windows '\'), drive
+  // letter or relative component can move the file out of the model store.
+  const bool safe_name = !name.empty() && name.front() != '.' &&
+                         std::all_of(name.begin(), name.end(), [](char ch) {
+                           return std::isalnum(static_cast<unsigned char>(ch)) || ch == '.' || ch == '-' || ch == '_';
+                         });
+  if (!safe_name) {
+    std::fprintf(stderr, "pull: the file name in the link is not a plain file name (letters, digits, . - _)\n");
+    return 1;
+  }
   if (name.size() <= 5 || name.substr(name.size() - 5) != ".gguf") {
     std::fprintf(stderr, "pull: '%s' is not a .gguf file (pull downloads single GGUF files)\n", name.c_str());
     return 1;

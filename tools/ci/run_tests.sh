@@ -7,7 +7,10 @@
 # kernels the CPU lacks skip themselves (for example the AVX2 / AVX-VNNI
 # kernel tests on ARM64 or under Rosetta), so the same list runs everywhere.
 # Model-based tests (test_solo_prefill, test_prefill_priority,
-# test_loadgen_openloop) need a GGUF model and are not run here.
+# test_loadgen_openloop) need a GGUF model and are not run here; the
+# dynalm/tests programs generate a tiny synthetic GGUF model themselves.
+# GPU tests report "SKIP" or "NOT BUILT" in their last line when no Metal
+# device or backend is available; that is not a GPU pass.
 set -uo pipefail
 BUILD="${1:?usage: tools/ci/run_tests.sh <build dir>}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -18,6 +21,7 @@ TESTS=(
   dynacore/test_int16_prefill
   dynacore/test_packed_8rows
   dynacore/test_thread_pool
+  dynacore/test_ggml_device
   dynacore/test_dynakernel
   dynacore/test_dynakernel_lowering
   dynacore/test_dynakernel_quant
@@ -25,6 +29,9 @@ TESTS=(
   dynacore/test_dynakernel_int8gen
   dynacore/test_dynakernel_llvm
   dynalm/benchmarks/test_batch_planner
+  dynalm/tests/test_engine
+  dynalm/tests/test_server
+  dynalm/tests/test_fuzz_parsers
 )
 fail=0
 ran=0

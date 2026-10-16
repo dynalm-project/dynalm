@@ -193,7 +193,11 @@ void quantize_act(const float* x, ActBlockQ8* out, int64_t n) {
     int32_t sum = 0;
     for (int i = 0; i < kActQ8Block; ++i) {
       // Round to nearest, ties to even: what _mm256_round_ps(..., NEAREST) does.
-      const auto q = static_cast<int32_t>(std::nearbyint(x[i] * id));
+      // The comparison clamp is a no-op for finite inputs (|x * id| <= 127)
+      // and keeps NaN / Inf (a corrupt model) out of the float -> int cast.
+      float v = x[i] * id;
+      v = v > -127.0f ? (v < 127.0f ? v : 127.0f) : -127.0f;
+      const auto q = static_cast<int32_t>(std::nearbyint(v));
       out[b].q[i] = static_cast<int8_t>(std::clamp(q, -127, 127));
       sum += out[b].q[i];
     }

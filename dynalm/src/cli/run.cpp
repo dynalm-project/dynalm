@@ -44,7 +44,8 @@ void usage() {
                "  --batch N             max tokens per forward pass (default 256)\n"
                "  --kv f16|f32|q8_0     KV cache dtype (default f16; q8_0 halves its memory)\n"
                "  --int8-decode N       int8 activations for matmuls of <= N rows (default 4, 0 = off)\n"
-               "  --backend cpu         compute backend (GPU backends are not built yet)\n"
+               "  --backend B           auto | cpu | metal | vulkan | cuda (default auto: a GPU when one\n"
+               "                        is built in and runs the model, else the CPU)\n"
                "  --execution MODE      reference (default) | compiled: DynaCore IR + fusion (DD-072)\n"
                "  --no-stream           print only the final text\n"
                "sampling (default: greedy; chat: temp 0.8, top-k 40, top-p 0.9, repeat-penalty 1.1):\n"
@@ -201,12 +202,13 @@ int cmd_run(std::span<const std::string_view> raw_args) {
   const std::span<const std::string_view> args(arg_views);
   bool max_set = false, sampling_set = false;
   std::string path, prompt, system, config_model;
-  int max_tokens = 128, threads = 0, ctx = 4096, batch = 256;
+  int max_tokens = 128, threads = 0, ctx = 4096, batch = 0;  // batch 0 = the device default
   bool chat = true, stream = true;
   std::string spec;
   int spec_k = 4;
   bool spec_fixed = false;
   EngineOptions opts;
+  opts.backend_auto = true;  // --backend auto
   GenerateParams params;
 
   for (size_t i = 0; i < args.size(); ++i) {
@@ -243,7 +245,9 @@ int cmd_run(std::span<const std::string_view> raw_args) {
       params.sampling.has_seed = true;
     }
     else if (a == "--backend") {
-      auto k = parse_device_kind(value());
+      const std::string_view v = value();
+      opts.backend_auto = v == "auto";
+      auto k = opts.backend_auto ? Result<DeviceKind>(DeviceKind::kCpu) : parse_device_kind(v);
       ok = k.ok();
       if (ok) opts.backend = *k;
     } else if (a == "--execution") {
@@ -308,7 +312,8 @@ int cmd_run(std::span<const std::string_view> raw_args) {
 
   if (!spec.empty()) {
     params.max_tokens = max_tokens;
-    return run_speculative(path, spec, spec_k, !spec_fixed, prompt, system, chat, stream, threads, ctx, batch, opts, params);
+    return run_speculative(path, spec, spec_k, !spec_fixed, prompt, system, chat, stream, threads, ctx, batch > 0 ? batch : 256,
+                           opts, params);
   }
 
   const Stopwatch load_timer;

@@ -34,7 +34,17 @@ in this repository.
 | `ENABLE_BENCHMARKS`, `ENABLE_SERVER` | ON | components |
 | `ENABLE_AVX2` / `ENABLE_AVX512` / `ENABLE_AMX` | ON / OFF / OFF | x86-64 kernel tiers (selected at run time; off on other CPUs) |
 | `ENABLE_NEON` | ON | ARM64 kernel tier |
-| `ENABLE_CUDA` / `HIP` / `METAL` / `VULKAN` | OFF | future devices; ON is a configure error |
+| `ENABLE_METAL` | OFF | Metal GPU backend (Apple Silicon); preset `macos-metal` |
+| `ENABLE_VULKAN` | OFF | Vulkan GPU backend (AMD, Intel, NVIDIA, Qualcomm; macOS through MoltenVK). Needs the Vulkan headers, loader, `glslc` and SPIRV-Headers. Presets `linux-vulkan`, `msvc-vulkan`, `macos-vulkan` |
+| `ENABLE_CUDA` | OFF | CUDA GPU backend (NVIDIA). Needs the CUDA toolkit; `CMAKE_CUDA_ARCHITECTURES` picks GPU generations. Presets `linux-cuda`, `msvc-cuda` |
+| `ENABLE_HIP` | OFF | not implemented (configure error); use `ENABLE_VULKAN` for AMD GPUs |
+
+GPU backends can be combined, and all of them need CMake 3.28 or newer. `--backend auto`
+tries the built-in GPUs in this order: CUDA, Metal, Vulkan.
+
+**Windows on ARM (Snapdragon):** open an *ARM64* Developer Command Prompt and run
+`cmake --preset msvc-release`, or `cmake --preset windows-arm64` to build with clang-cl.
+Both use the NEON kernels.
 | `DYNALM_CORE_ONLY` | OFF | configure DynaCore only |
 | `DYNALM_STATIC_RUNTIME` | OFF (ON in release builds) | static C/C++ runtime |
 | `DYNALM_LTO` | OFF | link-time optimization (DD-063) |

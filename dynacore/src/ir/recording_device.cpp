@@ -77,55 +77,6 @@ uint64_t plan_word(const KernelPlan& p) {
 
 }  // namespace
 
-// One recorded Device call with private copies of everything that is not
-// device memory (spans, tables, parameter structs). Objects are reused across
-// segments, so vectors keep their capacity.
-struct RecordingDevice::Call {
-  enum class M : uint8_t {
-    kEmbedding, kMatmul, kMatmulMany, kRmsNorm, kLayerNorm, kRope, kKvStore, kAttention,
-    kActMul, kActivation, kAdd, kScale, kSoftcap, kFill, kGather, kScatterAdd,
-  };
-  M m{};
-  TensorView a, b, c, d;
-  bool has_c = false;
-  float f = 0;
-  int32_t i0 = 0, i1 = 0;
-  Activation act{};
-  RopeConfig rope{};
-  const float* freq = nullptr;
-  std::vector<int32_t> ints0, ints1;
-  std::vector<float> floats;
-  std::vector<std::vector<int32_t>> tables;
-  std::vector<KvLayerView> kv;
-  std::vector<MatmulJob> jobs;
-  std::vector<TensorView> biases;  // matmul_many biases (jobs point here)
-  AttentionParams ap{};
-  std::shared_ptr<const KernelPlan> plan;  // plan in effect when recorded
-
-  void reset(M kind) {
-    m = kind;
-    a = b = c = d = TensorView();
-    has_c = false;
-    f = 0;
-    i0 = i1 = 0;
-    freq = nullptr;
-    ints0.clear();
-    ints1.clear();
-    floats.clear();
-    kv.clear();
-    jobs.clear();
-    biases.clear();
-    ap = AttentionParams{};
-  }
-
-  void copy_kv(std::span<const KvLayerView> src) {
-    if (tables.size() < src.size()) tables.resize(src.size());
-    for (size_t i = 0; i < src.size(); ++i) tables[i].assign(src[i].block_table.begin(), src[i].block_table.end());
-    kv.assign(src.begin(), src.end());
-    for (size_t i = 0; i < kv.size(); ++i) kv[i].block_table = tables[i];
-  }
-};
-
 RecordingDevice::RecordingDevice(Device& inner, Mode mode)
     : inner_(inner),
       mode_(mode),
@@ -568,6 +519,18 @@ std::vector<RecordingDevice::CallStep> RecordingDevice::compile_pending() {
 Status RecordingDevice::flush() {
   if (ncalls_ == 0) return Status::Ok();
   ++stats_.segments;
+  // A device that runs whole segments gets the step as one unit (one backend
+  // graph per step, docs/gpu-backend.md); it caches its own prepared graphs.
+  if (SegmentExecutor* exec = inner_.segment_executor()) {
+    std::vector<const Call*> calls(ncalls_);
+    for (size_t i = 0; i < ncalls_; ++i) calls[i] = calls_[i].get();
+    const Status st = exec->run_segment(calls, signature_);
+    stats_.planned_steps += 1;
+    ncalls_ = 0;
+    signature_.clear();
+    if (!st.ok() && error_.ok()) error_ = st;
+    return st;
+  }
   uint64_t h = 1469598103934665603ull;
   for (uint64_t w : signature_) h = (h ^ w) * 1099511628211ull;
   const CacheEntry* entry = nullptr;
@@ -600,6 +563,14 @@ Status RecordingDevice::flush() {
 }
 
 // --- sync points -------------------------------------------------------------------
+
+Status RecordingDevice::take_error() {
+  (void)flush();
+  Status st = error_;
+  error_ = Status::Ok();
+  if (Status inner = inner_.take_error(); st.ok()) st = inner;
+  return st;
+}
 
 Result<std::shared_ptr<Storage>> RecordingDevice::allocate(size_t bytes) {
   (void)flush();

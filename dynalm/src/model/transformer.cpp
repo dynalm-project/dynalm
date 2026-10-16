@@ -571,7 +571,9 @@ Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& c
     if (!backend_.host_accessible()) backend_.download(out, logits);
     mark(ForwardOp::kLmHead);
   }
-  return Status::Ok();
+  // Devices that execute deferred (compiled steps, GPU) report a failed step
+  // here: its logits must not be used.
+  return backend_.take_error();
 }
 
 }  // namespace dynalm

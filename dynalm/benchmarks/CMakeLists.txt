@@ -36,3 +36,7 @@ engine_add_benchmark(test_prefill_priority test_prefill_priority.cpp)
 # Model-free planner test: the wide-decode switch applies only to decode-only steps
 # of <= DYNACORE_DECODE_WIDE_ROWS rows (test_batch_planner).
 engine_add_benchmark(test_batch_planner test_batch_planner.cpp)
+# GPU accuracy against the CPU fp32 reference (docs/gpu-backend.md); needs a model.
+if(DYNALM_WITH_GGML)
+  engine_add_benchmark(bench_gpu_accuracy bench_gpu_accuracy.cpp)
+endif()

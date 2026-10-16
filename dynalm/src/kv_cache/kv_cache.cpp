@@ -21,6 +21,10 @@ Result<std::unique_ptr<KvBlockPool>> KvBlockPool::create(const KvGeometry& geom,
   if (geom.dtype == DType::kQ8_0 && (geom.head_dim % 32 != 0 || geom.head_dim_v % 32 != 0)) {
     return Unsupported("KvBlockPool: q8_0 KV needs head dimensions that are multiples of 32");
   }
+  if (!backend.supports_kv_layout(geom.layout)) {
+    return Unsupported(std::string("KvBlockPool: the ") + std::string(backend.name()) + " device cannot run the " +
+                       (geom.layout == KvLayout::kSlotMajor ? "slot-major" : "head-major") + " KV layout");
+  }
   auto pool = std::unique_ptr<KvBlockPool>(new KvBlockPool());
   pool->geom_ = geom;
   pool->backend_ = &backend;

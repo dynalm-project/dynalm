@@ -47,17 +47,19 @@ void usage() {
                "  -t, --threads N       compute threads (in-process)\n"
                "  -c, --ctx N           KV capacity in tokens (in-process, default 32768)\n"
                "  --int8-decode N       int8 activations for matmuls of <= N rows (in-process; 0 = off)\n"
-               "  --prefill-budget N    prompt tokens per scheduler step (in-process, default 64)\n"
+               "  --prefill-budget N    prompt tokens per scheduler step (in-process, default 64; Metal 256)\n"
                "  --decode-budget N     decode rows per scheduler step (in-process, default 64)\n"
-               "  --chunk N             max prompt tokens per sequence per step (0 = budget; default 32)\n"
+               "  --chunk N             max prompt tokens per sequence per step (0 = budget; default 32; Metal 128)\n"
                "  --solo-prefill-chunk N  EXPERIMENTAL: chunk and budget N in steps without decode rows\n"
-               "                        (in-process; 0 = off, the default)\n"
+               "                        (in-process; 0 = off; default off on the CPU, 256 on Metal)\n"
                "  --solo-prefill-split  with --solo-prefill-chunk: split it across prefilling sequences\n"
                "  --prefill-order O     EXPERIMENTAL: fifo (default) | srpt (shortest remaining prompt first)\n"
                "  --prefill-aging-ms N  with srpt: prompts prefilling longer than N ms go first (default 20000)\n"
                "  --step-trace FILE     append the scheduler's per-step and per-request trace (JSON lines)\n"
-               "  --batch N             max tokens per forward pass (default: budgets + 1, min 256)\n"
+               "  --batch N             max tokens per forward pass (default: budgets + 1, min 256 and the solo chunk)\n"
                "  --policy P            balanced | latency | throughput (in-process, DD-061)\n"
+               "  --backend B           auto | cpu | metal | vulkan | cuda (in-process; default auto: a GPU\n"
+               "                        when one is built in and runs the model, else the CPU)\n"
                "  --out FILE            append JSON lines (one per point)\n"
                "  --no-diag             skip the bandwidth probe and per-point diagnostics\n");
 }
@@ -96,6 +98,8 @@ int cmd_benchmark(std::span<const std::string_view> args) {
   int seed = 1, warmup_requests = 0;
   SchedulerPolicy policy = SchedulerPolicy::kBalanced;
   ExecutionMode execution = ExecutionMode::kReference;
+  DeviceKind backend = DeviceKind::kCpu;
+  bool backend_auto = true;  // --backend auto
   for (size_t i = 0; i < args.size(); ++i) {
     const std::string_view a = args[i];
     auto value = [&]() -> std::string_view { return i + 1 < args.size() ? args[++i] : std::string_view(); };
@@ -135,6 +139,12 @@ int cmd_benchmark(std::span<const std::string_view> args) {
       auto x = parse_execution_mode(value());
       ok = x.ok();
       if (ok) execution = *x;
+    } else if (a == "--backend") {
+      const std::string_view v = value();
+      backend_auto = v == "auto";
+      auto k = backend_auto ? Result<DeviceKind>(DeviceKind::kCpu) : parse_device_kind(v);
+      ok = k.ok();
+      if (ok) backend = *k;
     }
     else if (a == "--out") out_file = value();
     else if (path.empty() && !a.starts_with("-")) path = a;
@@ -201,11 +211,15 @@ int cmd_benchmark(std::span<const std::string_view> args) {
   if (url.empty()) {
     EngineOptions o;
     o.execution = execution;
+    o.backend = backend;
+    o.backend_auto = backend_auto;
     o.model_path = path;
     o.threads = threads;
     o.kv_tokens = ctx;
     o.int8_decode_rows = int8_rows;
     o.scheduler.policy = policy;
+    // Explicit step budgets replace the device's scheduling profile.
+    if (prefill_budget > 0 || decode_budget > 0 || chunk >= 0) o.device_scheduler_defaults = false;
     if (prefill_budget > 0) o.scheduler.prefill_token_budget = prefill_budget;
     if (decode_budget > 0) o.scheduler.decode_token_budget = decode_budget;
     if (chunk >= 0) o.scheduler.max_prefill_chunk = chunk;
@@ -214,10 +228,7 @@ int cmd_benchmark(std::span<const std::string_view> args) {
     o.scheduler.prefill_order = prefill_order;
     if (prefill_aging_ms >= 0) o.scheduler.prefill_aging_ms = prefill_aging_ms;
     if (!step_trace_file.empty()) o.scheduler.trace = true;
-    o.max_batch_tokens = batch > 0 ? batch
-                                   : std::max({o.max_batch_tokens, o.scheduler.prefill_token_budget +
-                                                                       o.scheduler.decode_token_budget + 1,
-                                               o.scheduler.solo_prefill_chunk});
+    o.max_batch_tokens = batch > 0 ? batch : 0;  // 0 = the device default (Engine)
     auto e = Engine::create(o);
     if (!e.ok()) {
       std::fprintf(stderr, "benchmark: %s\n", e.status().to_string().c_str());

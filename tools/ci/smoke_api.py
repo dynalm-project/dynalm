@@ -114,7 +114,11 @@ def main():
     if up:
         try:
             log = (logs / "serve.log").read_text(encoding="utf-8", errors="replace")
-            check("balanced policy (prefill budget 64, decode budget 64" in log, "serve logs the effective scheduler budgets")
+            # GPU devices default to their own balanced profile (engine.h kGpu*).
+            gpu = any(f"Device: compiled/{g}/" in log for g in ("Metal", "Vulkan", "CUDA"))
+            want = ("balanced policy (prefill budget 256, decode budget 64, max batch 321)" if gpu
+                    else "balanced policy (prefill budget 64, decode budget 64")
+            check(want in log, f"serve logs the effective scheduler budgets ({'gpu' if gpu else 'cpu'})")
             code, body = http("GET", base + "/v1/models")
             check(code == 200 and "data" in body, "GET /v1/models")
             code, body = http("POST", base + "/v1/completions", {"prompt": "The capital of France is", "max_tokens": 8, "temperature": 0})

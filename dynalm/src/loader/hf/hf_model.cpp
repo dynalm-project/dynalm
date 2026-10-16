@@ -251,6 +251,7 @@ Result<ModelConfig> read_config(const json::Value& cfg) {
   c.residual_scale = static_cast<float>(get_float_or(cfg, "residual_multiplier", 1.0));
   c.attn_scale = static_cast<float>(get_float_or(cfg, "attention_multiplier", 0.0));
   c.logit_scale = static_cast<float>(get_float_or(cfg, "logits_scaling", 1.0));
+  ENGINE_RETURN_IF_ERROR(c.check_limits());  // untrusted config.json sizes the runtime (S10)
   return c;
 }
 

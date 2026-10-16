@@ -141,31 +141,115 @@ Result<ExecutionMode> parse_execution_mode(std::string_view s) {
   return InvalidArgument("unknown execution mode '" + std::string(s) + "' (reference, compiled)");
 }
 
+Status gpu_model_support(const ModelConfig& c, DType kv_dtype) {
+  if (c.moe.num_experts > 0) return Unsupported("mixture-of-experts models are not supported on the GPU yet");
+  if (c.attn_qk_norm) return Unsupported("per-head Q/K norm (Qwen3, Gemma 3) is not supported on the GPU yet");
+  for (const RopeConfig* r : {&c.rope, c.has_rope_local ? &c.rope_local : nullptr}) {
+    if (r != nullptr && r->scaling != RopeScaling::kNone && r->scaling != RopeScaling::kLinear) {
+      return Unsupported("RoPE scaling other than none/linear (YaRN, Llama 3) is not supported on the GPU yet");
+    }
+  }
+  if (kv_dtype != DType::kF16 && kv_dtype != DType::kF32 && kv_dtype != DType::kQ8_0) {
+    return Unsupported("KV cache dtype " + std::string(dtype_name(kv_dtype)) + " is not supported on the GPU (f16, f32, q8_0)");
+  }
+  return Status::Ok();
+}
+
 Result<std::unique_ptr<Engine>> Engine::create(EngineOptions opts) {
+  if (opts.backend_auto) {
+    // The first GPU built in (CUDA, Metal, Vulkan) that runs the model and
+    // starts; otherwise the CPU, with the reason logged.
+    opts.backend_auto = false;
+    opts.backend = DeviceKind::kCpu;
+    std::vector<DeviceKind> gpus;
+    for (DeviceKind k : compiled_devices()) {
+      if (k != DeviceKind::kCpu) gpus.push_back(k);
+    }
+    if (gpus.empty()) return create(std::move(opts));
+    {
+      ENGINE_ASSIGN_OR_RETURN(auto probe, load_model(opts.model_path));
+      if (Status s = gpu_model_support(probe->config, opts.kv_dtype); !s.ok()) {
+        LOG_INFO("Device: auto selects the CPU: {}", s.message());
+        return create(std::move(opts));
+      }
+    }
+    for (DeviceKind k : gpus) {
+      EngineOptions gpu = opts;
+      gpu.backend = k;
+      auto r = create(std::move(gpu));
+      if (r.ok()) return r;
+      LOG_WARN("Device: the {} GPU failed to start ({})", device_kind_name(k), r.status().message());
+    }
+    LOG_INFO("Device: auto selects the CPU (no GPU started)");
+    return create(std::move(opts));
+  }
   request_full_speed_process();  // DD-052
   std::unique_ptr<Engine> e(new Engine());
   ENGINE_ASSIGN_OR_RETURN(e->model_, load_model(opts.model_path));
   const ModelConfig& c = e->model_->config;
+  if (opts.backend != DeviceKind::kCpu) ENGINE_RETURN_IF_ERROR(gpu_model_support(c, opts.kv_dtype));
   const int threads = opts.threads > 0 ? opts.threads : cpu_info().physical_cores;
   e->pool_ = std::make_unique<ThreadPool>(threads);
   prefault_weights(e->model_->weights, e->model_->weight_bytes, *e->pool_);
   ENGINE_ASSIGN_OR_RETURN(e->backend_, create_device(opts.backend, *e->pool_));
   Device* device = e->backend_.get();
+  // A device that runs whole recorded steps (the GPU, docs/gpu-backend.md)
+  // is never driven op by op: its steps always go through the recorder.
+  const bool segment_device = e->backend_->segment_executor() != nullptr;
+  if (segment_device && opts.execution != ExecutionMode::kCompiled) {
+    LOG_INFO("Execution: compiled (required by the {} device)", e->backend_->name());
+    opts.execution = ExecutionMode::kCompiled;
+  }
+  // Device defaults (explicit settings always win). Solo-prefill steps carry
+  // no decode rows, so a larger GPU chunk cannot stall running streams; mixed
+  // steps keep the DD-079 decode protection.
+  if (opts.scheduler.solo_prefill_chunk < 0) opts.scheduler.solo_prefill_chunk = segment_device ? kGpuSoloPrefillChunk : 0;
+  if (segment_device && opts.device_scheduler_defaults && opts.scheduler.policy == SchedulerPolicy::kBalanced) {
+    opts.scheduler.prefill_token_budget = kGpuMixedPrefillBudget;
+    opts.scheduler.max_prefill_chunk = kGpuMaxPrefillChunk;
+    opts.scheduler.decode_latency_target = kGpuDecodeLatencyTarget;
+    opts.scheduler.protected_prefill_min = kGpuProtectedPrefillMin;
+  }
+  if (opts.max_batch_tokens <= 0) {
+    opts.max_batch_tokens = std::max({256, opts.scheduler.prefill_token_budget + opts.scheduler.decode_token_budget + 1,
+                                      opts.scheduler.solo_prefill_chunk});
+  }
   if (opts.execution == ExecutionMode::kCompiled) {
     auto rec = std::make_unique<dynacore::ir::RecordingDevice>(*e->backend_, dynacore::ir::RecordingDevice::Mode::kDeferred);
-    KernelPlan base = KernelPlan::defaults();
-    if (opts.int8_decode_rows >= 0) base.int8_decode_max_rows = opts.int8_decode_rows;
-    dynacore::ir::CompileOptions co;
-    co.cost = dynacore::ir::CostModel::from(base, threads);
-    rec->set_planner(dynacore::ir::make_planner(co));
+    if (!segment_device) {  // the CPU compiler pipeline; a segment device plans its own graphs
+      KernelPlan base = KernelPlan::defaults();
+      if (opts.int8_decode_rows >= 0) base.int8_decode_max_rows = opts.int8_decode_rows;
+      dynacore::ir::CompileOptions co;
+      co.cost = dynacore::ir::CostModel::from(base, threads);
+      rec->set_planner(dynacore::ir::make_planner(co));
+    }
     device = rec.get();
     e->compiled_ = std::move(rec);
   }
+  // Auto KV capacity from free host memory, and from free device memory on a
+  // GPU with its own memory (weights are copied there too).
+  int64_t available = memory_info().available_bytes;
+  if (const int64_t dev_free = device->memory_stats().free_bytes; dev_free >= 0) {
+    available = available > 0 ? std::min(available, dev_free) : dev_free;
+  }
   const int64_t kv_tokens = opts.kv_tokens > 0 ? opts.kv_tokens
-                                               : auto_kv_tokens(c, opts.kv_dtype, e->model_->weight_bytes,
-                                                                memory_info().available_bytes);
-  ENGINE_ASSIGN_OR_RETURN(e->kv_, KvBlockPool::create(kv_geometry_for(c, opts.kv_dtype, 16, kv_tokens), *device));
+                                               : auto_kv_tokens(c, opts.kv_dtype, e->model_->weight_bytes, available);
+  KvGeometry kv_geom = kv_geometry_for(c, opts.kv_dtype, 16, kv_tokens);
+  // The device's KV layout (paged_kv.h): head-major on the CPU, slot-major on
+  // the GPU (attention reads the paged pool in place). DYNALM_KV_LAYOUT=head
+  // selects the GPU's gather path instead, for A/B measurement only.
+  kv_geom.layout = device->preferred_kv_layout();
+  if (const char* kl = std::getenv("DYNALM_KV_LAYOUT"); kl != nullptr && *kl != '\0') {
+    const std::string_view v(kl);
+    if (v == "head" || v == "slot") {
+      kv_geom.layout = v == "head" ? KvLayout::kHeadMajor : KvLayout::kSlotMajor;
+    } else {
+      LOG_WARN("ignoring DYNALM_KV_LAYOUT={} (head | slot)", v);
+    }
+  }
+  ENGINE_ASSIGN_OR_RETURN(e->kv_, KvBlockPool::create(kv_geom, *device));
   ENGINE_ASSIGN_OR_RETURN(e->transformer_, Transformer::create(c, e->model_->weights, *device, opts.max_batch_tokens));
+  ENGINE_RETURN_IF_ERROR(device->take_error());
   if (opts.int8_decode_rows >= 0) {
     KernelPlan base = KernelPlan::defaults();
     base.int8_decode_max_rows = opts.int8_decode_rows;

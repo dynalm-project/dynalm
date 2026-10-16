@@ -151,7 +151,9 @@ struct SchedulerConfig {
   // prefill_token_budget. 0 = off (every step as before).
   // `dynalm serve --solo-prefill-chunk N` (DYNALM_SOLO_PREFILL_CHUNK),
   // `dynalm benchmark --solo-prefill-chunk N`.
-  int32_t solo_prefill_chunk = 0;
+  // -1 = the device's default, resolved by the Engine: 0 (off) on the CPU,
+  // kGpuSoloPrefillChunk on a GPU device (docs/gpu-backend.md).
+  int32_t solo_prefill_chunk = -1;
   // With solo_prefill_chunk on and several sequences prefilling in a step
   // with no decode rows: false = no solo chunk in that step (regular chunk and
   // budget; FIFO order as always); true = split, the solo budget shared, each

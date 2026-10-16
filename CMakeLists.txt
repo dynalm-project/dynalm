@@ -18,12 +18,19 @@ endif()
 # ---------------------------------------------------------------------------
 # Feature flags
 # ---------------------------------------------------------------------------
-# Accelerator backends: future phases. Kept as explicit flags so that the
-# build surface is stable; enabling one today is a configuration error.
-option(ENABLE_CUDA   "CUDA backend (future phase)"   OFF)
-option(ENABLE_HIP    "ROCm/HIP backend (future phase)" OFF)
-option(ENABLE_METAL  "Metal backend (future phase)"  OFF)
-option(ENABLE_VULKAN "Vulkan backend (future phase)" OFF)
+# GPU backends through pinned ggml (docs/gpu-backend.md); any combination.
+option(ENABLE_CUDA   "CUDA GPU backend through pinned ggml (NVIDIA; needs the CUDA toolkit)" OFF)
+option(ENABLE_HIP    "ROCm/HIP backend (not implemented)" OFF)
+option(ENABLE_METAL  "Metal GPU backend through pinned ggml (Apple Silicon)" OFF)
+option(ENABLE_VULKAN "Vulkan GPU backend through pinned ggml (needs the Vulkan SDK / glslc)" OFF)
+if(ENABLE_HIP)
+  message(FATAL_ERROR "ENABLE_HIP: the ROCm/HIP backend is not implemented; use ENABLE_VULKAN for AMD GPUs")
+endif()
+if(ENABLE_METAL OR ENABLE_VULKAN OR ENABLE_CUDA)
+  set(DYNALM_WITH_GGML ON)
+else()
+  set(DYNALM_WITH_GGML OFF)
+endif()
 
 # CPU kernel variants compiled into the binary. Selection happens at runtime
 # via CPU feature detection; compiling a variant never makes it mandatory.
@@ -87,14 +94,11 @@ option(ENABLE_ASAN  "AddressSanitizer"            OFF)
 option(ENABLE_UBSAN "UndefinedBehaviorSanitizer"  OFF)
 option(ENABLE_TSAN  "ThreadSanitizer"             OFF)
 
-foreach(_gpu CUDA HIP METAL VULKAN)
-  if(ENABLE_${_gpu})
-    message(FATAL_ERROR "ENABLE_${_gpu}=ON: the ${_gpu} backend is a future phase and is not implemented.")
-  endif()
-endforeach()
-
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(EngineCompilerFlags)
+if(DYNALM_WITH_GGML)
+  include(Ggml)
+endif()
 
 # Two libraries, one product (DD-068):
 #   dynacore        low-level inference runtime (tensors, memory, devices, kernels)
@@ -142,4 +146,4 @@ include(CPack)
 
 message(STATUS "DynaLM ${PROJECT_VERSION}: build=${CMAKE_BUILD_TYPE} arch=${DYNALM_ARCH} "
                "avx2=${ENABLE_AVX2} avx512=${ENABLE_AVX512} amx=${ENABLE_AMX} neon=${ENABLE_NEON} "
-               "server=${ENABLE_SERVER} bench=${ENABLE_BENCHMARKS}")
+               "metal=${ENABLE_METAL} vulkan=${ENABLE_VULKAN} cuda=${ENABLE_CUDA} server=${ENABLE_SERVER} bench=${ENABLE_BENCHMARKS}")
