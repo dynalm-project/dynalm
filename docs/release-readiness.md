@@ -107,7 +107,7 @@ Notes:
 
 | ID | Check | Status | Evidence |
 |---|---|---|---|
-| F1 | Version, CHANGELOG, documentation and package agree | PASS | Version 0.1.4 (CMake, `--version`); the CHANGELOG `[Unreleased]` section lists every change since 0.1.4; docs updated (`gpu-backend.md`, `security.md`, `deployment.md`, `api.md`, `cli.md`, `configuration.md`, `installation.md`, README). The release version number is a release-time decision |
+| F1 | Version, CHANGELOG, documentation and package agree | PASS | Version 0.1.5 (CMake, `--version`, CITATION.cff); the CHANGELOG `[0.1.5]` section lists every change since 0.1.4 (which was never published); docs updated (`gpu-backend.md`, `security.md`, `deployment.md`, `api.md`, `cli.md`, `configuration.md`, `installation.md`, README). Released as 0.1.5 on 2026-10-17 |
 | F2 | Limitations and unsupported configurations listed | PASS | `docs/gpu-backend.md` (section 0, "Still open"), `docs/security.md` (residual risks), `docs/deployment.md` |
 
 ### Recommendation

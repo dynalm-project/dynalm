@@ -1,6 +1,9 @@
 # Changelog
 
-## [Unreleased]
+## [0.1.5] - 2026-10-17
+
+0.1.4 was prepared but never published as a GitHub release. Its changes (the [0.1.4] section
+below) ship in 0.1.5 together with everything listed here.
 
 CPU-only builds behave as before. GPU backends (Metal, Vulkan, CUDA) are opt-in at build
 time. **In a GPU build, `--backend auto` (the default) now selects the GPU** when the model
