@@ -30,7 +30,10 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'  # Invoke-WebRequest is far faster without the progress bar
 function Say($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 
-$cpu = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+# The machine's native architecture. An x64 PowerShell emulated on an ARM64 PC sees
+# PROCESSOR_ARCHITECTURE=AMD64, so read the system-wide value first.
+$cpu = (Get-ItemProperty -ErrorAction SilentlyContinue 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment').PROCESSOR_ARCHITECTURE
+if (-not $cpu) { $cpu = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE } }
 switch ($cpu) {
   'AMD64' { $platform = 'windows-x86_64' }
   'ARM64' { $platform = 'windows-arm64' }

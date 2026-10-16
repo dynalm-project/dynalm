@@ -22,11 +22,15 @@ non-loopback `--host` without an API key (see Security).
   - Auto KV capacity respects free device memory.
   - `DYNACORE_GPU_INDEX` selects a GPU.
   - `ENABLE_HIP` is refused with a pointer to Vulkan.
+  - A GPU that cannot run the core ops (for example a paravirtual / Apple5-class Metal device
+    without simdgroup support) is refused at startup. `auto` then uses the CPU instead of
+    failing on the first request.
 - **Windows on ARM** (preview):
   - presets `msvc-release` (ARM64 prompt) and `windows-arm64` (clang-cl);
   - CI build, test and package jobs on `windows-11-arm`;
   - a `dynalm-windows-arm64.zip` release asset;
-  - the installer detects ARM64.
+  - the installer detects ARM64 from the system registry (an emulated x64 PowerShell reports
+    AMD64).
 - **Portability fix:** `TensorLayout::contiguous` no longer uses `__builtin_mul_overflow`,
   which MSVC lacks.
 

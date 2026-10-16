@@ -122,7 +122,8 @@ jobs:
       - run: cmake --preset macos-metal
       - run: cmake --build --preset macos-metal
       - name: Model-free tests
-        run: bash tools/ci/run_tests.sh build/macos-metal | tee tests.log
+        # pipefail: a failing test must fail the job even though tee succeeds.
+        run: set -o pipefail; bash tools/ci/run_tests.sh build/macos-metal | tee tests.log
       - name: Metal device status
         run: |
           line="$(grep 'dynacore/test_ggml_device' tests.log)"
@@ -145,7 +146,11 @@ jobs:
       - run: cmake --preset linux-vulkan
       - run: cmake --build --preset linux-vulkan
       - name: Model-free tests (GPU tests on lavapipe)
-        run: bash tools/ci/run_tests.sh build/linux-vulkan | tee tests.log
+        # ggml-vulkan lists only discrete / integrated GPUs unless told which
+        # devices to use; lavapipe is a CPU-type device, index 0 here.
+        env:
+          GGML_VK_VISIBLE_DEVICES: "0"
+        run: set -o pipefail; bash tools/ci/run_tests.sh build/linux-vulkan | tee tests.log
       - name: Vulkan device status
         run: |
           line="$(grep 'dynacore/test_ggml_device' tests.log)"

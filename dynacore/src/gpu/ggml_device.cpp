@@ -770,7 +770,7 @@ class GraphBuilder {
     ggml_tensor* y = ggml_mul_mat(ctx_, w, x);
     // fp32 accumulation (DD-053): Vulkan and CUDA otherwise may accumulate
     // matrix-matrix products in fp16; Metal always uses fp32.
-    ggml_mul_mat_set_prec(y, GGML_PREC_F32);
+    (void)ggml_prec_set_acc(y, GGML_PREC_F32);
     if (bv != nullptr) {
       ENGINE_ASSIGN_OR_RETURN(ggml_tensor * b, weight(*bv));
       y = ggml_add(ctx_, y, b);
@@ -875,7 +875,7 @@ class GraphBuilder {
       ggml_tensor* vs = ggml_view_3d(ctx_, vpool, hdv, L, nkv, vpool->nb[1], ggml_row_size(vpool->type, hdv), 0);
       ggml_tensor* mask = input(InKind::kPagedMask, GGML_TYPE_F16, L, m, -1, 0, static_cast<int32_t>(m), static_cast<int32_t>(L));
       ggml_tensor* o = ggml_flash_attn_ext(ctx_, qs, ks, vs, mask, p.scale, 0.0f, p.softcap);  // [hdv, nh, m]
-      ggml_flash_attn_ext_set_prec(o, GGML_PREC_F32);  // fp32 softmax/accumulation, as on Metal
+      (void)ggml_prec_set_acc(o, GGML_PREC_F32);  // fp32 softmax/accumulation, as on Metal
       return write(p.out, ggml_reshape_2d(ctx_, o, static_cast<int64_t>(hdv) * nh, m));
     }
     ggml_tensor* out = nullptr;
@@ -888,7 +888,7 @@ class GraphBuilder {
       ggml_tensor* vs = ggml_reshape_3d(ctx_, ggml_get_rows(ctx_, vpool, gidx), hdv, L, nkv);
       ggml_tensor* mask = input(InKind::kMask, GGML_TYPE_F16, L, n, s.seq, s.r0, s.n, s.span);
       ggml_tensor* o = ggml_flash_attn_ext(ctx_, qs, ks, vs, mask, p.scale, 0.0f, p.softcap);  // [hdv, nh, n]
-      ggml_flash_attn_ext_set_prec(o, GGML_PREC_F32);
+      (void)ggml_prec_set_acc(o, GGML_PREC_F32);
       o = ggml_reshape_2d(ctx_, o, static_cast<int64_t>(hdv) * nh, n);
       out = out == nullptr ? o : ggml_concat(ctx_, out, o, 1);
     }
@@ -1162,6 +1162,43 @@ ggml_backend_reg_t provider_reg(DeviceType type) {
 
 }  // namespace
 
+// Whether `dev` supports representative instances of the ops every model
+// step uses: matmul with f32 / f16 / q8_0 / q4_K weights, flash attention
+// over f16 K/V with an f16 mask, RMS norm, RoPE, row store and gather.
+Status check_core_ops(ggml_backend_dev_t dev) {
+  CtxPtr ctx = meta_ctx(32);
+  ggml_context* c = ctx.get();
+  const int64_t k = 256, n = 64, rows = 8, hd = 64, heads = 4, cells = 256;
+  ggml_tensor* x = ggml_new_tensor_2d(c, GGML_TYPE_F32, k, rows);
+  std::vector<std::pair<const char*, ggml_tensor*>> ops;
+  for (ggml_type t : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_K}) {
+    ops.emplace_back(ggml_type_name(t), ggml_mul_mat(c, ggml_new_tensor_2d(c, t, k, n), x));
+  }
+  ggml_tensor* q = ggml_new_tensor_3d(c, GGML_TYPE_F32, hd, rows, heads);
+  ggml_tensor* kv_k = ggml_new_tensor_3d(c, GGML_TYPE_F16, hd, cells, heads);
+  ggml_tensor* kv_v = ggml_new_tensor_3d(c, GGML_TYPE_F16, hd, cells, heads);
+  ggml_tensor* mask = ggml_new_tensor_2d(c, GGML_TYPE_F16, cells, rows);
+  ggml_tensor* fa = ggml_flash_attn_ext(c, ggml_permute(c, q, 0, 2, 1, 3), kv_k, kv_v, mask, 0.125f, 0.0f, 0.0f);
+  (void)ggml_prec_set_acc(fa, GGML_PREC_F32);
+  ops.emplace_back("flash attention", fa);
+  ops.emplace_back("rms_norm", ggml_rms_norm(c, x, 1e-6f));
+  ggml_tensor* qr = ggml_new_tensor_3d(c, GGML_TYPE_F32, hd, heads, rows);
+  ops.emplace_back("rope", ggml_rope_ext(c, qr, ggml_new_tensor_1d(c, GGML_TYPE_I32, rows), nullptr, static_cast<int>(hd),
+                                         GGML_ROPE_TYPE_NEOX, 4096, 10000.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f));
+  ggml_tensor* pool = ggml_new_tensor_2d(c, GGML_TYPE_F16, hd, cells);
+  ops.emplace_back("set_rows", ggml_set_rows(c, pool, ggml_new_tensor_2d(c, GGML_TYPE_F32, hd, rows),
+                                             ggml_new_tensor_1d(c, GGML_TYPE_I64, rows)));
+  ops.emplace_back("get_rows", ggml_get_rows(c, ggml_new_tensor_2d(c, GGML_TYPE_Q8_0, k, n),
+                                             ggml_new_tensor_1d(c, GGML_TYPE_I32, rows)));
+  for (const auto& [what, t] : ops) {
+    if (!ggml_backend_dev_supports_op(dev, t)) {
+      return Unsupported(std::string(ggml_backend_dev_description(dev)) + " cannot run " + ggml_op_desc(t) + " (" + what +
+                         ") on the GPU; this GPU is not supported (use --backend cpu)");
+    }
+  }
+  return Status::Ok();
+}
+
 bool ggml_gpu_compiled() { return true; }
 
 bool ggml_gpu_compiled(DeviceType type) { return provider_reg(type) != nullptr; }
@@ -1184,6 +1221,11 @@ Result<std::unique_ptr<Device>> create_ggml_gpu_device(DeviceType type, const Gg
                        std::to_string(count) + " found)");
   }
   ggml_backend_dev_t dev = ggml_backend_reg_dev_get(reg, index);
+  // The device must run the core ops of a transformer step. A GPU can start
+  // and still lack them (ggml-metal needs simdgroup reductions, which
+  // paravirtual / Apple5-class GPUs do not have); refusing here lets
+  // `--backend auto` fall back to the CPU instead of failing the first request.
+  if (Status st = check_core_ops(dev); !st.ok()) return st;
   ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
   if (backend == nullptr) return Unsupported(std::string("cannot initialize GPU device ") + ggml_backend_dev_name(dev));
   return std::unique_ptr<Device>(std::make_unique<GgmlDevice>(dev, backend, type, opts));
