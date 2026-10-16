@@ -8,7 +8,5 @@ Third-party components (not stored in this repository; fetched at build time):
   Used by the HTTP server; the exact header is verified by SHA-256. Its license text is in
   THIRD_PARTY_LICENSES.md, installed next to this file.
 - ggml v0.27.0 (MIT License), https://github.com/ggml-org/ggml, commit a05c9922613c
-  (Metal builds only: -DENABLE_METAL=ON). Its license text is in THIRD_PARTY_LICENSES.md.
-- GoogleTest v1.15.2 (BSD 3-Clause License), https://github.com/google/googletest
-  Used only to build the test suites of releases up to 0.1.2; the current build no longer
-  fetches it.
+  (GPU builds only: -DENABLE_METAL, -DENABLE_VULKAN or -DENABLE_CUDA). Its license text is in
+  THIRD_PARTY_LICENSES.md.
