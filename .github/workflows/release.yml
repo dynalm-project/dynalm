@@ -86,6 +86,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          # Platform archives only (dynalm-linux-*, dynalm-macos-*, dynalm-windows-*): the
+          # docker job's build record artifact does not extract and failed the download.
+          pattern: dynalm-[lmw]*
           merge-multiple: true
       - name: SHA256SUMS
         run: |

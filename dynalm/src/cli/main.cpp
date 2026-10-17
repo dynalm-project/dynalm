@@ -9,6 +9,7 @@
 #include "cli/commands.h"
 #include "common/version.h"
 #include "logging/log.h"
+#include "dynacore/device/device_registry.h"
 #include "dynacore/hardware/cpu_info.h"
 #include "dynacore/hardware/isa.h"
 #include "dynacore/hardware/system_info.h"
@@ -84,7 +85,13 @@ int cmd_version() {
   std::printf("kernels:  generic%s%s%s%s (selected at run time: %s)\n", ENGINE_HAS_AVX2 ? " avx2" : "",
               ENGINE_HAS_AVX512 ? " avx512" : "", ENGINE_HAS_AMX ? " amx" : "", ENGINE_HAS_NEON ? " neon" : "",
               std::string(dynalm::isa_name(dynalm::select_isa(dynalm::cpu_info().features))).c_str());
-  std::printf("devices:  cpu; cuda, hip, metal, vulkan: designed, not built (DD-045)\n");
+  // Devices compiled into this binary (docs/gpu.md for GPU builds).
+  std::string devices;
+  for (dynacore::DeviceKind k : dynacore::compiled_devices()) {
+    devices += (devices.empty() ? "" : " ") + std::string(dynacore::device_kind_name(k));
+  }
+  std::printf("devices:  %s%s\n", devices.c_str(),
+              devices == "cpu" ? " (GPU: build with -DENABLE_METAL, -DENABLE_VULKAN or -DENABLE_CUDA)" : "");
   return 0;
 }
 
