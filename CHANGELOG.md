@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.1.7] - 2026-10-17
+
+Pre-launch fixes: reliable downloads and accurate docs.
+
+### Fixed
+- **`dynalm pull` no longer hangs on a stalled connection.**
+  - A download slower than 1 KB/s for 60 s, or a connection that cannot connect within 30 s,
+    now ends the attempt.
+  - DynaLM then resumes the partial file, up to 10 attempts. curl's own retry restarted from
+    the first byte, so it is no longer used for the download.
+  - Before this, a silent connection made `pull` wait forever with no message.
+- **SECURITY.md:** it said the server has no authentication (API keys exist, and network
+  binds require one) and named `dynalm rm` (it is `dynalm models rm`).
+
+### Docs
+- **New `docs/benchmarks.md`** with every measured number:
+  - the exact setup: Apple M4 Pro, 24 GB, macOS 26.7, AC power, model checksum, engine
+    versions and flags;
+  - where llama.cpp is faster;
+  - CPU speed marked unverified.
+- **README:**
+  - removed two speed claims no measurement backs: an x86-64 laptop CPU figure, and
+    "4× faster than the CPU mode";
+  - the speed section now lists where llama.cpp is ahead.
+- **Llama 3.x GGUF is listed as running on the GPU.** Llama 3.2 1B passed the GPU accuracy
+  check (perplexity −0.004% decode, −0.112% prefill, 4/4 greedy identical, deterministic).
+
 ## [0.1.6] - 2026-10-17
 
 GPU first, with nothing to set up: the normal installers now deliver GPU builds.

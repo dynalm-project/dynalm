@@ -152,7 +152,7 @@ With `auto`, DynaLM tries the GPUs in this order: CUDA, then Metal, then Vulkan.
 |---|---|---|
 | Qwen2.5 (0.5B, 1.5B, 3B, 7B, ...) and other models of this design | ✅ | GPU |
 | Qwen3, Gemma 3 | coming soon | CPU |
-| Llama 3.1 / 3.2 | coming soon | CPU |
+| Llama 3.1 / 3.2 (GGUF) | ✅ | GPU |
 | Mixture-of-experts (Granite-MoE, Mixtral, Qwen-MoE) | coming soon | CPU |
 
 **KV cache types on the GPU:** `f16` (default), `f32` and `q8_0`. `--kv q8_0` halves the KV

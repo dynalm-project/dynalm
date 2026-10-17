@@ -48,7 +48,7 @@ CPU and on your GPU, and it needs no internet once the model is downloaded.
 - **Familiar commands.** `pull`, `run` and `serve`, like Ollama.
 - **Works with your tools.** It has a built-in OpenAI-compatible API, so the OpenAI SDK,
   LangChain, LlamaIndex, Open WebUI, Continue.dev and Cursor connect to it directly.
-- **Uses less memory.** On an Apple Silicon Mac, DynaLM serves a 1.5B model in **about 3× less
+- **Uses less memory.** On an Apple M4 Pro, DynaLM serves a 1.5B model in **about 3× less
   memory** than llama.cpp's server: 390 MB against 1,113 MB.
 - **Built for many users.** Continuous batching, a paged KV cache and prefix sharing keep
   answers coming when several people use it at once.
@@ -150,7 +150,8 @@ the GPU, and `Device: CPU/...` for the CPU.
 `DYNALM_BACKEND=cpu`. `--gpu` switches back for one run.
 
 **Models that run on the GPU today:** the Qwen2.5 family and other models of the same design.
-For Qwen3, Gemma 3, Llama 3.x and mixture-of-experts models, `auto` uses the CPU for now.
+Llama 3.x GGUF files run on the GPU too. For Qwen3, Gemma 3 and mixture-of-experts models,
+`auto` uses the CPU for now.
 Full guide: [docs/gpu.md](docs/gpu.md).
 
 ---
@@ -166,11 +167,11 @@ Download by name with `dynalm pull <name>`, or use any `.gguf` file.
 | `qwen2.5:0.5b` | 491 MB | 1 GB | fast chat on small PCs (runs on GPU too) |
 | `qwen3:0.6b` | 639 MB | 1 GB | small "thinking" model |
 | `gemma3:1b` | 806 MB | 2 GB | general chat |
-| `llama3.2:1b` | 808 MB | 2 GB | fast chat on laptops |
+| `llama3.2:1b` | 808 MB | 2 GB | fast chat on laptops (runs on GPU too) |
 | `granite3.1-moe:1b` | 822 MB | 2 GB | efficient mixture-of-experts |
 | `qwen2.5:1.5b` | 1.1 GB | 2 GB | **best start**: good quality, fast, runs on GPU too |
 | `qwen3:1.7b` | 1.8 GB | 2.5 GB | step-by-step reasoning |
-| `llama3.2:3b` | 2.0 GB | 3–4 GB | writing and coding |
+| `llama3.2:3b` | 2.0 GB | 3–4 GB | writing and coding (runs on GPU too) |
 | `phi3.5:3.8b` | 2.4 GB | 4 GB | maths and code |
 | `qwen3:4b` | 2.5 GB | 4 GB | best quality in the list |
 
@@ -192,9 +193,10 @@ dynalm models --available                                                       
 
 ## Speed
 
-All numbers come from our own repeatable tests. Method: [docs/benchmarking.md](docs/benchmarking.md).
+All numbers come from our own repeatable tests. Full results, setup and limits:
+[docs/benchmarks.md](docs/benchmarks.md). Method: [docs/benchmarking.md](docs/benchmarking.md).
 
-**Apple Silicon GPU (Metal), Qwen2.5-1.5B Q4_K_M, compared with llama.cpp's server on the same
+**Apple M4 Pro (24 GB, macOS 26.7, on AC power), Metal, Qwen2.5-1.5B Q4_K_M, compared with llama.cpp's server on the same
 file:**
 
 | What we measured | Result |
@@ -202,14 +204,14 @@ file:**
 | Memory, one user | **390 MB vs 1,113 MB**: about 3× less |
 | First word (typical), 4 users at once | **1.9–2.1× faster** |
 | First word (typical), 8 users at once | **2.5× faster** |
-| Speed per token, one user | about 7 ms per token, within about 10% of llama.cpp |
-| Against DynaLM's own CPU mode | about 4× faster replies, 11–16× faster prompt reading |
+| Speed per token, one user | about 7 ms per token; llama.cpp is about 10% faster |
 
-Where llama.cpp is still ahead: total tokens per second with many users at once (8 or more).
-This is our next focus.
+**Where llama.cpp is still ahead:**
+- total tokens per second with 8 or more users at once (0.66–0.82× of llama.cpp);
+- the time to finish each request with several users;
+- the slowest first words (95th percentile) with 8 or more users.
 
-**x86-64 laptop CPU (AVX2):** `qwen2.5:1.5b` about 13 tokens/s, `qwen3:4b` about
-6 tokens/s.
+Closing this gap is our next focus.
 
 **Measure your own machine:** `dynalm benchmark qwen2.5:1.5b`.
 
@@ -311,7 +313,7 @@ Yes. It uses the same kind of commands (`pull`, `run`, `serve`), the same GGUF m
 an OpenAI-compatible API. It ships as one small program with no background service.
 
 ### How does DynaLM compare to llama.cpp?
-On an Apple Silicon Mac, DynaLM uses about 3× less memory and typically gives the first word 2× faster
+On an Apple M4 Pro, DynaLM uses about 3× less memory and typically gives the first word 2× faster
 when several people use it at once. Its single-user speed is within about 10% of llama.cpp's.
 llama.cpp still has higher total throughput with many users.
 
@@ -355,6 +357,7 @@ All options: [docs/build.md](docs/build.md).
 | [Configuration](docs/configuration.md) | `config.yaml` and environment variables |
 | [Deployment](docs/deployment.md) | running a server safely |
 | [Security](docs/security.md) | threat model and protections |
+| [Benchmark results](docs/benchmarks.md) | measured speed, memory and accuracy, with limits |
 | [Benchmarking](docs/benchmarking.md) | how we measure speed |
 | [Roadmap](ROADMAP.md) | what comes next |
 | [Changelog](CHANGELOG.md) | what changed |

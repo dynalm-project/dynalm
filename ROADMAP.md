@@ -42,7 +42,7 @@ timeline
 | **NVIDIA CUDA Backend** | 🧪 Preview | NVIDIA GPUs | Built on the same GPU device layer ([docs/gpu.md](docs/gpu.md)). |
 | **Automatic CPU/GPU Selection** | ✅ Shipped | All platforms | `--backend auto` picks the GPU when it can run the model, else the CPU. |
 | **Windows on ARM** | 🧪 Preview | Windows 11 ARM64 | Native ARM64 build with NEON kernels. |
-| **GPU: Qwen3 / Gemma 3 / Llama 3.x / MoE** | 📋 Planned | All GPU backends | Per-head Q/K norm, Llama 3 / YaRN RoPE scaling and expert routing on the GPU. |
+| **GPU: Qwen3 / Gemma 3 / MoE** | 📋 Planned | All GPU backends | Per-head Q/K norm, YaRN RoPE scaling and expert routing on the GPU. (Llama 3.x GGUF already runs on the GPU.) |
 | **GPU multi-user throughput** | 🔄 In Progress | All GPU backends | Larger batched prefill to raise total tokens/s with 8+ users. |
 
 ---
