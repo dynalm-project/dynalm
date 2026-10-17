@@ -291,6 +291,29 @@ void test_device_selection(const std::string& dir, bool gpu_usable, DeviceKind g
     const Out o = gen(**e, kPrompts[0], 8);
     CHECK(o.finish == StreamFinish::kLength && o.tokens == 8);
   }
+  // --gpu / --cpu / --backend choices (apply_backend_choice).
+  {
+    EngineOptions o;
+    CHECK(apply_backend_choice("gpu", o).ok() && o.backend_auto && o.backend_require_gpu);
+    CHECK(apply_backend_choice("cpu", o).ok() && !o.backend_auto && o.backend == DeviceKind::kCpu);
+    CHECK(apply_backend_choice("auto", o).ok() && o.backend_auto && !o.backend_require_gpu);
+    CHECK(apply_backend_choice("metal", o).ok() && !o.backend_auto && o.backend == DeviceKind::kMetal);
+    CHECK(!apply_backend_choice("tpu", o).ok());
+    // --gpu never falls back to the CPU: an unsupported model (or a build
+    // without a GPU) is an error naming the reason.
+    o = EngineOptions();
+    o.model_path = qwen3;
+    o.threads = 2;
+    o.kv_tokens = 512;
+    CHECK(apply_backend_choice("gpu", o).ok());
+    auto e = Engine::create(o);
+    CHECK(!e.ok() && e.status().code() == StatusCode::kUnsupported);
+    if (gpu_usable) {
+      o.model_path = g_model;
+      auto g = Engine::create(o);
+      CHECK(g.ok() && is_gpu(**g));
+    }
+  }
   if (dynacore::ggml_gpu_compiled()) {
     auto e = on(qwen3, false, gpu_kind);
     CHECK(!e.ok() && e.status().code() == StatusCode::kUnsupported);

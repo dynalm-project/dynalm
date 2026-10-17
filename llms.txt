@@ -82,5 +82,4 @@
 - [Configuration](https://github.com/dynalm-project/dynalm/blob/main/docs/configuration.md): config.yaml and environment variables
 - [Deployment](https://github.com/dynalm-project/dynalm/blob/main/docs/deployment.md): running a server safely
 - [Security](https://github.com/dynalm-project/dynalm/blob/main/docs/security.md): threat model and protections
-- [Architecture](https://github.com/dynalm-project/dynalm/blob/main/docs/architecture.md): how DynaLM is built
 - [Roadmap](https://github.com/dynalm-project/dynalm/blob/main/ROADMAP.md): what comes next

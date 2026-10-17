@@ -9,7 +9,10 @@
 #
 # Assets: dynalm-linux-x86_64.tar.gz, dynalm-linux-arm64.tar.gz,
 #         dynalm-macos-arm64.tar.gz, dynalm-macos-x86_64.tar.gz,
-#         dynalm-windows-x86_64.zip, dynalm-windows-arm64.zip, SHA256SUMS
+#         dynalm-windows-x86_64.zip, dynalm-windows-arm64.zip,
+#         GPU variants dynalm-linux-x86_64-vulkan.tar.gz and
+#         dynalm-windows-x86_64-vulkan.zip, SHA256SUMS. The macOS arm64
+#         archive includes Metal.
 name: release
 
 on:
@@ -34,7 +37,12 @@ jobs:
           # 24.04 CI image; libstdc++/libgcc are linked statically.
           - { name: linux-x86_64, os: ubuntu-22.04, preset: linux-release, gcc13: true }
           - { name: linux-arm64, os: ubuntu-22.04-arm, preset: linux-release, gcc13: true }
-          - { name: macos-arm64, os: macos-14, preset: macos-release }
+          # Every Apple Silicon package includes Metal (GPU first; it falls back
+          # to the CPU on its own when a GPU cannot run a model).
+          - { name: macos-arm64, os: macos-14, preset: macos-release, cmake_args: -DENABLE_METAL=ON }
+          # Vulkan GPU builds next to the CPU builds; the installers choose.
+          - { name: linux-x86_64-vulkan, os: ubuntu-22.04, preset: linux-release, gcc13: true, vulkan: true, cmake_args: -DENABLE_VULKAN=ON }
+          - { name: windows-x86_64-vulkan, os: windows-2022, preset: msvc-release, vulkan: true, cmake_args: -DENABLE_VULKAN=ON }
           # Intel build on Apple Silicon; tests run under Rosetta 2.
           - { name: macos-x86_64, os: macos-14, preset: macos-release, cmake_args: -DCMAKE_OSX_ARCHITECTURES=x86_64 }
           - { name: windows-x86_64, os: windows-2022, preset: msvc-release }
@@ -59,6 +67,10 @@ jobs:
           echo "CXX=g++-13" >> "$GITHUB_ENV"
       - if: runner.os == 'macOS'
         run: brew install ninja
+      - name: Vulkan SDK
+        if: matrix.vulkan
+        shell: bash
+        run: bash tools/ci/setup_vulkan_sdk.sh
       - if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
         with:

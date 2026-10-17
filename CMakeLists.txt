@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(dynalm
-  VERSION 0.1.5
+  VERSION 0.1.6
   DESCRIPTION "DynaLM: CPU-first LLM inference engine"
   HOMEPAGE_URL "https://github.com/dynalm-project/dynalm"
   LANGUAGES CXX)
@@ -136,7 +136,17 @@ string(TOLOWER "${CMAKE_SYSTEM_NAME}" _dynalm_os)
 if(_dynalm_os STREQUAL "darwin")
   set(_dynalm_os macos)
 endif()
-set(CPACK_PACKAGE_FILE_NAME "dynalm-${_dynalm_os}-${DYNALM_ARCH}")
+# GPU package variants: Vulkan / CUDA builds get a suffix so they sit next to
+# the CPU archive (the installers pick one). Metal builds keep the plain name:
+# every macOS arm64 package includes Metal (Metal is part of macOS).
+set(_dynalm_variant "")
+if(ENABLE_CUDA)
+  string(APPEND _dynalm_variant "-cuda")
+endif()
+if(ENABLE_VULKAN)
+  string(APPEND _dynalm_variant "-vulkan")
+endif()
+set(CPACK_PACKAGE_FILE_NAME "dynalm-${_dynalm_os}-${DYNALM_ARCH}${_dynalm_variant}")
 if(WIN32)
   set(CPACK_GENERATOR ZIP)
 else()

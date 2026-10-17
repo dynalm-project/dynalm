@@ -63,10 +63,12 @@ Pre-compiled, statically linked binaries are provided for every major OS:
 | Release Archive | Target Operating System & Platform | CPU SIMD Kernel Tier |
 | :--- | :--- | :--- |
 | `dynalm-linux-x86_64.tar.gz` | Linux x86-64, glibc ≥ 2.35 (Ubuntu 22.04+, Debian 12+, RHEL 9+, Fedora 38+, Arch) | **AVX2**, fallback to generic |
+| `dynalm-linux-x86_64-vulkan.tar.gz` | Linux x86-64 with a GPU driver (AMD, Intel, NVIDIA): **GPU version**, chosen by the installer | **AVX2** + Vulkan GPU |
 | `dynalm-linux-arm64.tar.gz` | Linux ARM64, glibc ≥ 2.35 (64-bit ARM boards and servers) | **NEON** |
-| `dynalm-macos-arm64.tar.gz` | macOS on Apple Silicon | **NEON** (High-bandwidth unified memory) |
+| `dynalm-macos-arm64.tar.gz` | macOS on Apple Silicon (includes the Metal GPU backend) | **NEON** (High-bandwidth unified memory) |
 | `dynalm-macos-x86_64.tar.gz` | macOS on Intel | **AVX2**, fallback to generic |
 | `dynalm-windows-x86_64.zip` | Windows 10 / 11 64-bit (x64) | **AVX2**, fallback to generic |
+| `dynalm-windows-x86_64-vulkan.zip` | Windows 10 / 11 x64 with a GPU driver: **GPU version**, chosen by the installer | **AVX2** + Vulkan GPU |
 | `dynalm-windows-arm64.zip` (or `scripts\install.ps1 -FromSource`) | Windows 11 on ARM (ARM64 PCs), 🧪 Preview | **NEON** |
 | `SHA256SUMS` | Cryptographic SHA-256 hashes for all archives | Cross-platform verification |
 

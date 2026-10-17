@@ -11,6 +11,7 @@
 #include <string_view>
 #include <functional>
 #include <map>
+#include <mutex>
 #include <unordered_map>
 #include <vector>
 
@@ -1144,8 +1145,26 @@ Status GgmlDevice::run_segment(std::span<const DeviceCall* const> calls, std::sp
 
 namespace {
 
+// ggml's own log: warnings and errors only, so a normal run shows DynaLM's
+// log, not every ggml device-initialization line. DYNACORE_GPU_LOG=1 shows all.
+void quiet_ggml_log(ggml_log_level level, const char* text, void*) {
+  thread_local ggml_log_level last = GGML_LOG_LEVEL_INFO;  // CONT continues the previous line
+  if (level != GGML_LOG_LEVEL_CONT) last = level;
+  if (last >= GGML_LOG_LEVEL_WARN) std::fputs(text, stderr);
+}
+
+void install_ggml_log() {
+  static std::once_flag once;
+  std::call_once(once, [] {
+    const char* v = std::getenv("DYNACORE_GPU_LOG");
+    if (v == nullptr || v[0] != '1') ggml_log_set(quiet_ggml_log, nullptr);
+  });
+}
+
 // The ggml backend registry of a provider; null when it is not compiled in.
+// Calling it initializes the provider (device discovery).
 ggml_backend_reg_t provider_reg(DeviceType type) {
+  install_ggml_log();
   switch (type) {
 #if DYNACORE_HAS_METAL
     case DeviceType::kMetal: return ggml_backend_metal_reg();
@@ -1201,7 +1220,21 @@ Status check_core_ops(ggml_backend_dev_t dev) {
 
 bool ggml_gpu_compiled() { return true; }
 
-bool ggml_gpu_compiled(DeviceType type) { return provider_reg(type) != nullptr; }
+// Compile-time only: answering must not initialize a GPU (dynalm --version).
+bool ggml_gpu_compiled(DeviceType type) {
+  switch (type) {
+#if DYNACORE_HAS_METAL
+    case DeviceType::kMetal: return true;
+#endif
+#if DYNACORE_HAS_VULKAN
+    case DeviceType::kVulkan: return true;
+#endif
+#if DYNACORE_HAS_CUDA
+    case DeviceType::kCuda: return true;
+#endif
+    default: return false;
+  }
+}
 
 std::string ggml_revision() { return DYNACORE_GGML_REVISION; }
 

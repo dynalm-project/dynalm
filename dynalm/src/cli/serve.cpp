@@ -30,7 +30,7 @@ extern "C" void on_signal(int) { g_signals.fetch_add(1); }
 constexpr OptionSpec kServeOptions[] = {
     {"model"},        {"host"},        {"port"},           {"model-id"},         {"threads"},
     {"ctx"},          {"batch"},       {"kv"},             {"http-threads"},     {"max-tokens"},
-    {"max-active"},   {"request-timeout"}, {"temperature"}, {"backend"}, {"execution"}, {"shutdown-timeout"}, {"disable-admin", false}, {"int8-decode"}, {"policy"},
+    {"max-active"},   {"request-timeout"}, {"temperature"}, {"backend"}, {"cpu", false}, {"gpu", false}, {"execution"}, {"shutdown-timeout"}, {"disable-admin", false}, {"int8-decode"}, {"policy"},
     {"api-key-file"}, {"allow-unauthenticated", false},
     {"solo-prefill-chunk"}, {"solo-prefill-split", false}, {"prefill-order"}, {"prefill-aging-ms"},
 };
@@ -55,8 +55,9 @@ void usage() {
                "  --solo-prefill-split    with --solo-prefill-chunk: split it across waiting prompts\n"
                "  --prefill-order O       EXPERIMENTAL: fifo (default) | srpt (shortest remaining prompt first)\n"
                "  --prefill-aging-ms N    with srpt: prompts prefilling longer than N ms go first (default 20000)\n"
-               "  --backend B             auto | cpu | metal | vulkan | cuda (default auto: a GPU when one\n"
-               "                          is built in and runs the model, else the CPU)\n"
+               "  --gpu                   use the GPU (the default when it can run the model)\n"
+               "  --cpu                   use the CPU\n"
+               "  --backend B             auto (default: GPU first, else CPU) | gpu | cpu | metal | vulkan | cuda\n"
                "  --execution MODE        reference (default) | compiled: DynaCore IR + fusion (DD-072)\n"
                "  --max-active N          concurrent requests before 503 (default 64)\n"
                "  --http-threads N|auto   HTTP workers (auto: max-active + 8)\n"
@@ -133,11 +134,9 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
     else if (a == "--api-key-file") api_key_file = value();
     else if (a == "--allow-unauthenticated") allow_unauthenticated = true;
     else if (a == "--backend") {
-      const std::string_view v = value();
-      eo.backend_auto = v == "auto";
-      auto k = eo.backend_auto ? Result<DeviceKind>(DeviceKind::kCpu) : parse_device_kind(v);
-      ok = k.ok();
-      if (ok) eo.backend = *k;
+      ok = apply_backend_choice(value(), eo).ok();
+    } else if (a == "--cpu" || a == "--gpu") {
+      (void)apply_backend_choice(a.substr(2), eo);  // shorthands for --backend cpu / gpu
     } else if (a == "--execution") {
       auto x = parse_execution_mode(value());
       ok = x.ok();

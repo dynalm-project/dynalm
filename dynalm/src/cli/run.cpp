@@ -44,8 +44,9 @@ void usage() {
                "  --batch N             max tokens per forward pass (default 256)\n"
                "  --kv f16|f32|q8_0     KV cache dtype (default f16; q8_0 halves its memory)\n"
                "  --int8-decode N       int8 activations for matmuls of <= N rows (default 4, 0 = off)\n"
-               "  --backend B           auto | cpu | metal | vulkan | cuda (default auto: a GPU when one\n"
-               "                        is built in and runs the model, else the CPU)\n"
+               "  --gpu                 use the GPU (the default when it can run the model)\n"
+               "  --cpu                 use the CPU\n"
+               "  --backend B           auto (default: GPU first, else CPU) | gpu | cpu | metal | vulkan | cuda\n"
                "  --execution MODE      reference (default) | compiled: DynaCore IR + fusion (DD-072)\n"
                "  --no-stream           print only the final text\n"
                "sampling (default: greedy; chat: temp 0.8, top-k 40, top-p 0.9, repeat-penalty 1.1):\n"
@@ -188,7 +189,7 @@ int run_speculative(const std::string& path, const std::string& spec, int k, boo
 
 // Options `run` takes from the config file and DYNALM_* (config/config.h).
 constexpr OptionSpec kRunConfigOptions[] = {
-    {"model"}, {"threads"}, {"ctx"}, {"batch"}, {"kv"}, {"backend"}, {"execution"}, {"int8-decode"}, {"temperature"},
+    {"model"}, {"threads"}, {"ctx"}, {"batch"}, {"kv"}, {"backend"}, {"cpu", false}, {"gpu", false}, {"execution"}, {"int8-decode"}, {"temperature"},
     {"max-tokens"},
 };
 
@@ -245,11 +246,9 @@ int cmd_run(std::span<const std::string_view> raw_args) {
       params.sampling.has_seed = true;
     }
     else if (a == "--backend") {
-      const std::string_view v = value();
-      opts.backend_auto = v == "auto";
-      auto k = opts.backend_auto ? Result<DeviceKind>(DeviceKind::kCpu) : parse_device_kind(v);
-      ok = k.ok();
-      if (ok) opts.backend = *k;
+      ok = apply_backend_choice(value(), opts).ok();
+    } else if (a == "--cpu" || a == "--gpu") {
+      (void)apply_backend_choice(a.substr(2), opts);  // shorthands for --backend cpu / gpu
     } else if (a == "--execution") {
       auto x = parse_execution_mode(value());
       ok = x.ok();

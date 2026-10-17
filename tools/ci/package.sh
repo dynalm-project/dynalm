@@ -50,7 +50,7 @@ names = tarfile.open(p).getnames() if p.endswith(".tar.gz") else zipfile.ZipFile
 names = [n.rstrip("/") for n in names]
 need = ["LICENSE", "NOTICE", "THIRD_PARTY_LICENSES.md", "README.md", "CHANGELOG.md"]
 missing = [f for f in need if not any(n.endswith("/share/doc/dynalm/" + f) for n in names)]
-allowed = re.compile(r"^dynalm-[a-z]+-[a-z0-9_]+(/bin(/(dynalm|dynacorec)(\.exe)?)?|/share(/doc(/dynalm(/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*)?)?)?)?$")
+allowed = re.compile(r"^dynalm-[a-z]+-[a-z0-9_]+(-(cuda|vulkan))*(/bin(/(dynalm|dynacorec)(\.exe)?)?|/share(/doc(/dynalm(/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*)?)?)?)?$")
 unexpected = [n for n in names if not allowed.match(n)]
 for n in names: print("  ", n)
 if missing or unexpected:

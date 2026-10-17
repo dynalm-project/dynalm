@@ -58,8 +58,8 @@ void usage() {
                "  --step-trace FILE     append the scheduler's per-step and per-request trace (JSON lines)\n"
                "  --batch N             max tokens per forward pass (default: budgets + 1, min 256 and the solo chunk)\n"
                "  --policy P            balanced | latency | throughput (in-process, DD-061)\n"
-               "  --backend B           auto | cpu | metal | vulkan | cuda (in-process; default auto: a GPU\n"
-               "                        when one is built in and runs the model, else the CPU)\n"
+               "  --gpu / --cpu         in-process device (default auto: GPU first, else CPU)\n"
+               "  --backend B           auto | gpu | cpu | metal | vulkan | cuda (in-process)\n"
                "  --out FILE            append JSON lines (one per point)\n"
                "  --no-diag             skip the bandwidth probe and per-point diagnostics\n");
 }
@@ -98,8 +98,8 @@ int cmd_benchmark(std::span<const std::string_view> args) {
   int seed = 1, warmup_requests = 0;
   SchedulerPolicy policy = SchedulerPolicy::kBalanced;
   ExecutionMode execution = ExecutionMode::kReference;
-  DeviceKind backend = DeviceKind::kCpu;
-  bool backend_auto = true;  // --backend auto
+  EngineOptions device;  // --backend / --cpu / --gpu (default auto)
+  (void)apply_backend_choice("auto", device);
   for (size_t i = 0; i < args.size(); ++i) {
     const std::string_view a = args[i];
     auto value = [&]() -> std::string_view { return i + 1 < args.size() ? args[++i] : std::string_view(); };
@@ -140,11 +140,9 @@ int cmd_benchmark(std::span<const std::string_view> args) {
       ok = x.ok();
       if (ok) execution = *x;
     } else if (a == "--backend") {
-      const std::string_view v = value();
-      backend_auto = v == "auto";
-      auto k = backend_auto ? Result<DeviceKind>(DeviceKind::kCpu) : parse_device_kind(v);
-      ok = k.ok();
-      if (ok) backend = *k;
+      ok = apply_backend_choice(value(), device).ok();
+    } else if (a == "--cpu" || a == "--gpu") {
+      (void)apply_backend_choice(a.substr(2), device);
     }
     else if (a == "--out") out_file = value();
     else if (path.empty() && !a.starts_with("-")) path = a;
@@ -211,8 +209,9 @@ int cmd_benchmark(std::span<const std::string_view> args) {
   if (url.empty()) {
     EngineOptions o;
     o.execution = execution;
-    o.backend = backend;
-    o.backend_auto = backend_auto;
+    o.backend = device.backend;
+    o.backend_auto = device.backend_auto;
+    o.backend_require_gpu = device.backend_require_gpu;
     o.model_path = path;
     o.threads = threads;
     o.kv_tokens = ctx;

@@ -12,7 +12,7 @@
 [![Latest Release](https://img.shields.io/github/v/release/dynalm-project/dynalm?color=3b82f6&label=Release&style=flat-square)](https://github.com/dynalm-project/dynalm/releases/latest)
 [![License](https://img.shields.io/badge/License-Apache--2.0-22c55e.svg?style=flat-square)](LICENSE)
 [![Platforms](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-64748b?style=flat-square)](docs/installation.md)
-[![CPU](https://img.shields.io/badge/CPU-AVX2%20%7C%20AVX--512%20%7C%20NEON-f97316?style=flat-square)](docs/architecture.md)
+[![CPU](https://img.shields.io/badge/CPU-AVX2%20%7C%20AVX--512%20%7C%20NEON-f97316?style=flat-square)](docs/installation.md)
 [![GPU](https://img.shields.io/badge/GPU-Metal%20%7C%20Vulkan%20%7C%20CUDA-8b5cf6?style=flat-square)](docs/gpu.md)
 [![OpenAI Compatible](https://img.shields.io/badge/API-OpenAI%20Compatible-a855f7?style=flat-square)](docs/api.md)
 [![Private](https://img.shields.io/badge/Privacy-100%25%20Offline-success?style=flat-square)](SECURITY.md)
@@ -82,9 +82,16 @@ dynalm run qwen2.5:1.5b
 | Your computer | How to install |
 |---|---|
 | **Linux or macOS** | `curl -fsSL https://raw.githubusercontent.com/dynalm-project/dynalm/main/scripts/install.sh \| sh` |
-| **Windows 10 / 11 (Intel or AMD)** | PowerShell: `irm https://raw.githubusercontent.com/dynalm-project/dynalm/main/scripts/install.ps1 \| iex` |
-| **Windows 11 on ARM** | PowerShell: `powershell -File scripts\install.ps1 -FromSource` (builds on your PC) |
+| **Windows 10 / 11 (x64 and ARM64)** | PowerShell: `irm https://raw.githubusercontent.com/dynalm-project/dynalm/main/scripts/install.ps1 \| iex` |
 | **Docker** | `docker run --rm -p 127.0.0.1:8000:8000 -v "$PWD/models:/models" ghcr.io/dynalm-project/dynalm:cpu serve /models/model.gguf --allow-unauthenticated` |
+
+**GPU included:** the installer gives you the GPU version when your computer can use it:
+- **Macs with Apple Silicon:** always (Metal).
+- **Linux x86-64 and Windows x64 with graphics drivers:** the Vulkan version (AMD, Intel or
+  NVIDIA).
+
+Otherwise you get the CPU version. To choose yourself, add `--cpu` or `--gpu`:
+`curl -fsSL .../install.sh | sh -s -- --cpu`.
 
 **Notes:**
 - No administrator rights are needed.
@@ -127,26 +134,20 @@ Older CPUs without AVX2 still work, using portable code. `dynalm doctor` shows w
 
 ## Use your GPU
 
-**Step 1: build DynaLM with your GPU switched on.** One option is enough:
+**There is nothing to set up.** DynaLM uses the GPU first, and the CPU when the GPU can't run
+the model:
 
 ```bash
-cmake --preset macos-metal  && cmake --build --preset macos-metal    # Mac (Apple Silicon)
-cmake --preset linux-vulkan && cmake --build --preset linux-vulkan   # AMD / Intel / NVIDIA on Linux
-cmake --preset linux-cuda   && cmake --build --preset linux-cuda     # NVIDIA on Linux
+dynalm run qwen2.5:1.5b          # GPU first (default)
+dynalm run qwen2.5:1.5b --cpu    # use the CPU
+dynalm run qwen2.5:1.5b --gpu    # back to the GPU (stops with a clear message if it can't)
 ```
 
-On Windows, use `msvc-vulkan` or `msvc-cuda`. What each one needs is in [docs/gpu.md](docs/gpu.md).
+**Check what it uses:** the first lines show `Device: compiled/Metal/...` (or `Vulkan/...`) for
+the GPU, and `Device: CPU/...` for the CPU.
 
-**Step 2: just run it.** DynaLM picks the device for you:
-
-| Setting | What happens |
-|---|---|
-| `--backend auto` (default) | Uses the GPU when it can run the model, otherwise the CPU. The log says which one and why. |
-| `--backend cpu` | Always the CPU |
-| `--backend metal` / `vulkan` / `cuda` | Always that GPU. It stops with a clear message if the model can't run there. |
-
-You can also set it once in `~/.dynalm/config.yaml` (`runtime: device: cpu`) or with
-`DYNALM_BACKEND=cpu`.
+**Make a choice permanent:** set `runtime: device: cpu` in `~/.dynalm/config.yaml`, or
+`DYNALM_BACKEND=cpu`. `--gpu` switches back for one run.
 
 **Models that run on the GPU today:** the Qwen2.5 family and other models of the same design.
 For Qwen3, Gemma 3, Llama 3.x and mixture-of-experts models, `auto` uses the CPU for now.
@@ -289,21 +290,21 @@ once and then works fully offline.
 
 ### Do I need a GPU?
 No. DynaLM runs well on normal CPUs. If you have a GPU (Apple Silicon, AMD, Intel, or NVIDIA),
-DynaLM can use it for faster answers.
+DynaLM uses it automatically for faster answers.
 
 ### Does DynaLM work on Apple Silicon Macs?
 Yes. It runs on Apple Silicon Macs, on the CPU and on the GPU through Metal.
 
 ### Does it work with AMD or Intel graphics cards?
-Yes, through Vulkan. Build with `-DENABLE_VULKAN=ON`, or use the `linux-vulkan` or
-`msvc-vulkan` preset.
+Yes, through Vulkan. On Linux and Windows, the installer picks the Vulkan version when your
+graphics driver supports it.
 
 ### Does it work with NVIDIA GPUs?
-Yes, through CUDA (`-DENABLE_CUDA=ON`) or through Vulkan.
+Yes, through Vulkan (installed automatically) or CUDA (build from source,
+[docs/gpu.md](docs/gpu.md)).
 
 ### Does it run on Windows on ARM laptops?
-Yes. Install from source with `scripts\install.ps1 -FromSource`. It uses the fast ARM (NEON)
-code.
+Yes. The normal Windows installer detects ARM64 and installs the native ARM build.
 
 ### Is DynaLM an Ollama alternative?
 Yes. It uses the same kind of commands (`pull`, `run`, `serve`), the same GGUF model files, and
@@ -321,8 +322,8 @@ Yes. Nothing is sent anywhere. DynaLM only goes online when you run `dynalm pull
 About the model file size plus 1 GB. A 1.5B model needs about 2 GB, and a 4B model about 4 GB.
 
 ### Can I choose CPU or GPU myself?
-Yes: `--backend cpu`, `--backend metal`, `--backend vulkan` or `--backend cuda`. You can also
-set `runtime: device:` in `~/.dynalm/config.yaml`.
+Yes. Add `--cpu` or `--gpu` to any command, or set `runtime: device: cpu` in
+`~/.dynalm/config.yaml`. The default is GPU first.
 
 ---
 
@@ -354,7 +355,6 @@ All options: [docs/build.md](docs/build.md).
 | [Configuration](docs/configuration.md) | `config.yaml` and environment variables |
 | [Deployment](docs/deployment.md) | running a server safely |
 | [Security](docs/security.md) | threat model and protections |
-| [Architecture](docs/architecture.md) | how DynaLM is built |
 | [Benchmarking](docs/benchmarking.md) | how we measure speed |
 | [Roadmap](ROADMAP.md) | what comes next |
 | [Changelog](CHANGELOG.md) | what changed |

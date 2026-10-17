@@ -8,12 +8,19 @@
 #   sh scripts/install.sh --prefix /opt/dynalm     # elsewhere (sudo only if you choose a system path)
 #   sh scripts/install.sh --from-source            # build this checkout instead (C++20 compiler, CMake >= 3.24)
 #   sh scripts/install.sh --platform macos-x86_64  # override detection (e.g. Intel build under Rosetta)
+#   sh scripts/install.sh --cpu                    # CPU-only build, even if this machine has a GPU
+#   sh scripts/install.sh --gpu                    # the GPU build (fails if there is none for this machine)
 #
-# Release mode downloads dynalm-<os>-<arch>.tar.gz and SHA256SUMS from the
+# GPU first: macOS arm64 packages include Metal. On Linux x86-64 the Vulkan
+# build (dynalm-linux-x86_64-vulkan) is chosen when this machine has a Vulkan
+# driver and a GPU; otherwise the CPU build. --from-source enables Metal,
+# Vulkan or CUDA when their toolkits are found (--cpu: none).
+#
+# Release mode downloads dynalm-<platform>.tar.gz and SHA256SUMS from the
 # GitHub release, verifies the checksum, installs bin/dynalm and
 # bin/dynacorec into <prefix>/bin (default ~/.local) and runs `dynalm --version`.
-# Supported: linux-x86_64, linux-arm64, macos-arm64, macos-x86_64. Anything
-# else stops with an error instead of installing a wrong binary.
+# Supported: linux-x86_64[-vulkan], linux-arm64, macos-arm64, macos-x86_64.
+# Anything else stops with an error instead of installing a wrong binary.
 # Environment: DYNALM_REPO (default dynalm-project/dynalm), DYNALM_PREFIX.
 set -eu
 
@@ -24,6 +31,7 @@ ARCHIVE=""
 SUMS=""
 FROM_SOURCE=0
 FORCE_PLATFORM=""
+DEVICE=auto  # auto | cpu | gpu
 
 say() { printf '==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -36,7 +44,9 @@ while [ $# -gt 0 ]; do
     --sha256sums) SUMS="$2"; shift 2 ;;
     --from-source) FROM_SOURCE=1; shift ;;
     --platform) FORCE_PLATFORM="$2"; shift 2 ;;
-    -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
+    --cpu) DEVICE=cpu; shift ;;
+    --gpu) DEVICE=gpu; shift ;;
+    -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
     *) die "unknown option: $1 (see --help)" ;;
   esac
 done
@@ -59,15 +69,32 @@ if [ "$os" = macos ] && [ "$arch" = x86_64 ] && [ "$(sysctl -n hw.optional.arm64
   arch=arm64
 fi
 PLATFORM="$os-$arch"
+
+# A Vulkan loader and a GPU device node: the Vulkan build can use this GPU.
+has_vulkan_gpu() {
+  { ldconfig -p 2>/dev/null | grep -q 'libvulkan\.so\.1'; } ||
+    ls /usr/lib/libvulkan.so.1 /usr/lib64/libvulkan.so.1 /usr/lib/*/libvulkan.so.1 >/dev/null 2>&1 || return 1
+  ls /dev/dri/renderD* >/dev/null 2>&1 || command -v nvidia-smi >/dev/null 2>&1
+}
 if [ -n "$FORCE_PLATFORM" ]; then
   case "$FORCE_PLATFORM" in
-    linux-x86_64|linux-arm64|macos-arm64|macos-x86_64) ;;
-    *) die "unknown --platform '$FORCE_PLATFORM' (linux-x86_64, linux-arm64, macos-arm64, macos-x86_64)" ;;
+    linux-x86_64|linux-x86_64-vulkan|linux-arm64|macos-arm64|macos-x86_64) ;;
+    *) die "unknown --platform '$FORCE_PLATFORM' (linux-x86_64, linux-x86_64-vulkan, linux-arm64, macos-arm64, macos-x86_64)" ;;
   esac
   [ "${FORCE_PLATFORM%%-*}" = "$os" ] || die "--platform $FORCE_PLATFORM cannot run on $OS"
   [ "$FORCE_PLATFORM" = "$PLATFORM" ] || say "Installing $FORCE_PLATFORM on a $PLATFORM machine (--platform)"
   PLATFORM="$FORCE_PLATFORM"
 fi
+
+# Which build of this platform: GPU first (decided after any --platform).
+VARIANT=""  # "" (CPU, or Metal on macOS arm64) | -vulkan
+case "$PLATFORM" in
+  *-vulkan) ;;  # named explicitly with --platform
+  linux-x86_64)
+    if [ "$DEVICE" = gpu ] || { [ "$DEVICE" = auto ] && has_vulkan_gpu; }; then VARIANT="-vulkan"; fi ;;
+  macos-arm64) ;;  # includes Metal
+  *) [ "$DEVICE" != gpu ] || [ "$FROM_SOURCE" = 1 ] || die "no GPU build for $PLATFORM; use --cpu (or --from-source with a GPU toolkit)" ;;
+esac
 
 # --- from source ------------------------------------------------------------------
 if [ "$FROM_SOURCE" = 1 ]; then
@@ -78,15 +105,33 @@ if [ "$FROM_SOURCE" = 1 ]; then
   command -v ninja >/dev/null 2>&1 && GEN="-G Ninja"
   JOBS="$( (command -v nproc >/dev/null && nproc) || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
   BUILD="$ROOT/build/install-release"
-  say "Building DynaLM from source ($PLATFORM)"
+  # GPU first: enable every GPU backend whose toolkit is here (docs/gpu.md).
+  GPU_FLAGS=""
+  GPU_NAMES=""
+  cmake_ver="$(cmake --version | awk 'NR==1{print $3}')"
+  cmake_ok=$(printf '%s\n3.28\n' "$cmake_ver" | sort -t. -k1,1n -k2,2n | head -1)
+  if [ "$DEVICE" != cpu ]; then
+    if [ "$cmake_ok" != 3.28 ]; then
+      say "CMake $cmake_ver is older than 3.28: building without GPU support"
+    else
+      if [ "$PLATFORM" = macos-arm64 ]; then GPU_FLAGS="$GPU_FLAGS -DENABLE_METAL=ON"; GPU_NAMES="$GPU_NAMES Metal"; fi
+      if [ "$os" = linux ] && command -v glslc >/dev/null 2>&1 &&
+         { [ -n "${VULKAN_SDK:-}" ] || [ -f /usr/include/vulkan/vulkan.h ]; }; then
+        GPU_FLAGS="$GPU_FLAGS -DENABLE_VULKAN=ON"; GPU_NAMES="$GPU_NAMES Vulkan"
+      fi
+      if command -v nvcc >/dev/null 2>&1; then GPU_FLAGS="$GPU_FLAGS -DENABLE_CUDA=ON"; GPU_NAMES="$GPU_NAMES CUDA"; fi
+    fi
+    [ -n "$GPU_FLAGS" ] || [ "$DEVICE" != gpu ] || die "--gpu: no GPU toolkit found (Metal needs macOS arm64; Vulkan: glslc + headers; CUDA: nvcc)"
+  fi
+  say "Building DynaLM from source ($PLATFORM; GPU:${GPU_NAMES:- none})"
   # shellcheck disable=SC2086
   cmake -S "$ROOT" -B "$BUILD" $GEN -DCMAKE_BUILD_TYPE=Release -DENABLE_BENCHMARKS=OFF \
-    -DDYNALM_STATIC_RUNTIME=ON
+    -DDYNALM_STATIC_RUNTIME=ON $GPU_FLAGS
   cmake --build "$BUILD" --parallel "$JOBS"
   cmake --install "$BUILD" --prefix "$PREFIX"
 else
   # --- release archive ------------------------------------------------------------
-  NAME="dynalm-$PLATFORM"
+  NAME="dynalm-$PLATFORM$VARIANT"
   TMP="$(mktemp -d 2>/dev/null || mktemp -d -t dynalm)"
   trap 'rm -rf "$TMP"' EXIT INT TERM
   fetch() {  # url dest
@@ -105,8 +150,14 @@ else
       BASE="https://github.com/$REPO/releases/download/$VERSION"
     fi
     say "Downloading $NAME.tar.gz ($VERSION)"
-    fetch "$BASE/$NAME.tar.gz" "$TMP/$NAME.tar.gz" ||
-      die "no $NAME.tar.gz in release '$VERSION' of $REPO (platform not published?). Try --from-source."
+    if ! fetch "$BASE/$NAME.tar.gz" "$TMP/$NAME.tar.gz"; then
+      # An older release without the GPU variant: the CPU build, unless --gpu.
+      [ -n "$VARIANT" ] && [ "$DEVICE" = auto ] || die "no $NAME.tar.gz in release '$VERSION' of $REPO (platform not published?). Try --from-source."
+      say "No GPU build in this release; installing the CPU build"
+      NAME="dynalm-$PLATFORM"
+      fetch "$BASE/$NAME.tar.gz" "$TMP/$NAME.tar.gz" ||
+        die "no $NAME.tar.gz in release '$VERSION' of $REPO (platform not published?). Try --from-source."
+    fi
     fetch "$BASE/SHA256SUMS" "$TMP/SHA256SUMS" || die "release '$VERSION' has no SHA256SUMS; refusing to install unverified"
     ARCHIVE="$TMP/$NAME.tar.gz"
     SUMS="$TMP/SHA256SUMS"
