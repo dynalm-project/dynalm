@@ -16,11 +16,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <random>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "cli/commands.h"
@@ -90,6 +92,16 @@ const char* hf_token() {
   if (const char* t = std::getenv("HF_TOKEN"); t && *t) return t;
   if (const char* t = std::getenv("HUGGING_FACE_HUB_TOKEN"); t && *t) return t;
   return nullptr;
+}
+
+// Network failures after which resuming the partial file can succeed: DNS or
+// connect failure, partial file, timeout or stall, empty reply, send / receive
+// failure, TLS handshake, HTTP/2 stream error.
+bool resumable_error(int rc) {
+  switch (rc) {
+    case 6: case 7: case 18: case 28: case 35: case 52: case 55: case 56: case 92: return true;
+    default: return false;
+  }
 }
 
 // curl's exit codes, in words.
@@ -175,7 +187,10 @@ int cmd_pull(std::span<const std::string_view> args) {
   const fs::path dest = fs::path(dir) / name;
   const bool present = !check_only && fs::exists(dest, ec);
 
-  std::vector<std::string> common = {"curl", "-fL", "--retry", "5", "--retry-delay", "3"};
+  // A connection that goes silent must not hang forever: below 1 KB/s for 60 s
+  // ends the attempt (curl exit 28). The download loop below resumes it.
+  std::vector<std::string> common = {"curl",          "-fL",          "--retry", "5",  "--retry-delay", "3",
+                                     "--connect-timeout", "30", "--speed-limit", "1024", "--speed-time", "60"};
   TempFile header;
   if (const char* tok = hf_token(); tok && url->starts_with("https://huggingface.co/")) {
     // A file only this user can read keeps the token out of the process list.
@@ -238,9 +253,27 @@ int cmd_pull(std::span<const std::string_view> args) {
     const std::string part = dest.string() + ".part";
     std::printf("downloading to %s\n", dest.string().c_str());
     std::fflush(stdout);
-    cmd = common;
+    // Retried here, not with curl's --retry: curl retries from the offset the
+    // transfer started at, so a stall would restart the file from the beginning.
+    // Each attempt here resumes the partial file (-C -).
+    cmd.clear();
+    for (size_t i = 0; i < common.size(); ++i) {
+      if (common[i] == "--retry" || common[i] == "--retry-delay") {
+        ++i;  // and its value
+        continue;
+      }
+      cmd.push_back(common[i]);
+    }
     cmd.insert(cmd.end(), {"-#", "-C", "-", "-o", part, *url});
-    if (const int dl = run_process(cmd); dl != 0) {
+    constexpr int kAttempts = 10;
+    int dl = 0;
+    for (int attempt = 1; attempt <= kAttempts; ++attempt) {
+      dl = run_process(cmd);
+      if (dl == 0 || !resumable_error(dl) || attempt == kAttempts) break;
+      std::fprintf(stderr, "pull: %s; resuming (attempt %d of %d)\n", curl_error(dl).c_str(), attempt + 1, kAttempts);
+      std::this_thread::sleep_for(std::chrono::seconds(std::min(3 * attempt, 30)));
+    }
+    if (dl != 0) {
       std::fprintf(stderr, "pull: %s\n      run the same command again to resume\n", curl_error(dl).c_str());
       return 1;
     }
