@@ -85,8 +85,8 @@ tests; CI runs it on every platform and under the sanitizers. Tests whose kernel
 Accuracy of activation-quantized paths is checked with
 `build/<preset>/dynalm/benchmarks/bench_int8_accuracy <model.gguf> [threads]` against the DD-053
 contract (perplexity change ≤ +1%, mean KL ≤ 0.0025). Set `BENCH_PREFILL_ONLY=1
-BENCH_PREFILL_CHUNKS=32,64` for the prefill paths, with the path's environment switches set
-(see [dynacore.md](dynacore.md)).
+BENCH_PREFILL_CHUNKS=32,64` for the prefill paths, with the path's environment switches set.
+
 
 ## Platforms
 

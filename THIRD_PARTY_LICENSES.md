@@ -35,7 +35,8 @@ SOFTWARE.
 ## ggml v0.27.0 (Metal builds only)
 
 Compiled into `dynalm` and `dynacorec` only when built with `-DENABLE_METAL=ON` (the Metal GPU
-backend, docs/gpu-backend.md). Source: https://github.com/ggml-org/ggml, commit
+backend, docs/gpu.md). Source: https://github.com/ggml-org/ggml, commit
+
 `a05c9922613c6a2230dbb1d0de679519ecafb4f0` (tag v0.27.0), pinned in `cmake/Ggml.cmake`.
 CPU-only builds contain no ggml code.
 

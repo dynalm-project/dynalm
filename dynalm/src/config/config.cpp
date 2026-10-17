@@ -15,7 +15,7 @@ namespace {
 constexpr YamlKey kYamlKeys[] = {
     {"model.path", "model", "", "model file, directory or name (qwen3:4b)"},
     {"model.id", "model-id", "file name", "id reported by /v1/models"},
-    {"runtime.device", "backend", "auto", "auto | cpu | metal | vulkan | cuda (auto = a built-in GPU that runs the model, else the CPU)"},
+    {"runtime.device", "backend", "auto", "auto | gpu | cpu | metal | vulkan | cuda (auto = GPU first, else the CPU)"},
     {"runtime.execution", "execution", "reference", "reference | compiled (DynaCore IR + fusion)"},
     {"runtime.threads", "threads", "auto", "compute threads; auto = physical cores"},
     {"runtime.context_length", "ctx", "auto", "KV cache capacity in tokens; auto = from free RAM"},

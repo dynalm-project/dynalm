@@ -91,7 +91,7 @@ dynalm pull unsloth/gemma-3-4b-it-GGUF/gemma-3-4b-it-Q4_K_M.gguf --check
 - Gated models (e.g. official Llama): accept the license on Hugging Face, then set `HF_TOKEN`.
 - Needs `curl`, which is built into Windows 10+, macOS and Linux.
 
-Which models to pick: [dynalm.md](dynalm.md#supported-models), or `dynalm models --available`.
+Which models to pick: run `dynalm models --available` or see the README catalog.
 
 ### `dynalm models`: local models
 
@@ -202,7 +202,8 @@ dynalm run <model> -p <prompt> [options]
 | `--batch N` | Max tokens per forward pass (default 256) |
 | `--kv f16\|f32` | KV cache precision (default f16) |
 | `--int8-decode N` | int8 activations for matmuls of ≤ N rows (default 4; 0 = off, making output independent of batching) |
-| `--backend auto\|cpu\|metal\|vulkan\|cuda` | Compute backend. `auto` (default): a GPU built into this binary (CUDA, then Metal, then Vulkan) when it starts and runs the model, else the CPU (the reason is logged). Each GPU needs its build option (`-DENABLE_METAL/VULKAN/CUDA=ON`); experimental, [gpu-backend.md](gpu-backend.md). `DYNACORE_GPU_INDEX=N` picks the N-th GPU of that kind |
+| `--gpu` / `--cpu` | Use the GPU (the default when it can run the model) / use the CPU. Same as `--backend gpu` / `--backend cpu` |
+| `--backend auto\|gpu\|cpu\|metal\|vulkan\|cuda` | Compute backend. `auto` (default): a GPU built into this binary (CUDA, then Metal, then Vulkan) when it starts and runs the model, else the CPU (the reason is logged). Each GPU needs its build option (`-DENABLE_METAL/VULKAN/CUDA=ON`); see [gpu.md](gpu.md). `DYNACORE_GPU_INDEX=N` picks the N-th GPU of that kind |
 | `--no-stream` | Print the answer at the end instead of word by word |
 
 Sampling (default for `run`: greedy, i.e. always the most likely token):

@@ -141,6 +141,17 @@ Result<ExecutionMode> parse_execution_mode(std::string_view s) {
   return InvalidArgument("unknown execution mode '" + std::string(s) + "' (reference, compiled)");
 }
 
+Status apply_backend_choice(std::string_view choice, EngineOptions& o) {
+  o.backend_auto = choice == "auto" || choice == "gpu";
+  o.backend_require_gpu = choice == "gpu";
+  if (o.backend_auto) {
+    o.backend = DeviceKind::kCpu;
+    return Status::Ok();
+  }
+  ENGINE_ASSIGN_OR_RETURN(o.backend, parse_device_kind(choice));
+  return Status::Ok();
+}
+
 Status gpu_model_support(const ModelConfig& c, DType kv_dtype) {
   if (c.moe.num_experts > 0) return Unsupported("mixture-of-experts models are not supported on the GPU yet");
   if (c.attn_qk_norm) return Unsupported("per-head Q/K norm (Qwen3, Gemma 3) is not supported on the GPU yet");
@@ -159,27 +170,40 @@ Result<std::unique_ptr<Engine>> Engine::create(EngineOptions opts) {
   if (opts.backend_auto) {
     // The first GPU built in (CUDA, Metal, Vulkan) that runs the model and
     // starts; otherwise the CPU, with the reason logged.
+    // With --gpu (backend_require_gpu) there is no CPU fallback.
+    const bool require_gpu = opts.backend_require_gpu;
     opts.backend_auto = false;
+    opts.backend_require_gpu = false;
     opts.backend = DeviceKind::kCpu;
     std::vector<DeviceKind> gpus;
     for (DeviceKind k : compiled_devices()) {
       if (k != DeviceKind::kCpu) gpus.push_back(k);
     }
-    if (gpus.empty()) return create(std::move(opts));
+    if (gpus.empty()) {
+      if (require_gpu) {
+        return Unsupported("--gpu: this DynaLM has no GPU support built in (install a GPU build, see docs/gpu.md); "
+                           "use --cpu");
+      }
+      return create(std::move(opts));
+    }
     {
       ENGINE_ASSIGN_OR_RETURN(auto probe, load_model(opts.model_path));
       if (Status s = gpu_model_support(probe->config, opts.kv_dtype); !s.ok()) {
+        if (require_gpu) return Unsupported("--gpu: " + s.message() + "; use --cpu");
         LOG_INFO("Device: auto selects the CPU: {}", s.message());
         return create(std::move(opts));
       }
     }
+    Status last = Status::Ok();
     for (DeviceKind k : gpus) {
       EngineOptions gpu = opts;
       gpu.backend = k;
       auto r = create(std::move(gpu));
       if (r.ok()) return r;
+      last = r.status();
       LOG_WARN("Device: the {} GPU failed to start ({})", device_kind_name(k), r.status().message());
     }
+    if (require_gpu) return Unsupported("--gpu: no GPU could start (" + last.message() + "); use --cpu");
     LOG_INFO("Device: auto selects the CPU (no GPU started)");
     return create(std::move(opts));
   }

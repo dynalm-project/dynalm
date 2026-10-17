@@ -208,21 +208,28 @@ jobs:
       matrix:
         include:
           - { name: linux-x86_64, os: ubuntu-24.04 }
-          - { name: macos-arm64, os: macos-14 }
+          # Same variants as the release: macOS arm64 with Metal, Vulkan builds.
+          - { name: macos-arm64 (Metal), os: macos-14, cmake_args: -DENABLE_METAL=ON }
           - { name: windows-x86_64, os: windows-2022 }
           - { name: windows-arm64, os: windows-11-arm, msvc_arch: arm64 }
+          - { name: linux-x86_64-vulkan, os: ubuntu-24.04, vulkan: true, cmake_args: -DENABLE_VULKAN=ON }
+          - { name: windows-x86_64-vulkan, os: windows-2022, vulkan: true, cmake_args: -DENABLE_VULKAN=ON }
     steps:
       - uses: actions/checkout@v4
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y ninja-build
       - if: runner.os == 'macOS'
         run: brew install ninja
+      - name: Vulkan SDK
+        if: matrix.vulkan
+        shell: bash
+        run: bash tools/ci/setup_vulkan_sdk.sh
       - if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: ${{ matrix.msvc_arch || 'x64' }}
       - shell: bash
-        run: bash tools/ci/package.sh
+        run: bash tools/ci/package.sh ${{ matrix.cmake_args }}
 
   docker:
     name: docker image

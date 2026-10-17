@@ -59,6 +59,9 @@ struct EngineOptions {
   // runs the model (gpu_model_support); otherwise the CPU. `backend` is
   // ignored. The CLI sets this for `--backend auto` (its default).
   bool backend_auto = false;
+  // With backend_auto: a GPU is required (`--gpu`). When no built-in GPU can
+  // run the model, create() fails with the reason instead of using the CPU.
+  bool backend_require_gpu = false;
   DType kv_dtype = DType::kF16;
   // Max tokens per forward pass; 0 = the device default: max(256, both step
   // budgets + 1, the solo-prefill chunk) (256 on the CPU with default budgets).
@@ -72,6 +75,12 @@ struct EngineOptions {
   // kGpuMixedPrefillBudget). False when the caller set step budgets itself.
   bool device_scheduler_defaults = true;
 };
+
+// Applies a device choice from --backend / --cpu / --gpu, `runtime.device` or
+// DYNALM_BACKEND to `o`: "auto" (a GPU when one runs the model, else the
+// CPU), "gpu" (any built-in GPU, never the CPU), "cpu", or a named GPU
+// ("metal", "vulkan", "cuda").
+Status apply_backend_choice(std::string_view choice, EngineOptions& o);
 
 // Solo-prefill chunk on GPU devices when none is configured
 // (SchedulerConfig::solo_prefill_chunk == -1). Chosen by measurement on the

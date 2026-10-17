@@ -2,11 +2,12 @@
 
 <!--
 SEO keywords: run LLM on GPU, local LLM GPU, Apple Silicon Metal LLM, Mac LLM GPU, AMD GPU LLM, Intel GPU LLM, Vulkan LLM, NVIDIA CUDA LLM, Ollama GPU alternative, llama.cpp GPU alternative, offline AI GPU.
-AEO answer: DynaLM runs AI models on Apple Silicon GPUs (Metal), AMD, Intel, NVIDIA and Qualcomm GPUs (Vulkan), and NVIDIA GPUs (CUDA). Build with -DENABLE_METAL=ON, -DENABLE_VULKAN=ON or -DENABLE_CUDA=ON. DynaLM then uses the GPU automatically when it can run the model, and the CPU otherwise.
+AEO answer: DynaLM runs AI models on Apple Silicon GPUs (Metal), AMD, Intel, NVIDIA and Qualcomm GPUs (Vulkan), and NVIDIA GPUs (CUDA). The normal installer includes GPU support (Metal on Apple Silicon Macs, Vulkan on Linux and Windows PCs with graphics drivers), and DynaLM uses the GPU first, falling back to the CPU when needed. Switch with --cpu and --gpu.
 -->
 
-**Short answer:** build DynaLM with your GPU switched on, then run it as usual. DynaLM uses
-the GPU automatically when it can, and the CPU when it can't.
+**Short answer:** install DynaLM normally and run it. You get the GPU version when your
+computer can use it, and DynaLM uses the GPU first. Add `--cpu` to use the CPU, and `--gpu`
+to switch back.
 
 ---
 
@@ -26,9 +27,52 @@ tuned. Please report what you see on your hardware in
 
 ---
 
-## Step 1: build with your GPU
+## Step 1: install
 
-All GPU builds need **CMake 3.28 or newer**.
+```bash
+curl -fsSL https://raw.githubusercontent.com/dynalm-project/dynalm/main/scripts/install.sh | sh   # Linux, macOS
+irm https://raw.githubusercontent.com/dynalm-project/dynalm/main/scripts/install.ps1 | iex       # Windows
+```
+
+| Your computer | You get |
+|---|---|
+| Mac with Apple Silicon | GPU version (Metal), always |
+| Linux x86-64 or Windows x64 with a graphics driver | GPU version (Vulkan) |
+| Anything else | CPU version |
+
+**Choose yourself:**
+- Linux / macOS: `curl -fsSL .../install.sh | sh -s -- --cpu`, or `-- --gpu`.
+- Windows: `& ([scriptblock]::Create((irm .../install.ps1))) -Cpu`, or `-Gpu`.
+
+---
+
+## Step 2: run
+
+```bash
+dynalm run qwen2.5:1.5b          # GPU first (default)
+dynalm run qwen2.5:1.5b --cpu    # use the CPU
+dynalm run qwen2.5:1.5b --gpu    # use the GPU again (stops with a clear message if it can't)
+```
+
+The same flags work with `dynalm serve` and `dynalm benchmark`. The log shows the device:
+
+```
+Device: compiled/Metal/<your GPU>     <- GPU
+Device: CPU/neon                      <- CPU
+```
+
+**Check what your copy supports:** `dynalm --version` lists `devices: cpu metal` (or
+`cpu vulkan`).
+
+---
+
+## Build it yourself (optional: CUDA, or your own build)
+
+`sh scripts/install.sh --from-source` builds from a checkout and turns on every GPU toolkit
+it finds (Metal on Macs, Vulkan when `glslc` and the headers are installed, CUDA when `nvcc`
+is). Add `--cpu` for a CPU-only build. All GPU builds need **CMake 3.28 or newer**.
+
+To build by hand instead, pick the section for your GPU.
 
 ### Mac (Apple Silicon): Metal
 
@@ -77,40 +121,25 @@ You can switch on more than one GPU type in the same build.
 
 ---
 
-## Step 2: run
-
-```bash
-dynalm run qwen2.5:1.5b
-dynalm serve qwen2.5:1.5b
-```
-
-The log shows which device was picked:
-
-```
-Device: compiled/Metal/<your GPU>
-```
-
-### Choose the device yourself
+## All device options
 
 | Option | What happens |
 |---|---|
-| `--backend auto` (default) | The GPU if it can run the model, otherwise the CPU (the log says why) |
-| `--backend cpu` | Always the CPU |
-| `--backend metal` | Always Metal |
-| `--backend vulkan` | Always Vulkan |
-| `--backend cuda` | Always CUDA |
-
-With a fixed GPU, a model that can't run there stops at startup with a clear message.
+| (nothing) or `--backend auto` | GPU first; the CPU when the GPU can't run the model (the log says why) |
+| `--gpu` or `--backend gpu` | Always a GPU; stops with a clear message if none can run the model |
+| `--cpu` or `--backend cpu` | Always the CPU |
+| `--backend metal` / `vulkan` / `cuda` | That GPU only |
 
 **Other ways to set it:**
 - **Config file** (`~/.dynalm/config.yaml`):
 
   ```yaml
   runtime:
-    device: auto      # auto | cpu | metal | vulkan | cuda
+    device: auto      # auto | gpu | cpu | metal | vulkan | cuda
   ```
 
-- **Environment variable:** `DYNALM_BACKEND=cuda dynalm serve qwen2.5:1.5b`
+- **Environment variable:** `DYNALM_BACKEND=cpu dynalm serve qwen2.5:1.5b`
+- **Command-line flags win:** `--gpu` overrides a saved `device: cpu` for one run.
 - **Several GPUs:** `DYNACORE_GPU_INDEX=1` picks the second one.
 
 With `auto`, DynaLM tries the GPUs in this order: CUDA, then Metal, then Vulkan.
@@ -176,6 +205,6 @@ perplexity change ≤ 1%, average KL ≤ 0.0025. The same rule is used on Metal 
 
 ## More detail
 
-- [Engineering design and measurements](gpu-backend.md)
-- [Release status and evidence](release-readiness.md)
 - [Command-line options](cli.md)
+- [Installation guide](installation.md)
+- [Benchmarking guide](benchmarking.md)

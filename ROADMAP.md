@@ -96,5 +96,5 @@ timeline
 
 Community input directly shapes DynaLM's priorities:
 - Propose feature requests or report architectural enhancements via [GitHub Issues](https://github.com/dynalm-project/dynalm/issues).
-- Check [docs/architecture.md](docs/architecture.md) and [docs/dynalm.md](docs/dynalm.md) to understand internal components.
+- Check the [documentation](README.md#documentation) and [CLI reference](docs/cli.md) for current features.
 - Review [CONTRIBUTING.md](CONTRIBUTING.md) to submit pull requests.

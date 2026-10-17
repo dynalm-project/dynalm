@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.1.6] - 2026-10-17
+
+GPU first, with nothing to set up: the normal installers now deliver GPU builds.
+
+### GPU by default
+- **Downloads with the GPU included:**
+  - the macOS Apple Silicon package includes Metal;
+  - new `dynalm-linux-x86_64-vulkan` and `dynalm-windows-x86_64-vulkan` packages.
+- **The installers choose the build:** they install the Vulkan package when the machine has a
+  Vulkan driver and a GPU, otherwise the CPU package. Older releases without a Vulkan package
+  fall back to the CPU package.
+- **Installer flags:** `install.sh --cpu` / `--gpu` and `install.ps1 -Cpu` / `-Gpu`.
+- **From source:** `install.sh --from-source` enables every GPU toolkit it finds (Metal,
+  Vulkan, CUDA).
+- **Run-time flags:** `--cpu` and `--gpu` on `run`, `serve` and `benchmark`;
+  `runtime.device: gpu` in the config file.
+  - `--gpu` requires a GPU and stops with the reason instead of using the CPU.
+  - `--gpu` also overrides a saved `device: cpu` for one run.
+  - The default (`auto`) is GPU first, with CPU fallback.
+- **`dynalm --version`** lists the devices built in (for example `devices: cpu metal`).
+- **Release workflow:**
+  - the toolchain install retries;
+  - publish downloads only the platform archives.
+- **CI:** package jobs for the Metal and Vulkan variants. `install-check` installs the Vulkan
+  build with `--gpu`.
+
 ## [0.1.5] - 2026-10-17
 
 0.1.4 was prepared but never published as a GitHub release. Its changes (the [0.1.4] section

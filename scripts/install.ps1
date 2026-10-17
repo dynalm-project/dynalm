@@ -16,6 +16,13 @@
   powershell -ExecutionPolicy Bypass -File scripts\install.ps1 -Version v0.1.0
   powershell -ExecutionPolicy Bypass -File scripts\install.ps1 -Archive .\dynalm-windows-x86_64.zip -Sha256Sums .\SHA256SUMS
   powershell -ExecutionPolicy Bypass -File scripts\install.ps1 -FromSource
+  powershell -ExecutionPolicy Bypass -File scripts\install.ps1 -Cpu     # CPU-only build
+  powershell -ExecutionPolicy Bypass -File scripts\install.ps1 -Gpu     # the GPU (Vulkan) build
+
+  GPU first: on x64 PCs with a Vulkan driver (vulkan-1.dll, installed with AMD,
+  Intel and NVIDIA graphics drivers) the Vulkan build dynalm-windows-x86_64-vulkan
+  is installed; otherwise the CPU build. -FromSource enables Vulkan (VULKAN_SDK)
+  and CUDA (nvcc) when their toolkits are found.
 #>
 param(
   [string]$Prefix = (Join-Path $env:LOCALAPPDATA 'Programs\DynaLM'),
@@ -24,7 +31,9 @@ param(
   [string]$Sha256Sums = '',
   [string]$Repo = $(if ($env:DYNALM_REPO) { $env:DYNALM_REPO } else { 'dynalm-project/dynalm' }),
   [switch]$NoPath,
-  [switch]$FromSource
+  [switch]$FromSource,
+  [switch]$Cpu,
+  [switch]$Gpu
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'  # Invoke-WebRequest is far faster without the progress bar
@@ -40,6 +49,16 @@ switch ($cpu) {
   default { throw "Unsupported CPU architecture '$cpu' (supported: x86-64, ARM64)." }
 }
 $bin = Join-Path $Prefix 'bin'
+if ($Cpu -and $Gpu) { throw 'Use either -Cpu or -Gpu, not both.' }
+
+# GPU first: the Vulkan build when this PC has a Vulkan driver.
+$variant = ''
+$hasVulkan = Test-Path (Join-Path $env:WINDIR 'System32\vulkan-1.dll')
+if ($platform -eq 'windows-x86_64') {
+  if ($Gpu -or (-not $Cpu -and $hasVulkan)) { $variant = '-vulkan' }
+} elseif ($Gpu -and -not $FromSource) {
+  throw "No GPU build is published for $platform; use -Cpu (or -FromSource with a GPU toolkit)."
+}
 
 if ($FromSource) {
   $Root = Split-Path -Parent $PSScriptRoot
@@ -52,17 +71,28 @@ if ($FromSource) {
   $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvarsall.bat'
   $vsArch = if ($cpu -eq 'ARM64') { 'arm64' } else { 'x64' }
   $build = Join-Path $Root 'build\install-release'
+  # GPU first: every GPU backend whose toolkit is installed (docs/gpu.md).
+  $gpuFlags = @()
+  if (-not $Cpu) {
+    if ($env:VULKAN_SDK) { $gpuFlags += '-DENABLE_VULKAN=ON' }
+    if (Get-Command nvcc -ErrorAction SilentlyContinue) { $gpuFlags += '-DENABLE_CUDA=ON' }
+    if ($Gpu -and $gpuFlags.Count -eq 0) { throw '-Gpu: no GPU toolkit found (Vulkan SDK: VULKAN_SDK; CUDA: nvcc).' }
+  }
   $steps = @(
     "call `"$vcvars`" $vsArch >nul",
-    "cmake -S `"$Root`" -B `"$build`" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=cl -DENABLE_BENCHMARKS=OFF -DDYNALM_STATIC_RUNTIME=ON",
+    "cmake -S `"$Root`" -B `"$build`" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=cl -DENABLE_BENCHMARKS=OFF -DDYNALM_STATIC_RUNTIME=ON $($gpuFlags -join ' ')",
     "cmake --build `"$build`"",
     "cmake --install `"$build`" --prefix `"$Prefix`""
   ) -join ' && '
-  Say "Building DynaLM from source ($platform)"
+  Say "Building DynaLM from source ($platform; GPU flags: $(if ($gpuFlags.Count) { $gpuFlags -join ' ' } else { 'none' }))"
   cmd /c $steps
   if ($LASTEXITCODE -ne 0) { throw "build failed (exit $LASTEXITCODE)" }
 } else {
-  $name = "dynalm-$platform"
+  $name = "dynalm-$platform$variant"
+  if ($Archive) {  # a local archive names its own variant
+    $leaf = Split-Path -Leaf $Archive
+    if ($leaf -match "^dynalm-$([regex]::Escape($platform))(-vulkan|-cuda)?\.zip$") { $name = $leaf -replace '\.zip$', '' }
+  }
   $tmp = Join-Path ([IO.Path]::GetTempPath()) ("dynalm-install-" + [Guid]::NewGuid())
   New-Item -ItemType Directory -Force -Path $tmp | Out-Null
   try {
@@ -72,7 +102,15 @@ if ($FromSource) {
       $Archive = Join-Path $tmp "$name.zip"
       $Sha256Sums = Join-Path $tmp 'SHA256SUMS'
       try { Invoke-WebRequest -UseBasicParsing -Uri "$base/$name.zip" -OutFile $Archive }
-      catch { throw "No $name.zip in release '$Version' of $Repo. Try -FromSource. ($_)" }
+      catch {
+        # An older release without the GPU variant: the CPU build, unless -Gpu.
+        if (-not $variant -or $Gpu) { throw "No $name.zip in release '$Version' of $Repo. Try -FromSource. ($_)" }
+        Say 'No GPU build in this release; installing the CPU build'
+        $name = "dynalm-$platform"
+        $Archive = Join-Path $tmp "$name.zip"
+        try { Invoke-WebRequest -UseBasicParsing -Uri "$base/$name.zip" -OutFile $Archive }
+        catch { throw "No $name.zip in release '$Version' of $Repo. Try -FromSource. ($_)" }
+      }
       try { Invoke-WebRequest -UseBasicParsing -Uri "$base/SHA256SUMS" -OutFile $Sha256Sums }
       catch { throw "Release '$Version' has no SHA256SUMS; refusing to install an unverified download." }
     }
