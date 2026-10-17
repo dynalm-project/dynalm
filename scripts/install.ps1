@@ -40,13 +40,14 @@ $ProgressPreference = 'SilentlyContinue'  # Invoke-WebRequest is far faster with
 function Say($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 
 # The machine's native architecture. An x64 PowerShell emulated on an ARM64 PC sees
-# PROCESSOR_ARCHITECTURE=AMD64, so read the system-wide value first.
-$cpu = (Get-ItemProperty -ErrorAction SilentlyContinue 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment').PROCESSOR_ARCHITECTURE
-if (-not $cpu) { $cpu = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE } }
-switch ($cpu) {
+# PROCESSOR_ARCHITECTURE=AMD64, so read the system-wide value first. (Not named
+# $cpu: PowerShell names are case-insensitive and -Cpu is a parameter.)
+$machineArch = (Get-ItemProperty -ErrorAction SilentlyContinue 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment').PROCESSOR_ARCHITECTURE
+if (-not $machineArch) { $machineArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE } }
+switch ($machineArch) {
   'AMD64' { $platform = 'windows-x86_64' }
   'ARM64' { $platform = 'windows-arm64' }
-  default { throw "Unsupported CPU architecture '$cpu' (supported: x86-64, ARM64)." }
+  default { throw "Unsupported CPU architecture '$machineArch' (supported: x86-64, ARM64)." }
 }
 $bin = Join-Path $Prefix 'bin'
 if ($Cpu -and $Gpu) { throw 'Use either -Cpu or -Gpu, not both.' }
@@ -65,11 +66,11 @@ if ($FromSource) {
   if (-not (Test-Path (Join-Path $Root 'CMakeLists.txt'))) { throw "-FromSource needs a DynaLM checkout ($Root)." }
   $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
   if (-not (Test-Path $vswhere)) { throw 'Visual Studio 2022 (Build Tools) with the C++ workload is required for -FromSource.' }
-  $vcComponent = if ($cpu -eq 'ARM64') { 'Microsoft.VisualStudio.Component.VC.Tools.ARM64' } else { 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64' }
+  $vcComponent = if ($machineArch -eq 'ARM64') { 'Microsoft.VisualStudio.Component.VC.Tools.ARM64' } else { 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64' }
   $vs = & $vswhere -latest -products * -requires $vcComponent -property installationPath
   if (-not $vs) { throw 'Visual Studio is installed without the C++ workload ("Desktop development with C++").' }
   $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvarsall.bat'
-  $vsArch = if ($cpu -eq 'ARM64') { 'arm64' } else { 'x64' }
+  $vsArch = if ($machineArch -eq 'ARM64') { 'arm64' } else { 'x64' }
   $build = Join-Path $Root 'build\install-release'
   # GPU first: every GPU backend whose toolkit is installed (docs/gpu.md).
   $gpuFlags = @()

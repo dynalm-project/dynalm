@@ -16,6 +16,11 @@ case "$(uname -s)" in
     curl -fsSL --retry 5 -o "$dir/sdk.tar.xz" "$BASE/linux/vulkansdk-linux-x86_64-$VER.tar.xz"
     tar -xJf "$dir/sdk.tar.xz" -C "$dir"
     sdk="$dir/$VER/x86_64"
+    # Recent Linux SDKs ship no loader (libvulkan.so): link the system one.
+    if ! ls "$sdk"/lib/libvulkan.so* >/dev/null 2>&1; then
+      sudo apt-get update -qq
+      sudo apt-get install -y -qq libvulkan-dev
+    fi
     echo "VULKAN_SDK=$sdk" >> "$GITHUB_ENV"
     echo "LD_LIBRARY_PATH=$sdk/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
     echo "$sdk/bin" >> "$GITHUB_PATH"
