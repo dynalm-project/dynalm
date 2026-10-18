@@ -101,6 +101,52 @@ size_t match_llama3(const Cps& s, size_t i, size_t n, size_t max_digits) {
   return match_trailing_ws(s, i, n);
 }
 
+// GPT-4o alternatives 1-2 from k (after the optional prefix): the end of
+// U*W+ (U* backs off until a W can start), else of U+W*, plus a contraction;
+// 0 when neither matches.
+size_t gpt4o_word(const Cps& s, size_t k, size_t n) {
+  const size_t u = run_end(s, k, n, unicode::is_upper_class);
+  size_t e = 0;
+  for (size_t j = u + 1; j-- > k;) {
+    if (j < n && unicode::is_lower_class(s.cp[j])) {
+      e = run_end(s, j, n, unicode::is_lower_class);
+      break;
+    }
+  }
+  if (e == 0) {
+    if (u == k) return 0;
+    e = run_end(s, u, n, unicode::is_lower_class);
+  }
+  return e + match_contraction(s, e, n, true);
+}
+
+size_t match_gpt4o(const Cps& s, size_t i, size_t n) {
+  const uint32_t c = s.cp[i];
+  // [^\r\n\p{L}\p{N}]? taken first, then without it.
+  if (!is_crlf(c) && !is_letter(c) && !is_number(c) && i + 1 < n) {
+    if (const size_t e = gpt4o_word(s, i + 1, n)) return e - i;
+  }
+  if (const size_t e = gpt4o_word(s, i, n)) return e - i;
+  // \p{N}{1,3}
+  if (is_number(c)) {
+    size_t e = i;
+    while (e < n && e - i < 3 && is_number(s.cp[e])) ++e;
+    return e - i;
+  }
+  // ` ?[^\s\p{L}\p{N}]+[\r\n/]*`
+  const size_t k = (c == ' ' && i + 1 < n) ? i + 1 : i;
+  if (is_other(s.cp[k])) {
+    const size_t e = run_end(s, k, n, is_other);
+    return run_end(s, e, n, [](uint32_t x) { return is_crlf(x) || x == '/'; }) - i;
+  }
+  // \s*[\r\n]+ : whitespace up to and including the last newline of the run.
+  const size_t e = run_end(s, i, n, is_whitespace);
+  for (size_t m = e; m > i; --m) {
+    if (is_crlf(s.cp[m - 1])) return m - i;
+  }
+  return match_trailing_ws(s, i, n);
+}
+
 template <typename Match>
 void split(const Cps& s, std::string_view text, size_t begin, size_t end, Match match,
            std::vector<std::string_view>& out) {
@@ -129,6 +175,7 @@ Result<PreTokenizer> pretokenizer_from_name(std::string_view name) {
       name == "codeshell" || name == "exaone" || name == "minerva-7b") {
     return PreTokenizer::kStarCoder;
   }
+  if (name == "gpt-4o" || name == "llama4") return PreTokenizer::kGpt4o;
   return Unsupported("pre-tokenizer '" + std::string(name) + "' is not supported yet");
 }
 
@@ -148,6 +195,9 @@ void pretokenize(PreTokenizer kind, std::string_view text, std::vector<std::stri
       break;
     case PreTokenizer::kQwen2:
       split(s, text, 0, n, [&](size_t i, size_t e) { return match_llama3(s, i, e, 1); }, out);
+      break;
+    case PreTokenizer::kGpt4o:
+      split(s, text, 0, n, [&](size_t i, size_t e) { return match_gpt4o(s, i, e); }, out);
       break;
     case PreTokenizer::kStarCoder: {
       // Stage 1: every number code point is its own word. Stage 2: GPT-2

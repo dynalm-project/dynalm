@@ -26,9 +26,16 @@ struct CpuFeatures {
   bool amx_tile = false;
   bool amx_int8 = false;
   bool amx_bf16 = false;
-  // arm64
+  // arm64. Each flag means "the CPU and the OS support it", detected at run
+  // time (macOS sysctl hw.optional.arm.*, Linux getauxval HWCAP/HWCAP2,
+  // Windows IsProcessorFeaturePresent), never from compiler macros.
   bool neon = false;
-  bool arm_dotprod = false;
+  bool arm_dotprod = false;  // SDOT / UDOT (FEAT_DotProd)
+  bool arm_i8mm = false;     // SMMLA (FEAT_I8MM)
+  bool arm_fp16 = false;     // half-precision arithmetic (FEAT_FP16)
+  bool arm_bf16 = false;     // BFDOT / BFMMLA (FEAT_BF16)
+  bool arm_sve = false;
+  bool arm_sme = false;
 };
 
 struct CpuInfo {

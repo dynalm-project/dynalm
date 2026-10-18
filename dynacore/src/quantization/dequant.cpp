@@ -24,6 +24,8 @@ bool dequant_supported(DType type) {
     case DType::kQ5_K:
     case DType::kQ6_K:
     case DType::kQ8_K:
+    case DType::kIQ4_NL:
+    case DType::kIQ4_XS:
       return true;
     default:
       return false;
@@ -59,6 +61,8 @@ bool dequantize_row(DType type, const void* src, float* dst, int64_t n) {
     case DType::kQ5_K: dequantize_q5_K(static_cast<const BlockQ5_K*>(src), dst, nb); return true;
     case DType::kQ6_K: dequantize_q6_K(static_cast<const BlockQ6_K*>(src), dst, nb); return true;
     case DType::kQ8_K: dequantize_q8_K(static_cast<const BlockQ8_K*>(src), dst, nb); return true;
+    case DType::kIQ4_NL: dequantize_iq4_nl(static_cast<const BlockIQ4_NL*>(src), dst, nb); return true;
+    case DType::kIQ4_XS: dequantize_iq4_xs(static_cast<const BlockIQ4_XS*>(src), dst, nb); return true;
     default:
       return false;
   }

@@ -26,7 +26,20 @@ option(ENABLE_VULKAN "Vulkan GPU backend through pinned ggml (needs the Vulkan S
 if(ENABLE_HIP)
   message(FATAL_ERROR "ENABLE_HIP: the ROCm/HIP backend is not implemented; use ENABLE_VULKAN for AMD GPUs")
 endif()
-if(ENABLE_METAL OR ENABLE_VULKAN OR ENABLE_CUDA)
+# ggml's CPU kernels: the default CPU path (`--cpu`, and `auto` without a GPU),
+# with 8-bit activations as in llama.cpp (llama.cpp-level accuracy, ~4x the
+# speed of the native kernels). `--backend native-cpu` keeps DynaCore's own
+# kernels (DD-053). Always part of a GPU build. Default ON where ggml's CPU
+# backend builds: CMake >= 3.28, and not MSVC on ARM64 (ggml needs clang there).
+set(_ggml_cpu_default ON)
+if(CMAKE_VERSION VERSION_LESS 3.28 OR (MSVC AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(ARM64|arm64|aarch64)$"))
+  set(_ggml_cpu_default OFF)
+endif()
+option(ENABLE_GGML_CPU "ggml's CPU kernels as the default CPU path (fetches pinned ggml)" ${_ggml_cpu_default})
+if(NOT ENABLE_GGML_CPU)
+  message(STATUS "ggml CPU kernels: off; the CPU uses DynaCore's native kernels")
+endif()
+if(ENABLE_METAL OR ENABLE_VULKAN OR ENABLE_CUDA OR ENABLE_GGML_CPU)
   set(DYNALM_WITH_GGML ON)
 else()
   set(DYNALM_WITH_GGML OFF)

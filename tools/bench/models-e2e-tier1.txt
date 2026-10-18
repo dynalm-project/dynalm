@@ -1,0 +1,40 @@
+# End-to-end tier 1: representative models of Qwen, Meta, Google, Microsoft, Mistral AI and
+# DeepSeek (a selection), a few quantization types, and small safetensors repos for the
+# Hugging Face loader. About 48 GB of downloads (~4.5 h at 3 MB/s); models already in the store
+# are reused. Tier 2 (everything else that passed the check): tools/bench/models-providers.txt.
+
+# --- Alibaba (Qwen) ---
+qwen3:0.6b                                                                          # Qwen3 0.6B, Q8_0, 0.6 GB
+qwen2.5:0.5b                                                                        # Qwen2.5 0.5B Instruct, Q4_K_M, 0.5 GB
+qwen2.5:1.5b                                                                        # Qwen2.5 1.5B Instruct, Q4_K_M, 1.0 GB
+qwen3:4b                                                                            # Qwen3 4B, Q4_K_M, 2.3 GB
+Qwen/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf                                             # Qwen3 8B, 4.7 GB
+bartowski/Qwen2.5-Coder-7B-Instruct-GGUF/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf      # Qwen2.5 Coder 7B, 4.4 GB
+# --- Meta ---
+llama3.2:1b                                                                         # Llama 3.2 1B Instruct, Q4_K_M, 0.8 GB
+llama3.2:3b                                                                         # Llama 3.2 3B Instruct, Q4_K_M, 2.0 GB
+bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf    # Llama 3.1 8B Instruct, 4.6 GB
+TheBloke/Llama-2-7B-Chat-GGUF/llama-2-7b-chat.Q4_K_M.gguf                           # Llama 2 7B Chat, 3.8 GB
+# --- Google ---
+gemma3:1b                                                                           # Gemma 3 1B IT, Q4_K_M, 0.8 GB
+unsloth/gemma-3-4b-it-GGUF/gemma-3-4b-it-Q4_K_M.gguf                                # Gemma 3 4B IT, 2.3 GB
+bartowski/gemma-2-2b-it-GGUF/gemma-2-2b-it-Q4_K_M.gguf                              # Gemma 2 2B IT, 1.6 GB
+bartowski/gemma-2-9b-it-GGUF/gemma-2-9b-it-Q4_K_M.gguf                              # Gemma 2 9B IT, 5.4 GB
+# --- Microsoft ---
+phi3.5:3.8b                                                                         # Phi-3.5 Mini Instruct, Q4_K_M, 2.4 GB
+bartowski/microsoft_Phi-4-mini-instruct-GGUF/microsoft_Phi-4-mini-instruct-Q4_K_M.gguf  # Phi-4 Mini Instruct, 2.3 GB
+# --- Mistral AI ---
+bartowski/Mistral-7B-Instruct-v0.3-GGUF/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf        # Mistral 7B Instruct v0.3, 4.1 GB
+# --- DeepSeek ---
+TheBloke/deepseek-coder-1.3b-instruct-GGUF/deepseek-coder-1.3b-instruct.Q4_K_M.gguf # DeepSeek Coder 1.3B, 0.8 GB
+bartowski/DeepSeek-R1-Distill-Qwen-1.5B-GGUF/DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf  # R1 Distill Qwen 1.5B, 1.1 GB
+bartowski/DeepSeek-R1-Distill-Llama-8B-GGUF/DeepSeek-R1-Distill-Llama-8B-Q4_K_M.gguf    # R1 Distill Llama 8B, 4.6 GB
+# --- Quantization types (small files) ---
+Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q4_0.gguf                     # Q4_0
+Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q8_0.gguf                     # Q8_0
+bartowski/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct-IQ4_XS.gguf              # IQ4_XS
+# --- Safetensors (Hugging Face loader) ---
+hf:Qwen/Qwen2.5-0.5B-Instruct                                                       # 0.9 GB
+hf:Qwen/Qwen3-0.6B                                                                  # 1.4 GB
+hf:Qwen/Qwen2.5-Coder-0.5B-Instruct                                                 # 0.9 GB
+hf:deepseek-ai/deepseek-coder-1.3b-instruct                                         # 2.5 GB

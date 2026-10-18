@@ -143,6 +143,8 @@ Diagnostics diagnose(const Engine& engine, const EngineStats& a, const EngineSta
   d.steps_decode_only = y.steps_decode_only - x.steps_decode_only;
   d.steps_prefill_only = y.steps_prefill_only - x.steps_prefill_only;
   d.steps_mixed = y.steps_mixed - x.steps_mixed;
+  d.spec_drafted = y.spec_drafted - x.spec_drafted;
+  d.spec_accepted = y.spec_accepted - x.spec_accepted;
   d.steps_solo_prefill = y.steps_solo_prefill - x.steps_solo_prefill;
   d.steps_solo_prefill_skipped = y.steps_solo_prefill_skipped - x.steps_solo_prefill_skipped;
   d.steps_prefill_srpt = y.steps_prefill_srpt - x.steps_prefill_srpt;
@@ -544,6 +546,8 @@ std::string to_json(const PointResult& r, const std::string& model, const std::s
     g["steps_decode_only"] = static_cast<double>(d.steps_decode_only);
     g["steps_prefill_only"] = static_cast<double>(d.steps_prefill_only);
     g["steps_mixed"] = static_cast<double>(d.steps_mixed);
+    g["spec_drafted"] = static_cast<double>(d.spec_drafted);
+    g["spec_accepted"] = static_cast<double>(d.spec_accepted);
     g["mean_decode_rows"] = d.mean_decode_rows;
     g["decode_step_ms"] = d.decode_step_ms;
     g["steps_solo_prefill"] = static_cast<double>(d.steps_solo_prefill);

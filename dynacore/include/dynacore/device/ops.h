@@ -33,6 +33,10 @@ struct RopeConfig {
   float yarn_beta_slow = 1.0f;
   float llama3_low_freq_factor = 1.0f;
   float llama3_high_freq_factor = 4.0f;
+  // cos and sin scaled by this factor, so the rotated dims are (LongRoPE's
+  // attention factor, Phi-3/4; ggml's attn_factor). The dims past `dim` of a
+  // partial RoPE are left as they are.
+  float attn_factor = 1.0f;
 };
 
 }  // namespace dynacore

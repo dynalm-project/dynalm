@@ -1476,6 +1476,7 @@ DYNACORE_DOT_ROWS(dot_rows_sx_q6_K)
 }  // namespace
 
 bool register_avx2_kernels(CpuKernels& k) {
+  k.int8_simd = true;
   k.isa = CpuIsa::kAvx2;
   k.dot_f32 = dot_f32;
   k.axpy_f32 = axpy_f32;

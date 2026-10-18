@@ -24,6 +24,10 @@ void append_utf8(uint32_t cp, std::string& out);
 bool is_letter(uint32_t cp);
 bool is_number(uint32_t cp);
 bool is_whitespace(uint32_t cp);
+// The case classes of the GPT-4o (o200k) pre-tokenizer regex:
+// [\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}] and [\p{Ll}\p{Lm}\p{Lo}\p{M}].
+bool is_upper_class(uint32_t cp);
+bool is_lower_class(uint32_t cp);
 
 // Length of a complete UTF-8 sequence starting with lead byte `c`, or 0 if
 // `c` is not a valid lead byte.

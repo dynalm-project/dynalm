@@ -25,7 +25,7 @@ model:
   path: qwen3:4b             # model for `dynalm serve` / `dynalm run` when none is given
 
 runtime:
-  device: auto               # auto (a built-in GPU that runs the model, else CPU) | cpu | metal | vulkan | cuda
+  device: auto               # auto (a built-in GPU that runs the model, else CPU) | cpu | native-cpu | metal | vulkan | cuda
   threads: auto              # auto = physical cores
   context_length: 8192       # KV cache tokens; auto = sized from free RAM
   batch_tokens: 256          # max tokens per forward pass
@@ -71,6 +71,7 @@ The older flat format, with one `key = value` per line using option names, still
 | model.path | `<model>` / `--model` | — |
 | model.id | `--model-id` | file name, or the registry name |
 | runtime.device | `--backend` (auto, cpu, metal, vulkan, cuda) | auto: a built-in GPU that runs the model, else the CPU |
+| runtime.mode | `--mode` (auto, performance, exact, safe) | auto: the fastest validated path; exact: DD-053 accuracy everywhere; safe: fp32 CPU reference kernels ([cli.md](cli.md#execution-modes-and-autotune)) |
 | runtime.threads | `--threads` | auto |
 | runtime.context_length | `--ctx` | auto |
 | runtime.batch_tokens | `--batch` | 256 |

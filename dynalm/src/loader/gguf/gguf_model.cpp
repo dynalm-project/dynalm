@@ -128,6 +128,10 @@ Result<ModelConfig> read_model_config(const GgufFile& f) {
   c.embedding_scale = static_cast<float>(emb_scale);
   c.residual_scale = static_cast<float>(res_scale);
   c.attn_scale = static_cast<float>(att_scale);
+  // LongRoPE (Phi-3/4): cos and sin scaled by this factor (llama.cpp
+  // rope_attn_factor), i.e. only the rotated dims of a partial RoPE.
+  ENGINE_ASSIGN_OR_RETURN(double rope_attn, arch_float_or(f, arch, "rope.scaling.attn_factor", 1.0));
+  c.rope.attn_factor = static_cast<float>(rope_attn);
   c.logit_scale = static_cast<float>(logit_scale);
 
   // Tied embeddings: no separate output projection.
@@ -150,6 +154,9 @@ constexpr NameRole kGlobal[] = {
     {"output_norm.bias", TensorRole::kOutputNormBias},
     {"output.weight", TensorRole::kOutput},
     {"rope_freqs.weight", TensorRole::kRopeFreqs},
+    // Phi-3 LongRoPE: short factors up to the original context, long beyond it.
+    {"rope_factors_short.weight", TensorRole::kRopeFreqs},
+    {"rope_factors_long.weight", TensorRole::kRopeFreqsLong},
 };
 
 constexpr NameRole kLayer[] = {

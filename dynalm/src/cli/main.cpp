@@ -10,6 +10,7 @@
 #include "common/version.h"
 #include "logging/log.h"
 #include "dynacore/device/device_registry.h"
+#include "dynacore/gpu/ggml_device.h"
 #include "dynacore/hardware/cpu_info.h"
 #include "dynacore/hardware/isa.h"
 #include "dynacore/hardware/system_info.h"
@@ -68,7 +69,8 @@ void print_usage() {
       "  models [rm|--available] local models; remove one; names you can pull\n"
       "  inspect <model>         architecture, parameters, quantization, memory estimate\n"
       "  benchmark <model>       throughput and latency (in-process or --url server)\n"
-      "  doctor [--json]         system report: CPU, ISA, RAM, GPU, device, status\n"
+      "  doctor [--json]         system report: CPU, ISA, RAM, GPU, backends, AutoTune, status\n"
+      "  autotune [--run MODEL]  kernels and modes for this machine; tune CPU threads (--clear)\n"
       "  config [show|path|init] effective configuration and ~/.dynalm/config.yaml\n"
       "  stop                    ask a local server to drain and exit (--host, --port)\n"
       "  version                 DynaLM and DynaCore versions, build configuration\n"
@@ -92,6 +94,9 @@ int cmd_version() {
   }
   std::printf("devices:  %s%s\n", devices.c_str(),
               devices == "cpu" ? " (GPU: build with -DENABLE_METAL, -DENABLE_VULKAN or -DENABLE_CUDA)" : "");
+  std::printf("cpu path: %s\n", dynacore::ggml_gpu_compiled(dynacore::DeviceType::kCpu)
+                                     ? "ggml kernels (fast, llama.cpp-level accuracy); --backend native-cpu: DD-053"
+                                     : "native kernels (built without ENABLE_GGML_CPU)");
   return 0;
 }
 
@@ -148,6 +153,7 @@ int main(int argc, char** argv) {
   if (cmd == "version") return cmd_version();
   if (cmd == "doctor" || cmd == "info") return dynalm::cli::cmd_doctor(rest);  // info: pre-R1 name
   if (cmd == "config") return dynalm::cli::cmd_config(rest);
+  if (cmd == "autotune") return dynalm::cli::cmd_autotune(rest);
   if (cmd == "inspect") return dynalm::cli::cmd_inspect(rest);
   if (cmd == "run") return dynalm::cli::cmd_run(rest);
   if (cmd == "chat") return dynalm::cli::cmd_run(rest);  // run without -p

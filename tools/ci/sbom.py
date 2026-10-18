@@ -4,8 +4,12 @@
   python3 tools/ci/sbom.py [--ggml] > sbom.cdx.json
 
 Components: DynaLM itself, cpp-httplib (version and SHA-256 from
-dynalm/src/CMakeLists.txt) and, with --ggml (alias --metal; any GPU build:
-Metal, Vulkan or CUDA), ggml (commit from cmake/Ggml.cmake). Scope: the third-party code compiled into the binaries.
+dynalm/src/CMakeLists.txt), the Unicode Character Database data the tokenizer
+tables are generated from (dynalm/src/tokenizer/unicode_tables.inc) and, with
+--ggml (alias --metal), ggml (commit from cmake/Ggml.cmake): every build with
+a GPU backend (Metal, Vulkan, CUDA) or ggml's CPU kernels (ENABLE_GGML_CPU,
+on by default; tools/ci/package.sh reads it from the build's CMakeCache.txt).
+Scope: the third-party code and data compiled into the binaries.
 System libraries (libc++, the macOS frameworks, Windows runtime) and build
 tools are not listed.
 """
@@ -25,6 +29,13 @@ components = [{
     "hashes": [{"alg": "SHA-256", "content": httplib_sha}],
     "externalReferences": [{"type": "distribution", "url": f"https://raw.githubusercontent.com/yhirose/cpp-httplib/{httplib_ver}/httplib.h"}],
 }]
+tables = (root / "dynalm/src/tokenizer/unicode_tables.inc").read_text()
+ucd_ver = re.search(r"from Unicode ([0-9]+(?:\.[0-9]+)*)", tables).group(1)
+components.append({
+    "type": "data", "name": "Unicode Character Database", "version": ucd_ver,
+    "licenses": [{"license": {"id": "Unicode-3.0"}}],
+    "externalReferences": [{"type": "distribution", "url": f"https://www.unicode.org/Public/{ucd_ver}/ucd/"}],
+})
 if "--ggml" in sys.argv or "--metal" in sys.argv:
     g = (root / "cmake/Ggml.cmake").read_text()
     commit = re.search(r"set\(DYNALM_GGML_COMMIT\s+([0-9a-f]{40})", g).group(1)

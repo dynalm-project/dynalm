@@ -1,0 +1,109 @@
+# 50 models, for tools/bench/model_matrix.sh --list tools/bench/models-50.txt.
+# Each model twice: its GGUF file, and its Hugging Face safetensors repo (hf:<owner>/<repo>;
+# the script fetches config.json, the tokenizer and every weight shard). Gated repos
+# (meta-llama, google) need HF_TOKEN with the license accepted. Safetensors are full precision
+# (~2 GB per 1B parameters): --max-gb skips larger downloads (default 16).
+# A wrong link or an unsupported architecture is reported, not fatal.
+
+# --- GGUF ---
+Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q4_k_m.gguf                                    # 1. Qwen2.5 0.5B Instruct
+bartowski/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct-Q4_K_M.gguf                               # 2. Llama 3.2 1B Instruct
+Qwen/Qwen3-0.6B-GGUF/Qwen3-0.6B-Q8_0.gguf                                                            # 3. Qwen3 0.6B (link corrected: official repo has Q8_0 only)
+Qwen/Qwen2.5-1.5B-Instruct-GGUF/qwen2.5-1.5b-instruct-q4_k_m.gguf                                    # 4. Qwen2.5 1.5B Instruct
+Qwen/Qwen3-1.7B-GGUF/Qwen3-1.7B-Q8_0.gguf                                                            # 5. Qwen3 1.7B (link corrected: official repo has Q8_0 only)
+JulianChang/SmolLM2-1.7B-Instruct-Q4_0-GGUF/smollm2-1.7b-instruct-q4_0.gguf                          # 6. SmolLM2 1.7B Instruct
+bartowski/Qwen2.5-Coder-1.5B-Instruct-GGUF/Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf                   # 7. Qwen2.5 Coder 1.5B
+TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf                          # 8. TinyLlama 1.1B Chat
+mradermacher/SmolLM2-360M-Instruct-GGUF/SmolLM2-360M-Instruct.Q4_K_M.gguf                            # 9. SmolLM2 360M Instruct
+mradermacher/stablelm-2-1_6b-chat-i1-GGUF/stablelm-2-1_6b-chat.i1-Q4_K_M.gguf                        # 10. StableLM 2 1.6B Chat (link corrected: TheBloke repo does not exist)
+Qwen/Qwen2.5-3B-Instruct-GGUF/qwen2.5-3b-instruct-q4_k_m.gguf                                        # 11. Qwen2.5 3B Instruct
+Qwen/Qwen3-4B-GGUF/Qwen3-4B-Q4_K_M.gguf                                                              # 12. Qwen3 4B
+unsloth/Qwen3-4B-Instruct-2507-GGUF/Qwen3-4B-Instruct-2507-Q4_K_M.gguf                               # 13. Qwen3 4B Instruct 2507
+bartowski/Llama-3.2-3B-Instruct-GGUF/Llama-3.2-3B-Instruct-Q4_K_M.gguf                               # 14. Llama 3.2 3B Instruct
+bartowski/Phi-3.5-mini-instruct-GGUF/Phi-3.5-mini-instruct-Q4_K_M.gguf                               # 15. Phi-3.5 Mini Instruct
+bartowski/microsoft_Phi-4-mini-instruct-GGUF/microsoft_Phi-4-mini-instruct-Q4_K_M.gguf               # 16. Phi-4 Mini Instruct (link corrected: bartowski names it microsoft_...)
+bartowski/google_gemma-3-1b-it-GGUF/google_gemma-3-1b-it-Q4_K_M.gguf                                 # 17. Gemma 3 1B IT
+bartowski/google_gemma-3-4b-it-GGUF/google_gemma-3-4b-it-Q4_K_M.gguf                                 # 18. Gemma 3 4B IT
+allenai/OLMo-2-0425-1B-Instruct-GGUF/OLMo-2-0425-1B-Instruct-Q4_K_M.gguf                             # 19. OLMo 2 1B Instruct (link corrected: the official GGUF repo)
+mradermacher/OpenELM-3B-Instruct-GGUF/OpenELM-3B-Instruct.Q4_K_M.gguf                                # 20. OpenELM 3B Instruct (link corrected: bartowski repo does not exist)
+bartowski/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf                                   # 21. Qwen2.5 7B Instruct (link corrected: the official Q4_K_M is split in 2 files)
+Qwen/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf                                                              # 22. Qwen3 8B
+bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf                     # 23. Llama 3.1 8B Instruct
+bartowski/Mistral-7B-Instruct-v0.3-GGUF/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf                         # 24. Mistral 7B Instruct v0.3
+bartowski/gemma-2-9b-it-GGUF/gemma-2-9b-it-Q4_K_M.gguf                                               # 25. Gemma 2 9B IT
+bartowski/Meta-Llama-3-8B-Instruct-GGUF/Meta-Llama-3-8B-Instruct-Q4_K_M.gguf                         # 26. Llama 3 8B Instruct
+bartowski/OLMo-2-1124-7B-Instruct-GGUF/OLMo-2-1124-7B-Instruct-Q4_K_M.gguf                           # 27. OLMo 2 7B Instruct
+bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf                   # 28. DeepSeek R1 Distill Qwen 7B
+bartowski/DeepSeek-R1-Distill-Llama-8B-GGUF/DeepSeek-R1-Distill-Llama-8B-Q4_K_M.gguf                 # 29. DeepSeek R1 Distill Llama 8B
+QuantFactory/falcon-7b-instruct-GGUF/falcon-7b-instruct.Q4_K_M.gguf                                  # 30. Falcon 7B Instruct (link corrected: TheBloke repo does not exist)
+Qwen/Qwen2.5-Coder-0.5B-Instruct-GGUF/qwen2.5-coder-0.5b-instruct-q4_k_m.gguf                        # 31. Qwen2.5 Coder 0.5B
+bartowski/Qwen2.5-Coder-1.5B-Instruct-GGUF/Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf                   # 32. Qwen2.5 Coder 1.5B (bartowski)
+bartowski/Qwen2.5-Coder-3B-Instruct-GGUF/Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf                       # 33. Qwen2.5 Coder 3B
+bartowski/Qwen2.5-Coder-7B-Instruct-GGUF/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf                       # 34. Qwen2.5 Coder 7B
+bartowski/Qwen2.5-Coder-14B-Instruct-GGUF/Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf                     # 35. Qwen2.5 Coder 14B
+TheBloke/deepseek-coder-1.3b-instruct-GGUF/deepseek-coder-1.3b-instruct.Q4_K_M.gguf                  # 36. DeepSeek Coder 1.3B Instruct
+TheBloke/deepseek-coder-6.7b-instruct-GGUF/deepseek-coder-6.7b-instruct.Q4_K_M.gguf                  # 37. DeepSeek Coder 6.7B Instruct
+mradermacher/starcoder2-3b-i1-GGUF/starcoder2-3b.i1-Q4_K_M.gguf                                      # 38. StarCoder2 3B (link corrected: bartowski repo does not exist)
+second-state/StarCoder2-7B-GGUF/starcoder2-7b-Q4_K_M.gguf                                            # 39. StarCoder2 7B (link corrected: bartowski repo does not exist)
+bartowski/codegemma-7b-it-GGUF/codegemma-7b-it-Q4_K_M.gguf                                           # 40. CodeGemma 7B IT
+bartowski/Yi-1.5-6B-Chat-GGUF/Yi-1.5-6B-Chat-Q4_K_M.gguf                                             # 41. Yi 1.5 6B Chat
+bartowski/Yi-1.5-9B-Chat-GGUF/Yi-1.5-9B-Chat-Q4_K_M.gguf                                             # 42. Yi 1.5 9B Chat
+bartowski/internlm2_5-7b-chat-GGUF/internlm2_5-7b-chat-Q4_K_M.gguf                                   # 43. InternLM2.5 7B Chat
+openbmb/MiniCPM3-4B-GGUF/minicpm3-4b-q4_k_m.gguf                                                     # 44. MiniCPM3 4B (link corrected: the file is minicpm3-4b-q4_k_m.gguf)
+mradermacher/pythia-2.8b-deduped-i1-GGUF/pythia-2.8b-deduped.i1-Q4_K_M.gguf                          # 45. Pythia 2.8B (link corrected: no GGUF of pythia-2.8b; the deduped variant, same architecture)
+TheBloke/GPT-Neo-2.7B-GGUF/gpt-neo-2.7b.Q4_K_M.gguf                                                  # 46. GPT-Neo 2.7B (no GGUF of this model exists; llama.cpp does not support the architecture: kept as a negative check)
+TheBloke/opt-2.7b-GGUF/opt-2.7b.Q4_K_M.gguf                                                          # 47. OPT 2.7B (no GGUF of this model exists; llama.cpp does not support the architecture: kept as a negative check)
+mradermacher/mpt-7b-instruct-GGUF/mpt-7b-instruct.Q4_K_M.gguf                                        # 48. MPT 7B Instruct (link corrected: TheBloke repo does not exist)
+TheBloke/Mistral-7B-v0.1-GGUF/mistral-7b-v0.1.Q4_K_M.gguf                                            # 49. Mistral 7B Base
+TheBloke/Llama-2-7B-Chat-GGUF/llama-2-7b-chat.Q4_K_M.gguf                                            # 50. Llama 2 7B Chat
+
+# --- Safetensors (Hugging Face repos) ---
+hf:Qwen/Qwen2.5-0.5B-Instruct                                                                        # 1. Qwen2.5 0.5B Instruct
+hf:meta-llama/Llama-3.2-1B-Instruct                                                                  # 2. Llama 3.2 1B Instruct
+hf:Qwen/Qwen3-0.6B                                                                                   # 3. Qwen3 0.6B
+hf:Qwen/Qwen2.5-1.5B-Instruct                                                                        # 4. Qwen2.5 1.5B Instruct
+hf:Qwen/Qwen3-1.7B                                                                                   # 5. Qwen3 1.7B
+hf:HuggingFaceTB/SmolLM2-1.7B-Instruct                                                               # 6. SmolLM2 1.7B Instruct
+hf:Qwen/Qwen2.5-Coder-1.5B-Instruct                                                                  # 7. Qwen2.5 Coder 1.5B
+hf:TinyLlama/TinyLlama-1.1B-Chat-v1.0                                                                # 8. TinyLlama 1.1B Chat
+hf:HuggingFaceTB/SmolLM2-360M-Instruct                                                               # 9. SmolLM2 360M Instruct
+hf:stabilityai/stablelm-2-1_6b-chat                                                                  # 10. StableLM 2 1.6B Chat
+hf:Qwen/Qwen2.5-3B-Instruct                                                                          # 11. Qwen2.5 3B Instruct
+hf:Qwen/Qwen3-4B                                                                                     # 12. Qwen3 4B
+hf:Qwen/Qwen3-4B-Instruct-2507                                                                       # 13. Qwen3 4B Instruct 2507
+hf:meta-llama/Llama-3.2-3B-Instruct                                                                  # 14. Llama 3.2 3B Instruct
+hf:microsoft/Phi-3.5-mini-instruct                                                                   # 15. Phi-3.5 Mini Instruct
+hf:microsoft/Phi-4-mini-instruct                                                                     # 16. Phi-4 Mini Instruct
+hf:google/gemma-3-1b-it                                                                              # 17. Gemma 3 1B IT
+hf:google/gemma-3-4b-it                                                                              # 18. Gemma 3 4B IT
+hf:allenai/OLMo-2-0425-1B-Instruct                                                                   # 19. OLMo 2 1B Instruct
+hf:apple/OpenELM-3B-Instruct                                                                         # 20. OpenELM 3B Instruct
+hf:Qwen/Qwen2.5-7B-Instruct                                                                          # 21. Qwen2.5 7B Instruct
+hf:Qwen/Qwen3-8B                                                                                     # 22. Qwen3 8B
+hf:meta-llama/Llama-3.1-8B-Instruct                                                                  # 23. Llama 3.1 8B Instruct
+hf:mistralai/Mistral-7B-Instruct-v0.3                                                                # 24. Mistral 7B Instruct v0.3
+hf:google/gemma-2-9b-it                                                                              # 25. Gemma 2 9B IT
+hf:meta-llama/Meta-Llama-3-8B-Instruct                                                               # 26. Llama 3 8B Instruct
+hf:allenai/OLMo-2-1124-7B-Instruct                                                                   # 27. OLMo 2 7B Instruct
+hf:deepseek-ai/DeepSeek-R1-Distill-Qwen-7B                                                           # 28. DeepSeek R1 Distill Qwen 7B
+hf:deepseek-ai/DeepSeek-R1-Distill-Llama-8B                                                          # 29. DeepSeek R1 Distill Llama 8B
+hf:tiiuae/falcon-7b-instruct                                                                         # 30. Falcon 7B Instruct
+hf:Qwen/Qwen2.5-Coder-0.5B-Instruct                                                                  # 31. Qwen2.5 Coder 0.5B
+hf:Qwen/Qwen2.5-Coder-3B-Instruct                                                                    # 33. Qwen2.5 Coder 3B
+hf:Qwen/Qwen2.5-Coder-7B-Instruct                                                                    # 34. Qwen2.5 Coder 7B
+hf:Qwen/Qwen2.5-Coder-14B-Instruct                                                                   # 35. Qwen2.5 Coder 14B
+hf:deepseek-ai/deepseek-coder-1.3b-instruct                                                          # 36. DeepSeek Coder 1.3B Instruct
+hf:deepseek-ai/deepseek-coder-6.7b-instruct                                                          # 37. DeepSeek Coder 6.7B Instruct
+hf:bigcode/starcoder2-3b                                                                             # 38. StarCoder2 3B
+hf:bigcode/starcoder2-7b                                                                             # 39. StarCoder2 7B
+hf:google/codegemma-7b-it                                                                            # 40. CodeGemma 7B IT
+hf:01-ai/Yi-1.5-6B-Chat                                                                              # 41. Yi 1.5 6B Chat
+hf:01-ai/Yi-1.5-9B-Chat                                                                              # 42. Yi 1.5 9B Chat
+hf:internlm/internlm2_5-7b-chat                                                                      # 43. InternLM2.5 7B Chat
+hf:openbmb/MiniCPM3-4B                                                                               # 44. MiniCPM3 4B
+hf:EleutherAI/pythia-2.8b                                                                            # 45. Pythia 2.8B
+hf:EleutherAI/gpt-neo-2.7B                                                                           # 46. GPT-Neo 2.7B
+hf:facebook/opt-2.7b                                                                                 # 47. OPT 2.7B
+hf:mosaicml/mpt-7b-instruct                                                                          # 48. MPT 7B Instruct
+hf:mistralai/Mistral-7B-v0.1                                                                         # 49. Mistral 7B Base
+hf:meta-llama/Llama-2-7b-chat-hf                                                                     # 50. Llama 2 7B Chat

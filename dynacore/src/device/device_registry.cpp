@@ -17,16 +17,17 @@ std::string_view device_kind_name(DeviceKind k) {
     case DeviceKind::kHip: return "hip";
     case DeviceKind::kMetal: return "metal";
     case DeviceKind::kVulkan: return "vulkan";
+    case DeviceKind::kGgmlCpu: return "ggml-cpu";
   }
   return "?";
 }
 
 Result<DeviceKind> parse_device_kind(std::string_view name) {
   for (DeviceKind k : {DeviceKind::kCpu, DeviceKind::kCuda, DeviceKind::kHip, DeviceKind::kMetal,
-                        DeviceKind::kVulkan}) {
+                        DeviceKind::kVulkan, DeviceKind::kGgmlCpu}) {
     if (device_kind_name(k) == name) return k;
   }
-  return InvalidArgument("unknown backend '" + std::string(name) + "' (cpu, cuda, hip, metal, vulkan)");
+  return InvalidArgument("unknown backend '" + std::string(name) + "' (cpu, cuda, hip, metal, vulkan, ggml-cpu)");
 }
 
 namespace {
@@ -38,7 +39,8 @@ DeviceType gpu_type(DeviceKind k) {
     case DeviceKind::kHip: return DeviceType::kHip;
     case DeviceKind::kMetal: return DeviceType::kMetal;
     case DeviceKind::kVulkan: return DeviceType::kVulkan;
-    case DeviceKind::kCpu: break;
+    case DeviceKind::kCpu:
+    case DeviceKind::kGgmlCpu: break;
   }
   return DeviceType::kCpu;
 }
@@ -67,6 +69,22 @@ Result<std::unique_ptr<Device>> create_device(DeviceKind kind, ThreadPool& pool)
                          flag + "=ON); use --backend cpu");
     }
     return create_ggml_gpu_device(gpu_type(kind));
+  }
+  // ggml's CPU backend (experimental): the same segment device as the GPUs,
+  // with this pool's thread count.
+  if (kind == DeviceKind::kGgmlCpu) {
+    if (!ggml_gpu_compiled(DeviceType::kCpu)) {
+      return Unsupported("the ggml-cpu backend is not built in this version (configure with -DENABLE_GGML_CPU=ON, "
+                         "or any GPU backend); use --backend cpu");
+    }
+#if defined(__x86_64__) || defined(_M_X64)
+    // ggml-cpu is compiled for the AVX2 tier on x86-64 (cmake/Ggml.cmake).
+    const CpuFeatures& f = cpu_info().features;
+    if (!f.avx2 || !f.fma || !f.f16c) return Unsupported("the ggml-cpu backend needs a CPU with AVX2, FMA and F16C");
+#endif
+    GgmlDeviceOptions o;
+    o.threads = static_cast<int32_t>(pool.size());
+    return create_ggml_gpu_device(DeviceType::kCpu, o);
   }
   return Unsupported("the " + std::string(device_kind_name(kind)) +
                      " backend is not built in this version: GPU backends are designed (docs/gpu-backend.md, "

@@ -18,6 +18,7 @@
 #include "logging/log.h"
 #include "dynacore/hardware/cpu_info.h"
 #include "dynacore/hardware/perf_counters.h"
+#include "runtime/autotune.h"
 #include "runtime/engine.h"
 #include "dynacore/execution/thread_pool.h"
 #include "common/core.h"
@@ -51,6 +52,9 @@ void usage() {
                "  --decode-budget N     decode rows per scheduler step (in-process, default 64)\n"
                "  --chunk N             max prompt tokens per sequence per step (0 = budget; default 32; Metal 128)\n"
                "  --solo-prefill-chunk N  EXPERIMENTAL: chunk and budget N in steps without decode rows\n"
+               "  --spec ngram|DRAFT    speculative decoding for every stream (in-process): prompt lookup,\n"
+               "                        or a draft model file sharing the vocabulary\n"
+               "  --spec-k K            with --spec: most drafts per stream and step (default 4)\n"
                "                        (in-process; 0 = off; default off on the CPU, 256 on Metal)\n"
                "  --solo-prefill-split  with --solo-prefill-chunk: split it across prefilling sequences\n"
                "  --prefill-order O     EXPERIMENTAL: fifo (default) | srpt (shortest remaining prompt first)\n"
@@ -58,8 +62,10 @@ void usage() {
                "  --step-trace FILE     append the scheduler's per-step and per-request trace (JSON lines)\n"
                "  --batch N             max tokens per forward pass (default: budgets + 1, min 256 and the solo chunk)\n"
                "  --policy P            balanced | latency | throughput (in-process, DD-061)\n"
+               "  --execution MODE      reference (default) | compiled (in-process; DD-072)\n"
                "  --gpu / --cpu         in-process device (default auto: GPU first, else CPU)\n"
-               "  --backend B           auto | gpu | cpu | metal | vulkan | cuda (in-process)\n"
+               "  --backend B           auto | gpu | cpu | native-cpu | metal | vulkan | cuda (in-process)\n"
+               "  --mode M              auto | performance | exact | safe (in-process; see dynalm autotune)\n"
                "  --out FILE            append JSON lines (one per point)\n"
                "  --no-diag             skip the bandwidth probe and per-point diagnostics\n");
 }
@@ -90,6 +96,9 @@ int cmd_benchmark(std::span<const std::string_view> args) {
   bool diag = true;
   int requests = 0, threads = 0, ctx = 32768, int8_rows = -1;
   int prefill_budget = -1, decode_budget = -1, chunk = -1, batch = -1, solo_chunk = -1;
+  bool spec_on = false;  // --spec ngram|DRAFT.gguf
+  std::string draft_path;
+  int32_t spec_k = 4;
   bool solo_split = false;
   PrefillOrder prefill_order = PrefillOrder::kFifo;
   int prefill_aging_ms = -1;
@@ -100,6 +109,7 @@ int cmd_benchmark(std::span<const std::string_view> args) {
   ExecutionMode execution = ExecutionMode::kReference;
   EngineOptions device;  // --backend / --cpu / --gpu (default auto)
   (void)apply_backend_choice("auto", device);
+  TuneMode mode = TuneMode::kAuto;
   for (size_t i = 0; i < args.size(); ++i) {
     const std::string_view a = args[i];
     auto value = [&]() -> std::string_view { return i + 1 < args.size() ? args[++i] : std::string_view(); };
@@ -129,6 +139,12 @@ int cmd_benchmark(std::span<const std::string_view> args) {
     else if (a == "--decode-budget") ok = parse_int(value(), decode_budget) && decode_budget > 0;
     else if (a == "--chunk") ok = parse_int(value(), chunk) && chunk >= 0;
     else if (a == "--solo-prefill-chunk") ok = parse_int(value(), solo_chunk) && solo_chunk >= 0;
+    else if (a == "--spec") {
+      const std::string v(value());
+      spec_on = !v.empty() && v != "off";
+      if (spec_on && v != "ngram") draft_path = v;  // a draft model file
+    }
+    else if (a == "--spec-k") ok = parse_int(value(), spec_k) && spec_k >= 1 && spec_k <= 16;
     else if (a == "--solo-prefill-split") solo_split = true;
     else if (a == "--prefill-order") ok = parse_prefill_order(value(), prefill_order);
     else if (a == "--prefill-aging-ms") ok = parse_int(value(), prefill_aging_ms) && prefill_aging_ms >= 0;
@@ -143,6 +159,11 @@ int cmd_benchmark(std::span<const std::string_view> args) {
       ok = apply_backend_choice(value(), device).ok();
     } else if (a == "--cpu" || a == "--gpu") {
       (void)apply_backend_choice(a.substr(2), device);
+    } else if (a == "--mode") {
+      auto m = parse_tune_mode(value());
+      ok = m.ok();
+      if (ok) mode = *m;
+      else std::fprintf(stderr, "%s: %s\n", "benchmark", m.status().message().c_str());
     }
     else if (a == "--out") out_file = value();
     else if (path.empty() && !a.starts_with("-")) path = a;
@@ -212,10 +233,15 @@ int cmd_benchmark(std::span<const std::string_view> args) {
     o.backend = device.backend;
     o.backend_auto = device.backend_auto;
     o.backend_require_gpu = device.backend_require_gpu;
+    o.cpu_ggml = device.cpu_ggml;
     o.model_path = path;
     o.threads = threads;
     o.kv_tokens = ctx;
     o.int8_decode_rows = int8_rows;
+    if (Status st = apply_tune_mode(mode, o); !st.ok()) {
+      std::fprintf(stderr, "benchmark: %s\n", st.message().c_str());
+      return 1;
+    }
     o.scheduler.policy = policy;
     // Explicit step budgets replace the device's scheduling profile.
     if (prefill_budget > 0 || decode_budget > 0 || chunk >= 0) o.device_scheduler_defaults = false;
@@ -223,6 +249,8 @@ int cmd_benchmark(std::span<const std::string_view> args) {
     if (decode_budget > 0) o.scheduler.decode_token_budget = decode_budget;
     if (chunk >= 0) o.scheduler.max_prefill_chunk = chunk;
     if (solo_chunk >= 0) o.scheduler.solo_prefill_chunk = solo_chunk;
+    o.scheduler.spec_k = spec_on ? spec_k : 0;
+    o.draft_model_path = draft_path;
     if (solo_split) o.scheduler.solo_prefill_split = true;
     o.scheduler.prefill_order = prefill_order;
     if (prefill_aging_ms >= 0) o.scheduler.prefill_aging_ms = prefill_aging_ms;

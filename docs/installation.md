@@ -151,13 +151,15 @@ dynalm doctor
 dynalm doctor --json
 ```
 
-It validates:
+It loads no model and runs no benchmark. It reports:
 - Operating system version, platform, and architecture.
-- CPU features and detected vector instruction sets (AVX2, AVX-512, NEON, AMX).
-- Active DynaCore kernel tier.
-- Physical memory (RAM) and available swap space.
+- CPU features detected at run time (AVX2, AVX-512, AMX; NEON, dot product, i8mm, SVE, SME).
+- The backends built in (DynaLM's CPU kernels and their tier, ggml's CPU kernels, Metal / Vulkan /
+  CUDA with the devices each finds) and the device `--backend auto` tries first.
+- Default thread counts, physical memory (RAM) and what is available.
 - Directory paths for binaries, configurations, and downloaded models.
-- Executes an automated DynaCore SIMD matrix kernel self-test (`Status: Ready`).
+- The AutoTune cache state (`dynalm autotune` shows the details).
+- A short DynaCore kernel self-test (`Status: Ready`).
 
 ### Common Solutions
 
@@ -172,3 +174,13 @@ It validates:
   DYNACORE_ISA=generic dynalm run qwen3:4b
   ```
 - **Explain Matrix Kernels:** Set `DYNACORE_MATMUL_EXPLAIN=1` to inspect which SIMD kernels are selected at runtime.
+- **`model has no recognized chat template`:** the model's template is not a family DynaLM renders.
+  Use `--raw` to send the prompt as it is, or a GGUF with a standard template.
+- **`pre-tokenizer '...' is not supported yet`** or **`... uses ggml type ..., which the engine cannot execute`:**
+  the file needs a tokenizer or quantization DynaLM lacks (README, Known limitations). Pick another
+  quantization of the same model (Q4_K_M works everywhere).
+- **Answers differ slightly between `--cpu` and `--mode exact`:** expected. The default CPU path uses
+  8-bit activations as llama.cpp does; `--mode exact` keeps perplexity within +1% of the fp32 reference.
+- **A tuned thread count is not used:** the AutoTune cache is ignored after any rebuild or update and on
+  another machine (`dynalm autotune` says why). Run `dynalm autotune --run <model>` again, on AC power
+  with nothing else running. `DYNALM_AUTOTUNE=0` ignores the cache; `dynalm autotune --clear` deletes it.

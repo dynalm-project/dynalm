@@ -58,7 +58,8 @@ The same flags work with `dynalm serve` and `dynalm benchmark`. The log shows th
 
 ```
 Device: compiled/Metal/<your GPU>     <- GPU
-Device: CPU/neon                      <- CPU
+Device: compiled/ggml-CPU/<your CPU>  <- CPU (fast kernels)
+Device: CPU/neon                      <- CPU (exact kernels, --backend native-cpu)
 ```
 
 **Check what your copy supports:** `dynalm --version` lists `devices: cpu metal` (or
@@ -127,8 +128,10 @@ You can switch on more than one GPU type in the same build.
 |---|---|
 | (nothing) or `--backend auto` | GPU first; the CPU when the GPU can't run the model (the log says why) |
 | `--gpu` or `--backend gpu` | Always a GPU; stops with a clear message if none can run the model |
-| `--cpu` or `--backend cpu` | Always the CPU |
+| `--cpu` or `--backend cpu` | Always the CPU, with the fast kernels (llama.cpp-level accuracy) |
+| `--backend native-cpu` | The CPU with DynaLM's own kernels (slower, strict DD-053 accuracy) |
 | `--backend metal` / `vulkan` / `cuda` | That GPU only |
+| `--backend ggml-cpu` | The fast CPU kernels, with no fallback (`cpu` falls back to `native-cpu` for models they cannot run) |
 
 **Other ways to set it:**
 - **Config file** (`~/.dynalm/config.yaml`):
@@ -151,9 +154,10 @@ With `auto`, DynaLM tries the GPUs in this order: CUDA, then Metal, then Vulkan.
 | Model family | GPU | With `--backend auto` |
 |---|---|---|
 | Qwen2.5 (0.5B, 1.5B, 3B, 7B, ...) and other models of this design | ✅ | GPU |
-| Qwen3, Gemma 3 | coming soon | CPU |
+| Qwen3 (dense models; checked on Qwen3-4B) | ✅ | GPU |
+| Gemma 3 (checked on Gemma 3 1B) | ✅ | GPU |
 | Llama 3.1 / 3.2 (GGUF) | ✅ | GPU |
-| Mixture-of-experts (Granite-MoE, Mixtral, Qwen-MoE) | coming soon | CPU |
+| Mixture-of-experts: Granite-MoE, Mixtral, Qwen3-MoE, Qwen2-MoE (checked on Granite 3.1 MoE 1B) | ✅ Metal and Vulkan; CUDA coming soon | GPU |
 
 **KV cache types on the GPU:** `f16` (default), `f32` and `q8_0`. `--kv q8_0` halves the KV
 memory.
@@ -198,7 +202,7 @@ perplexity change ≤ 1%, average KL ≤ 0.0025. The same rule is used on Metal 
 | `the vulkan backend is not built in this version` | rebuild with `-DENABLE_VULKAN=ON` (or the matching option for your GPU) |
 | `ENABLE_VULKAN=ON needs the Vulkan headers, loader and glslc` | install the Vulkan tools from step 1 |
 | `ENABLE_CUDA=ON needs the CUDA toolkit` | install the CUDA Toolkit and open a new terminal |
-| `auto selects the CPU: per-head Q/K norm ...` | normal: this model runs on the CPU for now |
+| `auto selects the CPU: ... not verified yet` or `... not supported on the GPU yet` | normal: this model runs on the CPU for now |
 | `no Vulkan GPU device 0 (0 found)` | update your graphics driver |
 
 ---

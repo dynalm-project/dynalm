@@ -208,7 +208,9 @@ void test_single_matmul_shapes() {
 void test_chain_quantized_and_shared_input() {
   // h = x . w1^T + b1 (f32); y = h . w2^T (Q8_0, canonicalized to quantized_matmul);
   // z = x . w3^T (shares x with the first op).
-  const int64_t m = 5, k = 64, hdim = 96, n = 40, n3 = 24;
+  // M: above the int8 row limit (4; 64 on ARM64), so both layers run fp32.
+  const int64_t m = std::max<int64_t>(5, KernelPlan::defaults().int8_decode_max_rows + 1), k = 64, hdim = 96, n = 40,
+                n3 = 24;
   gir::Graph g("chain");
   gir::Builder b(g);
   const gir::ValueId x = b.input("x", f32_tensor(gir::Dim::symbol("M"), k));
@@ -247,8 +249,8 @@ void test_chain_quantized_and_shared_input() {
   const Both ry = run_both(g, leaves, y, m, n, lo.symbols);
   const Both rz = run_both(g, leaves, z, m, n3, lo.symbols);
   CHECK(ry.executor == ry.kernel && rz.executor == rz.kernel);
-  // Reference: h in f32 (as stored between ops), then Q8_0-decoded w2. M = 5
-  // rows: above the int8 row limit, so both layers run fp32.
+  // Reference: h in f32 (as stored between ops), then Q8_0-decoded w2. M rows:
+  // above the int8 row limit, so both layers run fp32.
   std::vector<double> xd(lx.f.begin(), lx.f.end());
   const std::vector<double> hd = ref_matmul(xd, l1.deq, &lb.f, m, hdim, k);
   std::vector<double> hf(hd.size());

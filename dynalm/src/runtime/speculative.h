@@ -28,6 +28,7 @@
 #include <memory>
 #include <span>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include "dynacore/base/function_ref.h"
@@ -79,6 +80,49 @@ class ModelDrafter final : public Drafter {
   std::vector<float> logits_;
   std::vector<int32_t> positions_;
   Status status_;
+};
+
+// A draft model for the continuous-batching scheduler (dynalm serve --spec
+// FILE): one draft Transformer and KV pool, a KV table per stream. propose()
+// drafts for every listed stream together: catch-up passes (the tokens a
+// stream's draft KV lacks, chunked to the draft's batch size; a new stream's
+// whole prompt the first time), then k - 1 passes of one token per stream, so
+// the draft costs k batched forward passes per step, not k per stream. Each
+// stream first rolls back to the longest prefix it shares with what its draft
+// KV holds (rejected drafts are dropped). An error stops drafting for good,
+// never fails a request. Greedy drafts; verification (Scheduler) is exact.
+class BatchDrafter {
+ public:
+  // `draft` must use the target's vocabulary (same token texts).
+  static Result<std::unique_ptr<BatchDrafter>> create(Transformer& draft, KvBlockPool& cache,
+                                                      const Tokenizer& draft_tokenizer, const Tokenizer& target_tokenizer);
+  struct Request {
+    uint64_t id = 0;
+    std::span<const TokenId> context;  // all of the stream's tokens (the last is not yet in the target KV)
+    int32_t k = 0;
+    std::vector<TokenId>* out = nullptr;  // filled with up to k drafts
+  };
+  void propose(std::span<const Request> requests);
+  void release(uint64_t id);  // the stream finished
+  const Status& status() const { return status_; }
+  int64_t forward_passes() const { return passes_; }
+
+ private:
+  BatchDrafter(Transformer& draft, KvBlockPool& cache) : model_(draft), cache_(cache) {}
+  struct Stream {
+    explicit Stream(KvBlockPool& pool) : kv(pool) {}
+    KvBlockTable kv;
+    std::vector<TokenId> computed;  // tokens whose K/V are in kv
+  };
+  Stream& stream(uint64_t id);
+  Status run(std::span<const SeqBatch> batch, size_t rows_with_logits);
+
+  Transformer& model_;
+  KvBlockPool& cache_;
+  std::unordered_map<uint64_t, std::unique_ptr<Stream>> streams_;
+  std::vector<float> logits_;
+  Status status_;
+  int64_t passes_ = 0;
 };
 
 struct SpeculativeOptions {

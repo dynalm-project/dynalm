@@ -65,6 +65,9 @@ class SequenceState {
     return kv_.make_writable(num_computed_, num_computed_ + n);
   }
   void mark_computed(int32_t n);
+  // Speculative rollback: unmaps KV blocks past the computed tokens (blocks
+  // reserved for drafts that were rejected).
+  void rollback_kv() { kv_.truncate(num_computed_); }
   // Appends a sampled token; finishes on EOG or the length limit.
   void append_token(TokenId t, const Tokenizer& tokenizer);
   void cancel();

@@ -94,6 +94,10 @@ jobs:
     # Publish whatever passed: a failed platform is left out, never shipped untested.
     if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write      # signed build provenance (Sigstore), below
+      attestations: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -109,6 +113,13 @@ jobs:
           sha256sum dynalm-*.tar.gz dynalm-*.zip 2>/dev/null > SHA256SUMS
           rm -f ./*.sha256
           cat SHA256SUMS
+      # Signed provenance for every archive: `gh attestation verify <file> --repo <owner>/dynalm`
+      # proves it was built by this workflow from this repository (SECURITY.md).
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/dynalm-*.tar.gz
+            dist/dynalm-*.zip
       - uses: softprops/action-gh-release@v2
         with:
           name: DynaLM ${{ github.ref_name }}
@@ -121,6 +132,9 @@ jobs:
   docker:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
@@ -135,6 +149,9 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          # Build provenance and an SBOM (software bill of materials) attached to the image.
+          provenance: mode=max
+          sbom: true
           tags: |
             ghcr.io/${{ github.repository_owner }}/dynalm:cpu
             ghcr.io/${{ github.repository_owner }}/dynalm:${{ github.ref_name }}-cpu

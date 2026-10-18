@@ -36,6 +36,10 @@ enum class DType : uint8_t {
   kQ5_K,
   kQ6_K,
   kQ8_K,
+  // Non-linear 4-bit (a fixed 16-value codebook): IQ4_NL per 32, IQ4_XS per 256
+  // with 6-bit sub-block scales.
+  kIQ4_NL,
+  kIQ4_XS,
   kCount,
 };
 

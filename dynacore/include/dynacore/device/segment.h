@@ -24,7 +24,7 @@ namespace dynacore {
 struct DeviceCall {
   enum class M : uint8_t {
     kEmbedding, kMatmul, kMatmulMany, kRmsNorm, kLayerNorm, kRope, kKvStore, kAttention,
-    kActMul, kActivation, kAdd, kScale, kSoftcap, kFill, kGather, kScatterAdd,
+    kActMul, kActivation, kAdd, kScale, kSoftcap, kFill, kGather, kScatterAdd, kMoeFfn,
   };
   // Operands by method (see RecordingDevice):
   //   kEmbedding    a = table, b = out, ints0 = ids
@@ -43,6 +43,7 @@ struct DeviceCall {
   //   kFill         a, f
   //   kGather       a = src, d = dst, ints0 = rows
   //   kScatterAdd   a = src, d = dst, ints0 = rows, floats = weights
+  //   kMoeFfn       moe (segment executors only; no IR form)
   M m{};
   TensorView a, b, c, d;
   bool has_c = false;
@@ -58,6 +59,7 @@ struct DeviceCall {
   std::vector<Device::MatmulJob> jobs;
   std::vector<TensorView> biases;  // matmul_many biases (jobs point here)
   AttentionParams ap{};
+  MoeFfnParams moe{};
   std::shared_ptr<const KernelPlan> plan;  // plan in effect when recorded
 
   void reset(M kind) {
@@ -74,6 +76,7 @@ struct DeviceCall {
     jobs.clear();
     biases.clear();
     ap = AttentionParams{};
+    moe = MoeFfnParams{};
   }
 
   void copy_kv(std::span<const KvLayerView> src) {

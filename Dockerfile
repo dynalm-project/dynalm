@@ -9,7 +9,8 @@
 
 FROM ubuntu:24.04 AS build
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends g++ cmake ninja-build ca-certificates \
+# git: CMake fetches the pinned ggml (the CPU kernels, ENABLE_GGML_CPU).
+RUN apt-get update && apt-get install -y --no-install-recommends g++ cmake ninja-build ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY CMakeLists.txt CMakePresets.json README.md CHANGELOG.md LICENSE NOTICE THIRD_PARTY_LICENSES.md ./

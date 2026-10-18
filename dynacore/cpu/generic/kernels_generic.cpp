@@ -386,6 +386,8 @@ void register_generic_kernels(CpuKernels& k) {
   set(DType::kQ3_K, vec_dot_chunked<DType::kQ3_K>, dequant_ref<DType::kQ3_K>);
   set(DType::kQ5_K, vec_dot_chunked<DType::kQ5_K>, dequant_ref<DType::kQ5_K>);
   set(DType::kQ8_K, vec_dot_chunked<DType::kQ8_K>, dequant_ref<DType::kQ8_K>);
+  set(DType::kIQ4_NL, vec_dot_chunked<DType::kIQ4_NL>, dequant_ref<DType::kIQ4_NL>);
+  set(DType::kIQ4_XS, vec_dot_chunked<DType::kIQ4_XS>, dequant_ref<DType::kIQ4_XS>);
 }
 
 CpuKernels make_cpu_kernels(CpuIsa isa) {
@@ -406,7 +408,12 @@ CpuKernels make_cpu_kernels(CpuIsa isa) {
     // matmul registry runs them only where its plan enables them.
     if (cpu_info().features.avx_vnni) register_avxvnni_int16_split(k);
   }
-  if (isa == CpuIsa::kNeon) register_neon_kernels(k);
+  if (isa == CpuIsa::kNeon) {
+    register_neon_kernels(k);
+    // int8 activation kernels (DD-053) where the CPU has the dot-product
+    // instructions (runtime check: cpu_info, not the compiler).
+    if (cpu_info().features.arm_dotprod) register_neon_dot_kernels(k);
+  }
   return k;
 }
 

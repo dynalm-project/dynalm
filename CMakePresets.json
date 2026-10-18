@@ -77,7 +77,8 @@
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
-        "ENABLE_TSAN": "ON"
+        "ENABLE_TSAN": "ON",
+        "ENABLE_GGML_CPU": "OFF"
       }
     },
     {

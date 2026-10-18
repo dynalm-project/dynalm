@@ -17,6 +17,7 @@
 #include <tuple>
 #include <random>
 #include <string>
+#include <numeric>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -67,6 +68,8 @@ struct Env {
   std::unique_ptr<Device> gpu;
   std::unique_ptr<ir::RecordingDevice> rec;
   std::vector<Tensor> keep;  // CPU and GPU tensors alive for the test
+  // ggml's CPU backend evaluates GELU from an fp16 lookup table (~6e-4).
+  double act_tol = 1e-4;
 
   SegmentStats stats() { return gpu->segment_executor()->segment_stats(); }
 
@@ -163,6 +166,10 @@ std::vector<std::byte> make_weight(DType t, int64_t n, int64_t k) {
         put(2, uni(1e-3f, 4e-3f));  // dmin
       } else if (t == DType::kQ6_K) {
         put(bb - 2, uni(1e-4f, 4e-4f));  // d (last field)
+      } else if (t == DType::kIQ4_NL) {
+        put(0, uni(1e-3f, 4e-3f));  // d
+      } else if (t == DType::kIQ4_XS) {
+        put(0, uni(1e-4f, 3e-4f));  // d (times a 6-bit sub-block scale - 32)
       }
     }
   }
@@ -171,13 +178,18 @@ std::vector<std::byte> make_weight(DType t, int64_t n, int64_t k) {
 
 void test_matmul(Env& e) {
   const int64_t k = 512, n = 96;
-  for (DType t : {DType::kF32, DType::kF16, DType::kQ8_0, DType::kQ4_K, DType::kQ6_K}) {
+  // IQ4_NL / IQ4_XS: DynaCore's dequantization against ggml's own kernels.
+  for (DType t : {DType::kF32, DType::kF16, DType::kQ8_0, DType::kQ4_K, DType::kQ6_K, DType::kIQ4_NL, DType::kIQ4_XS}) {
     auto [wc, wg] = e.weight(t, make_weight(t, n, k), n, k);
     auto bias = randv(static_cast<size_t>(n));
     std::vector<std::byte> bb(bias.size() * 4);
     std::memcpy(bb.data(), bias.data(), bb.size());
     auto [bc, bgpu] = e.weight(DType::kF32, bb, 0, n);
+    // Second pass with the weight prepacked: on ggml-cpu, ggml's repacked
+    // (interleaved int8) kernels for Q4_K / Q6_K / Q8_0; elsewhere a no-op.
+    for (int pass = 0; pass < 2; ++pass)
     for (int64_t m : {1, 5, 33}) {
+      if (pass == 1 && m == 1) e.rec->prepack_weight(wg);
       // x is a column slice (strided rows) of a wider buffer: a strided leaf.
       auto xs = randv(static_cast<size_t>(m * (k + 64)));
       auto [xc, xg] = e.act(m, k + 64, &xs);
@@ -190,7 +202,10 @@ void test_matmul(Env& e) {
       expect_close("matmul", host_rows(yc), e.download(yg), 1e-2);
     }
   }
-  std::printf("  matmul: f32 f16 q8_0 q4_K q6_K, M 1/5/33, strided x, bias\n");
+  // ggml-cpu repacks the K-quant weights it has interleaved kernels for.
+  if (e.gpu->device().type == DeviceType::kCpu) CHECK(e.gpu->prepack_stats().tensors > 0);
+  std::printf("  matmul: f32 f16 q8_0 q4_K q6_K iq4_nl iq4_xs, M 1/5/33, strided x, bias; again prepacked (%lld repacked)\n",
+              static_cast<long long>(e.gpu->prepack_stats().tensors));
 }
 
 void test_norms_elementwise(Env& e) {
@@ -214,10 +229,10 @@ void test_norms_elementwise(Env& e) {
   for (Activation a : {Activation::kSilu, Activation::kGelu, Activation::kGeluTanh}) {
     e.cpu.act_mul(a, xc, x2c, yc);
     e.rec->act_mul(a, xg, x2g, yg);
-    expect_close("act_mul", host_rows(yc), e.download(yg), 1e-4);
+    expect_close("act_mul", host_rows(yc), e.download(yg), e.act_tol);
     e.cpu.activation(a, xc, yc);
     e.rec->activation(a, xg, yg);
-    expect_close("activation", host_rows(yc), e.download(yg), 1e-4);
+    expect_close("activation", host_rows(yc), e.download(yg), e.act_tol);
   }
   // add, then in-place scale / softcap / fill on the result, one segment.
   e.cpu.add(xc, x2c, yc);
@@ -237,26 +252,39 @@ void test_rope(Env& e) {
   const int32_t heads = 4, hd = 64;
   const int64_t m = 6;
   std::vector<int32_t> pos = {0, 1, 7, 100, 513, 2047};
-  std::vector<float> factors(16);
+  std::vector<float> factors(hd / 2);  // dim / 2 are read: enough for every case
   for (float& f : factors) f = uni(1.0f, 4.0f);
-  struct Case { RopeStyle style; int32_t dim; RopeScaling sc; bool freq; };
-  for (const Case cs : {Case{RopeStyle::kHalfSplit, 64, RopeScaling::kNone, false},
-                        Case{RopeStyle::kInterleaved, 64, RopeScaling::kNone, false},
-                        Case{RopeStyle::kHalfSplit, 32, RopeScaling::kNone, true},
-                        Case{RopeStyle::kHalfSplit, 64, RopeScaling::kLinear, false}}) {
+  // attn: LongRoPE's attention factor (Phi-3/4) scales the rotated dims only.
+  struct Case { RopeStyle style; int32_t dim; RopeScaling sc; bool freq; float attn; };
+  for (const Case cs : {Case{RopeStyle::kHalfSplit, 64, RopeScaling::kNone, false, 1.0f},
+                        Case{RopeStyle::kInterleaved, 64, RopeScaling::kNone, false, 1.0f},
+                        Case{RopeStyle::kHalfSplit, 32, RopeScaling::kNone, true, 1.0f},
+                        Case{RopeStyle::kHalfSplit, 64, RopeScaling::kLinear, false, 1.0f},
+                        Case{RopeStyle::kHalfSplit, 48, RopeScaling::kNone, true, 1.0f},
+                        Case{RopeStyle::kHalfSplit, 64, RopeScaling::kNone, false, 1.19f},
+                        Case{RopeStyle::kHalfSplit, 48, RopeScaling::kNone, true, 1.19f}}) {
     RopeConfig rc;
     rc.style = cs.style;
     rc.dim = cs.dim;
     rc.freq_base = 1000000.0f;
     rc.scaling = cs.sc;
     rc.scaling_factor = 4.0f;
+    rc.attn_factor = cs.attn;
     auto x = randv(static_cast<size_t>(m * heads * hd));
     auto [xc, xg] = e.act(m, heads * hd, &x);
     e.cpu.rope(xc, heads, hd, pos, rc, cs.freq ? factors.data() : nullptr);
     e.rec->rope(xg, heads, hd, pos, rc, cs.freq ? factors.data() : nullptr);
-    expect_close("rope", host_rows(xc), e.download(xg), 2e-4);
+    const std::vector<float> yc = host_rows(xc);
+    expect_close("rope", yc, e.download(xg), 2e-4);
+    // Position 0 rotates by nothing: the rotated dims are x * attn, the rest x.
+    for (int32_t h = 0; h < heads; ++h) {
+      for (int32_t d = 0; d < hd; ++d) {
+        const size_t i = static_cast<size_t>(h * hd + d);
+        CHECK(std::fabs(yc[i] - x[i] * (d < cs.dim ? cs.attn : 1.0f)) <= 1e-6f * (1.0f + std::fabs(x[i])));
+      }
+    }
   }
-  std::printf("  rope: half-split, interleaved, partial dims + frequency factors, linear scaling\n");
+  std::printf("  rope: half-split, interleaved, partial dims + frequency factors, linear scaling, attention factor\n");
 }
 
 void test_embedding_gather(Env& e) {
@@ -465,6 +493,128 @@ void test_failures(Env& e) {
   std::printf("  failures: direct calls, scatter_add, aliasing, bad block id, allocation failure; device usable after\n");
 }
 
+// Device-side MoE (Device::moe_ffn) against a host reference: router softmax,
+// top-k (normalized or raw weights), SwiGLU experts from 3-D weights, and the
+// optional shared expert with a per-row sigmoid gate. fp32 weights, so the
+// only difference is summation order.
+void test_moe_ffn(Env& e) {
+  const int64_t m = 5, d = 32, ff = 16, ne = 4, sf = 8;
+  const int32_t k = 2;
+  auto upload3 = [&](int64_t a, int64_t b, int64_t c, const std::vector<float>& v) {
+    auto host = Tensor::empty(DType::kF32, {a, b, c});
+    CHECK(host.ok());
+    std::memcpy(host->data(), v.data(), v.size() * 4);
+    auto dev = e.rec->upload(*host);
+    CHECK(dev.ok());
+    e.keep.push_back(*host);
+    e.keep.push_back(*dev);
+    return dev->view();
+  };
+  auto upload2 = [&](int64_t rows, int64_t cols, const std::vector<float>& v) {
+    std::vector<std::byte> b(v.size() * 4);
+    std::memcpy(b.data(), v.data(), b.size());
+    return e.weight(DType::kF32, b, rows, cols).second;
+  };
+  const auto x = randv(static_cast<size_t>(m * d)), wr = randv(static_cast<size_t>(ne * d), -2, 2);
+  const auto wg = randv(static_cast<size_t>(ne * ff * d)), wu = randv(static_cast<size_t>(ne * ff * d));
+  const auto wd = randv(static_cast<size_t>(ne * d * ff));
+  const auto sg = randv(static_cast<size_t>(sf * d)), su = randv(static_cast<size_t>(sf * d));
+  const auto sd = randv(static_cast<size_t>(d * sf)), sr = randv(static_cast<size_t>(d));
+  auto silu = [](double v) { return v / (1 + std::exp(-v)); };
+  auto dot = [](const float* a, const float* b, int64_t n) {
+    double t = 0;
+    for (int64_t i = 0; i < n; ++i) t += static_cast<double>(a[i]) * b[i];
+    return t;
+  };
+  // out[r] for one configuration, on the host.
+  auto reference = [&](bool normalize, bool shared, bool gated) {
+    std::vector<float> out(static_cast<size_t>(m * d), 0.0f);
+    for (int64_t r = 0; r < m; ++r) {
+      const float* xr = x.data() + r * d;
+      std::vector<double> p(static_cast<size_t>(ne));
+      double mx = -1e300, sum = 0;
+      for (int64_t q = 0; q < ne; ++q) mx = std::max(mx, p[static_cast<size_t>(q)] = dot(wr.data() + q * d, xr, d));
+      for (double& v : p) sum += (v = std::exp(v - mx));
+      std::vector<int64_t> idx(static_cast<size_t>(ne));
+      std::iota(idx.begin(), idx.end(), 0);
+      std::partial_sort(idx.begin(), idx.begin() + k, idx.end(), [&](int64_t a, int64_t b) { return p[a] > p[b]; });
+      double kept = 0;
+      for (int32_t j = 0; j < k; ++j) kept += p[static_cast<size_t>(idx[j])];
+      for (int32_t j = 0; j < k; ++j) {
+        const int64_t q = idx[static_cast<size_t>(j)];
+        const double w = p[static_cast<size_t>(q)] / (normalize ? kept : sum);
+        std::vector<float> h(static_cast<size_t>(ff));
+        for (int64_t i = 0; i < ff; ++i) {
+          h[static_cast<size_t>(i)] = static_cast<float>(silu(dot(wg.data() + (q * ff + i) * d, xr, d)) *
+                                                         dot(wu.data() + (q * ff + i) * d, xr, d));
+        }
+        for (int64_t o = 0; o < d; ++o) out[r * d + o] += static_cast<float>(w * dot(wd.data() + (q * d + o) * ff, h.data(), ff));
+      }
+      if (shared) {
+        std::vector<float> h(static_cast<size_t>(sf));
+        for (int64_t i = 0; i < sf; ++i) {
+          h[static_cast<size_t>(i)] = static_cast<float>(silu(dot(sg.data() + i * d, xr, d)) * dot(su.data() + i * d, xr, d));
+        }
+        const double gate = gated ? 1 / (1 + std::exp(-dot(sr.data(), xr, d))) : 1.0;
+        for (int64_t o = 0; o < d; ++o) out[r * d + o] += static_cast<float>(gate * dot(sd.data() + o * sf, h.data(), sf));
+      }
+    }
+    return out;
+  };
+  MoeFfnParams p;
+  auto [xc, xg] = e.act(m, d, &x);
+  auto [oc, og] = e.act(m, d);
+  (void)xc;
+  (void)oc;
+  p.x = xg;
+  p.out = og;
+  p.router = upload2(ne, d, wr);
+  p.gate = upload3(ne, ff, d, wg);
+  p.up = upload3(ne, ff, d, wu);
+  p.down = upload3(ne, d, ff, wd);
+  p.experts = static_cast<int32_t>(ne);
+  p.top_k = k;
+  p.act = Activation::kSilu;
+  const TensorView vg = upload2(sf, d, sg), vu = upload2(sf, d, su), vd = upload2(d, sf, sd), vr = upload2(1, d, sr);
+  CHECK(e.rec->supports_moe_ffn());
+  for (const auto& [normalize, shared, gated] : {std::tuple{true, false, false}, std::tuple{false, true, true},
+                                                 std::tuple{true, true, false}}) {
+    p.normalize_topk = normalize;
+    p.sh_gate = shared ? vg : TensorView();
+    p.sh_up = shared ? vu : TensorView();
+    p.sh_down = shared ? vd : TensorView();
+    p.sh_router = gated ? vr : TensorView();
+    e.rec->moe_ffn(p);
+    expect_close("moe_ffn", reference(normalize, shared, gated), e.download(og), 1e-4);
+  }
+  std::printf("  moe_ffn: top-2 of 4 experts (normalized / raw weights), shared expert with and without sigmoid gate\n");
+}
+
+// A value written in a step and read back under another [rows, cols] split
+// of the same bytes, then written and read again in the first one: per-head
+// Q/K norm reads Q [rows, heads x head_dim] as [rows x heads, head_dim].
+void test_reshaped_view(Env& e) {
+  const int64_t m = 3, heads = 4, hd = 32;
+  auto x = randv(static_cast<size_t>(m * heads * hd), -2, 2), w = randv(static_cast<size_t>(hd), 0.5f, 1.5f);
+  std::vector<std::byte> wb(w.size() * 4);
+  std::memcpy(wb.data(), w.data(), wb.size());
+  auto [wc, wg] = e.weight(DType::kF32, wb, 0, hd);
+  auto [xc, xg] = e.act(m, heads * hd, &x);
+  auto [yc, yg] = e.act(m, heads * hd);
+  auto [zc, zg] = e.act(m, heads * hd);
+  const TensorView yhc = view2d(yc.data(), m * heads, hd, hd * 4);
+  const TensorView yhg = view2d(yg.data(), m * heads, hd, hd * 4, DType::kF32, yg.device());
+  for (Device* d : {static_cast<Device*>(&e.cpu), static_cast<Device*>(e.rec.get())}) {
+    const bool gpu = d != &e.cpu;
+    d->add(gpu ? xg : xc, gpu ? xg : xc, gpu ? yg : yc);                  // y = 2x  as [m, heads x hd]
+    d->rms_norm(gpu ? yhg : yhc, gpu ? wg : wc, 1e-6f, gpu ? yhg : yhc);  // in place as [m x heads, hd]
+    d->add(gpu ? yg : yc, gpu ? xg : xc, gpu ? zg : zc);                  // z = y + x as [m, heads x hd]
+  }
+  expect_close("reshaped view (y)", host_rows(yc), e.download(yg), 1e-5);
+  expect_close("reshaped view (z)", host_rows(zc), e.download(zg), 1e-5);
+  std::printf("  same bytes under another row split in one step (per-head norm), read back in the first\n");
+}
+
 // A prepared graph binds buffers. Freeing a buffer drops every prepared graph,
 // so a new buffer at a reused address never runs through a stale graph.
 void test_buffer_reuse(Env& e) {
@@ -545,17 +695,19 @@ void test_mapped_weights(Env& e) {
 
 }  // namespace
 
-// Every GPU provider built in (Metal, Vulkan, CUDA) runs the whole suite.
-// DYNACORE_TEST_GPU=metal|vulkan|cuda restricts it to one.
+// Every GPU provider built in (Metal, Vulkan, CUDA) runs the whole suite, and
+// so does ggml's CPU backend (the experimental ggml-cpu device).
+// DYNACORE_TEST_GPU=metal|vulkan|cuda|ggml-cpu restricts it to one.
 int main() {
-  if (!ggml_gpu_compiled()) {
-    std::printf("no GPU backend in this build (ENABLE_METAL/VULKAN/CUDA=OFF): nothing to test\n");
+  if (!ggml_gpu_compiled(DeviceType::kCpu)) {  // ggml is in the build when any of its backends is
+    std::printf("no ggml backend in this build (ENABLE_METAL/VULKAN/CUDA/GGML_CPU=OFF): nothing to test\n");
     return 0;
   }
   const char* only = std::getenv("DYNACORE_TEST_GPU");
   int ran = 0;
+  std::string tested;  // provider labels, in the summary line (CI checks for "metal")
   for (auto [type, label] : {std::pair{DeviceType::kMetal, "metal"}, std::pair{DeviceType::kVulkan, "vulkan"},
-                             std::pair{DeviceType::kCuda, "cuda"}}) {
+                             std::pair{DeviceType::kCuda, "cuda"}, std::pair{DeviceType::kCpu, "ggml-cpu"}}) {
     if (!ggml_gpu_compiled(type) || (only != nullptr && *only != '\0' && std::string_view(only) != label)) continue;
     auto gpu = create_ggml_gpu_device(type);
     if (!gpu.ok()) {
@@ -564,6 +716,7 @@ int main() {
     }
     Env e;
     e.gpu = std::move(*gpu);
+    if (type == DeviceType::kCpu) e.act_tol = 2e-3;
     e.rec = std::make_unique<ir::RecordingDevice>(*e.gpu, ir::RecordingDevice::Mode::kDeferred);
     CHECK(e.gpu->segment_executor() != nullptr);
     CHECK(!e.gpu->host_accessible());
@@ -575,6 +728,8 @@ int main() {
     test_paged_attention(e);
     test_failures(e);
     test_buffer_reuse(e);
+    test_reshaped_view(e);
+    test_moe_ffn(e);
     test_mapped_weights(e);
     const SegmentStats st = e.stats();
     std::printf("segments %lld, graphs built %lld, reused %lld, evictions %lld\n", static_cast<long long>(st.segments),
@@ -582,11 +737,12 @@ int main() {
                 static_cast<long long>(st.graph_evictions));
     e.keep.clear();
     ++ran;
+    tested += std::string(" ") + label;
   }  // each GPU device is destroyed before exit (ggml-metal requirement)
   if (ran == 0) {
     std::printf("no GPU device: nothing tested\n");
     return 0;
   }
-  std::printf("all ggml device tests passed on %d GPU provider(s) (%d checks)\n", ran, g_checks);
+  std::printf("all ggml device tests passed on %d provider(s):%s (%d checks)\n", ran, tested.c_str(), g_checks);
   return 0;
 }

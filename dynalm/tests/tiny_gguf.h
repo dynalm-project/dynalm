@@ -24,7 +24,14 @@ namespace dynalm::test {
 struct TinyModelSpec {
   int32_t layers = 2, hidden = 128, heads = 4, kv_heads = 2, ffn = 256, context = 1024;
   uint32_t seed = 7;
-  bool qwen3 = false;  // qwen3: per-head Q/K norm, no QKV bias (runs on the CPU, not on the GPU)
+  bool qwen3 = false;  // qwen3: per-head Q/K norm, no QKV bias
+  // One fused Q|K|V weight (and bias) per layer, as Phi-3 stores it; the same
+  // values as the separate tensors of a spec that differs only here.
+  bool fused_qkv = false;
+  // tokenizer.ggml.pre, and tokenizer.ggml.add_bos_token: 0 false, 1 true,
+  // -1 absent (the loader's default applies). With BOS: <|endoftext|>.
+  std::string pre = "qwen2";
+  int add_bos = 0;
 };
 
 class GgufWriter {
@@ -198,13 +205,14 @@ inline std::vector<uint8_t> tiny_model_gguf(const TinyModelSpec& m = {}) {
   }
   const auto vocab = static_cast<int32_t>(toks.size());
   w.kv_str("tokenizer.ggml.model", "gpt2");
-  w.kv_str("tokenizer.ggml.pre", "qwen2");
+  w.kv_str("tokenizer.ggml.pre", m.pre);
   w.kv_strs("tokenizer.ggml.tokens", toks);
   w.kv_i32s("tokenizer.ggml.token_type", types);
   w.kv_strs("tokenizer.ggml.merges", {});
   w.kv_u32("tokenizer.ggml.eos_token_id", static_cast<uint32_t>(vocab - 1));  // <|im_end|>
   w.kv_u32("tokenizer.ggml.padding_token_id", static_cast<uint32_t>(vocab - 3));
-  w.kv_bool("tokenizer.ggml.add_bos_token", false);
+  if (m.add_bos >= 0) w.kv_bool("tokenizer.ggml.add_bos_token", m.add_bos == 1);
+  if (m.add_bos != 0) w.kv_u32("tokenizer.ggml.bos_token_id", static_cast<uint32_t>(vocab - 3));
   w.kv_str("tokenizer.chat_template",
            "{% for message in messages %}{{'<|im_start|>' + message['role'] + '\\n' + message['content'] + "
            "'<|im_end|>' + '\\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\\n' }}{% endif %}");
@@ -227,16 +235,31 @@ inline std::vector<uint8_t> tiny_model_gguf(const TinyModelSpec& m = {}) {
   for (int l = 0; l < m.layers; ++l) {
     const std::string p = "blk." + std::to_string(l) + ".";
     w.tensor(p + "attn_norm.weight", 0, {H}, f32_bytes(ones(H)));
-    w.tensor(p + "attn_q.weight", 8, {H, H}, q8_0_bytes(rnd(H * H, 0.15f)));
-    w.tensor(p + "attn_k.weight", 8, {H, kvd}, q8_0_bytes(rnd(H * kvd, 0.15f)));
-    w.tensor(p + "attn_v.weight", 8, {H, kvd}, q8_0_bytes(rnd(H * kvd, 0.15f)));
+    std::vector<float> wq = rnd(H * H, 0.15f), wk = rnd(H * kvd, 0.15f), wv = rnd(H * kvd, 0.15f);
+    if (m.fused_qkv) {
+      std::vector<float> qkv = wq;
+      qkv.insert(qkv.end(), wk.begin(), wk.end());
+      qkv.insert(qkv.end(), wv.begin(), wv.end());
+      w.tensor(p + "attn_qkv.weight", 8, {H, H + 2 * kvd}, q8_0_bytes(qkv));
+    } else {
+      w.tensor(p + "attn_q.weight", 8, {H, H}, q8_0_bytes(wq));
+      w.tensor(p + "attn_k.weight", 8, {H, kvd}, q8_0_bytes(wk));
+      w.tensor(p + "attn_v.weight", 8, {H, kvd}, q8_0_bytes(wv));
+    }
     if (m.qwen3) {
       w.tensor(p + "attn_q_norm.weight", 0, {hd}, f32_bytes(ones(hd)));
       w.tensor(p + "attn_k_norm.weight", 0, {hd}, f32_bytes(ones(hd)));
     } else {
-      w.tensor(p + "attn_q.bias", 0, {H}, f32_bytes(rnd(H, 0.05f)));
-      w.tensor(p + "attn_k.bias", 0, {kvd}, f32_bytes(rnd(kvd, 0.05f)));
-      w.tensor(p + "attn_v.bias", 0, {kvd}, f32_bytes(rnd(kvd, 0.05f)));
+      std::vector<float> bq = rnd(H, 0.05f), bk = rnd(kvd, 0.05f), bv = rnd(kvd, 0.05f);
+      if (m.fused_qkv) {
+        bq.insert(bq.end(), bk.begin(), bk.end());
+        bq.insert(bq.end(), bv.begin(), bv.end());
+        w.tensor(p + "attn_qkv.bias", 0, {H + 2 * kvd}, f32_bytes(bq));
+      } else {
+        w.tensor(p + "attn_q.bias", 0, {H}, f32_bytes(bq));
+        w.tensor(p + "attn_k.bias", 0, {kvd}, f32_bytes(bk));
+        w.tensor(p + "attn_v.bias", 0, {kvd}, f32_bytes(bv));
+      }
     }
     w.tensor(p + "attn_output.weight", 8, {H, H}, q8_0_bytes(rnd(H * H, 0.1f)));
     w.tensor(p + "ffn_norm.weight", 0, {H}, f32_bytes(ones(H)));

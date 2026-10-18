@@ -60,7 +60,18 @@ Status finish(LoadedModel& m, TokenizerData tok_data, const std::string& chat_te
     return Corrupt("tokenizer vocab (" + std::to_string(m.tokenizer->vocab_size()) + ") larger than model vocab (" +
                    std::to_string(m.config.vocab_size) + ")");
   }
-  if (auto tmpl = ChatTemplate::from_jinja(chat_template); tmpl.ok()) m.chat_template = std::move(*tmpl);
+  if (auto tmpl = ChatTemplate::from_jinja(chat_template); tmpl.ok()) {
+    m.chat_template = std::move(*tmpl);
+  } else if (chat_template.empty()) {
+    // Older conversions carry no template: use the one the model's name implies.
+    const std::string file = std::filesystem::path(m.path).filename().string();
+    const std::string_view names[] = {m.config.name, file};
+    if (auto guess = ChatTemplate::from_model_name(names); guess.ok()) {
+      LOG_INFO("Chat template: none in the model file; using {} (from the model name)",
+               chat_format_name(guess->format()));
+      m.chat_template = std::move(*guess);
+    }
+  }
   return Status::Ok();
 }
 

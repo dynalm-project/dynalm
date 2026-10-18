@@ -51,10 +51,10 @@ const GgmlType* ggml_type(uint32_t id) {
     set(17, "iq2_xs", 256, 74, std::nullopt);
     set(18, "iq3_xxs", 256, 98, std::nullopt);
     set(19, "iq1_s", 256, 50, std::nullopt);
-    set(20, "iq4_nl", 32, 18, std::nullopt);
+    set(20, "iq4_nl", 32, 18, DType::kIQ4_NL);
     set(21, "iq3_s", 256, 110, std::nullopt);
     set(22, "iq2_s", 256, 82, std::nullopt);
-    set(23, "iq4_xs", 256, 136, std::nullopt);
+    set(23, "iq4_xs", 256, 136, DType::kIQ4_XS);
     set(24, "i8", 1, 1, DType::kI8);
     set(25, "i16", 1, 2, DType::kI16);
     set(26, "i32", 1, 4, DType::kI32);

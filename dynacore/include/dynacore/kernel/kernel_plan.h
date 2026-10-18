@@ -40,8 +40,12 @@ struct KernelPlan {
   int32_t matmul_chunks_per_thread = 32;  // DD-067 (was 8)
   // Matmuls with at most this many rows use int8 activations and integer
   // dot products where the backend accelerates them (DD-053); 0 = never.
-  // Default 4: the measured crossover with the fp32 expand path, and within
-  // the accuracy contract (perplexity <= +1%, mean KL <= 0.0025 nats).
+  // Default 4: the measured crossover with the fp32 expand path (AVX2), and
+  // within the accuracy contract (perplexity <= +1%, mean KL <= 0.0025 nats).
+  // The engine uses 64 on NEON (kNeonInt8Rows in runtime/engine.cpp), where the
+  // SDOT row kernels beat the fp32 expand GEMM at prefill sizes too (M4 Pro, Qwen2.5-1.5B, 401-token prompt:
+  // 2394 -> 1835 ms); the per-row arithmetic, and so the accuracy, is that of
+  // decode at any row count (prefill chunks of 32/64: perplexity +0.04%, mean KL 0.0012).
   int32_t int8_decode_max_rows = 4;
   // Whether the FFN down projection may use int8 activations. Its input (the
   // gated activation) carries the largest outlier channels: with it, Qwen3-4B

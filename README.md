@@ -150,8 +150,8 @@ the GPU, and `Device: CPU/...` for the CPU.
 `DYNALM_BACKEND=cpu`. `--gpu` switches back for one run.
 
 **Models that run on the GPU today:** the Qwen2.5 family and other models of the same design.
-Llama 3.x GGUF files run on the GPU too. For Qwen3, Gemma 3 and mixture-of-experts models,
-`auto` uses the CPU for now.
+Llama 3.x, Qwen3, Gemma 3 and mixture-of-experts models (Granite-MoE, Mixtral, Qwen-MoE) run on
+the GPU too (MoE: Metal and Vulkan). For other cases `auto` uses the CPU for now.
 Full guide: [docs/gpu.md](docs/gpu.md).
 
 ---
@@ -184,10 +184,12 @@ dynalm models --available                                                       
 ```
 
 **Supported:**
-- **Families:** Llama 1–3.2, Qwen 2 / 2.5 / 3 (dense and MoE), Gemma 1–3, Phi-3 / 3.5,
+- **Families:** Llama 1–3.2, Qwen 2 / 2.5 / 3 (dense and MoE), Gemma 1–3, Phi-3 / 3.5 / 4-mini,
   Mistral, Mixtral, IBM Granite, and the DeepSeek-R1 distills.
 - **File formats:** GGUF, Hugging Face SafeTensors, GPTQ and AWQ.
-- **Quantizations:** Q2_K to Q8_0, F16, BF16 and F32. `Q4_K_M` is recommended.
+- **Quantizations:** Q2_K to Q8_0, IQ4_NL, IQ4_XS, F16, BF16 and F32. `Q4_K_M` is recommended.
+- **Not supported yet:** the other i-quants (IQ1_S, IQ1_M, IQ2_XXS, IQ2_XS, IQ2_S, IQ3_XXS, IQ3_S),
+  TQ1_0 / TQ2_0 and MXFP4. Such a file is refused at load with the tensor and type named.
 
 ---
 
@@ -326,6 +328,37 @@ About the model file size plus 1 GB. A 1.5B model needs about 2 GB, and a 4B mod
 ### Can I choose CPU or GPU myself?
 Yes. Add `--cpu` or `--gpu` to any command, or set `runtime: device: cpu` in
 `~/.dynalm/config.yaml`. The default is GPU first.
+
+### Can I trade speed for accuracy?
+Yes, with `--mode`. `auto` (the default) picks the fastest validated path; on the CPU that is
+ggml's kernels, with llama.cpp-level accuracy. `--mode exact` keeps DynaLM's own accuracy contract
+(perplexity within +1%, DD-053) on every device, so it is slower on the CPU. `--mode safe` uses
+plain fp32 CPU kernels, for debugging. `dynalm autotune` shows what each mode runs on your machine;
+`dynalm autotune --run <model>` picks the best CPU thread count and remembers it
+([docs/cli.md](docs/cli.md#execution-modes-and-autotune)).
+
+---
+
+## Known limitations
+
+- **GPU backends are previews.** Models that a GPU cannot run yet fall back to the CPU under
+  `--backend auto`; `--gpu` reports why instead of falling back.
+- **Tested hardware for the newest changes.** The ARM int8 kernels, runtime ARM feature detection,
+  AutoTune, IQ4 support, the GPT-4o tokenizer and the Phi-3 / Phi-4 fixes in the changelog's
+  Unreleased section were measured on an Apple M4 Pro (macOS, CPU, Metal, Vulkan via MoltenVK)
+  only. Other platforms run the model-free test suite in CI; their speed and accuracy with these
+  changes are not measured yet.
+- **Windows on ARM:** MSVC builds have neither ggml's CPU kernels nor the ARM dot-product
+  kernels, so the CPU runs DynaLM's portable fp32 kernels (correct, slower).
+- **CUDA:** built and unit-tested in CI without a GPU; not measured on NVIDIA hardware by us.
+- **AutoTune tunes the CPU thread count only.** On Windows it cannot read the power and load state,
+  so `dynalm autotune --run` stores a result only with `--force`.
+- **Tokenizers:** byte-level BPE files need a pre-tokenizer DynaLM implements (GPT-2, Llama 3,
+  Qwen2, StarCoder/SmolLM, GPT-4o families); others are refused at load. Old GGUF files without a
+  pre-tokenizer tag use the GPT-2 split.
+- **Chat templates** are recognized by family (no Jinja engine, see docs/security.md). An
+  unrecognized one makes chat mode fail with "model has no recognized chat template"; `--raw`
+  sends the text as it is.
 
 ---
 

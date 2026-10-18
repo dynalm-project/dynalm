@@ -146,6 +146,12 @@ class RecordingDevice final : public Device {
   void gather_rows(const TensorView& src, std::span<const int32_t> rows, const TensorView& dst) override;
   void scatter_add_rows(const TensorView& src, std::span<const int32_t> rows, std::span<const float> weights,
                         const TensorView& dst) override;
+  // Device-side MoE: only when the inner device runs whole segments and has it
+  // (the call has no IR form, so the CPU compiler pipeline never sees it).
+  bool supports_moe_ffn() const override {
+    return inner_.segment_executor() != nullptr && inner_.supports_moe_ffn();
+  }
+  void moe_ffn(const MoeFfnParams& p) override;
 
   // A recorded call with private copies of its host arguments.
   using Call = DeviceCall;

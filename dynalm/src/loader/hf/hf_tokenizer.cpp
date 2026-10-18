@@ -13,6 +13,8 @@ constexpr std::string_view kQwen2Regex =
     R"((?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+)";
 constexpr std::string_view kLlama3Regex =
     R"((?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+)";
+constexpr std::string_view kGpt4oRegex =
+    R"([^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n/]*|\s*[\r\n]+|\s+(?!\S)|\s+)";
 
 const json::Value* field(const json::Value* o, std::string_view key) {
   if (!o) return nullptr;
@@ -77,6 +79,7 @@ Result<std::string> byte_level_pre(const json::Value* pre) {
     const std::string re = pattern_of(parts[0]);
     if (re == kQwen2Regex) return std::string("qwen2");
     if (re == kLlama3Regex) return std::string("llama-bpe");
+    if (re == kGpt4oRegex) return std::string("gpt-4o");
   }
   return Unsupported("tokenizer.json pre-tokenizer (" + summary + ") is not one the engine implements yet");
 }

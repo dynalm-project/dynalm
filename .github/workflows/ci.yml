@@ -128,7 +128,8 @@ jobs:
         run: |
           line="$(grep 'dynacore/test_ggml_device' tests.log)"
           echo "$line"
-          if echo "$line" | grep -q 'all ggml device tests passed'; then
+          # ggml's CPU backend always runs; only a "metal" entry means the GPU ran.
+          if echo "$line" | grep -q 'all ggml device tests passed on .*: .*metal'; then
             echo "::notice::Metal GPU tests RAN on a real device"
           else
             echo "::warning::Metal GPU tests did NOT run (no usable Metal device): GPU status NOT RUN"
@@ -155,7 +156,8 @@ jobs:
         run: |
           line="$(grep 'dynacore/test_ggml_device' tests.log)"
           echo "$line"
-          if echo "$line" | grep -q 'all ggml device tests passed'; then
+          # ggml's CPU backend always runs; only a "vulkan" entry means the GPU ran.
+          if echo "$line" | grep -q 'all ggml device tests passed on .*: .*vulkan'; then
             echo "::notice::Vulkan GPU tests RAN (lavapipe software device)"
           else
             echo "::warning::Vulkan GPU tests did NOT run: GPU status NOT RUN"

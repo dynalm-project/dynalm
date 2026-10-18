@@ -18,6 +18,7 @@
 #include <cstring>
 #include <vector>
 
+#include "dynacore/kernel/kernel_plan.h"
 #include "dynacore/quantization/quant_formats.h"
 #include "dynacore/tensor/fp16.h"
 
@@ -127,6 +128,18 @@ inline std::vector<float> make_x(int64_t m, int64_t k, int64_t ld, uint32_t seed
 }
 
 enum class Path { kFp32, kInt8Per32, kInt8Subscale };
+
+// The path CpuDevice takes for an M-row K-quant matmul under the auto
+// activation contract with KernelPlan::defaults(): per-32 int8 for one row,
+// sub-scaled int8 for 2..8 rows where the tier has that family (AVX2), per-32
+// up to int8_decode_max_rows (4; 64 on ARM64) where it has only per-32 (NEON
+// with SDOT), fp32 otherwise.
+inline Path auto_path(bool int8_dot, bool int8_subscaled, int64_t m) {
+  if (!int8_dot) return Path::kFp32;
+  if (m == 1) return Path::kInt8Per32;
+  if (int8_subscaled) return m <= 8 ? Path::kInt8Subscale : Path::kFp32;
+  return m <= dynacore::KernelPlan::defaults().int8_decode_max_rows ? Path::kInt8Per32 : Path::kFp32;
+}
 
 inline std::vector<double> act_steps(const float* x, int64_t k, Path p) {
   std::vector<double> h(static_cast<size_t>(k), 0.0);

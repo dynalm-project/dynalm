@@ -33,8 +33,10 @@ enum class ChatFormat {
   kMistral,    // [INST] ... [/INST] (system prepended to first user turn)
   kGemma,      // <start_of_turn>user\n...<end_of_turn>  (role "model")
   kPhi3,       // <|user|>\n...<|end|>
+  kPhi4,       // <|user|>...<|end|>  (Phi-4-mini: no newlines)
   kDeepSeek2,  // <｜User｜>...<｜Assistant｜> (DeepSeek-V2/V3/R1)
   kGranite,    // <|start_of_role|>role<|end_of_role|>...<|end_of_text|>  (IBM Granite 3.x)
+  kDeepSeekCoder,  // ### Instruction:\n...\n### Response:\n...<|EOT|>  (DeepSeek-Coder 1.x)
 };
 
 std::string_view chat_format_name(ChatFormat f);
@@ -45,6 +47,11 @@ class ChatTemplate {
   // Detects the format from a Jinja template source. Unrecognized templates
   // are kUnsupported; callers may fall back to an explicit format.
   static Result<ChatTemplate> from_jinja(std::string_view jinja);
+  // For a model file without a template (older GGUF conversions): the format
+  // its name implies ("llama-2-7b-chat", "Mistral-7B-Instruct",
+  // "deepseek-coder-1.3b-instruct"), else kUnsupported. `names`: the model's
+  // general.name and file name.
+  static Result<ChatTemplate> from_model_name(std::span<const std::string_view> names);
   explicit ChatTemplate(ChatFormat format, std::string default_system = {}, std::string turn_separator = "\n")
       : format_(format), default_system_(std::move(default_system)), separator_(std::move(turn_separator)) {}
 

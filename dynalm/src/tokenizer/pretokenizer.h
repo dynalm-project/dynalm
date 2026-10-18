@@ -12,6 +12,11 @@
 //   kQwen2:     as kLlama3 with \p{N} (single digits)
 //   kStarCoder: split every \p{N} into its own word, then kGpt2 on the rest
 //               (SmolLM, StarCoder, Refact, Command-R)
+//   kGpt4o:     [^\r\n\p{L}\p{N}]?[U]*[W]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?|
+//               [^\r\n\p{L}\p{N}]?[U]+[W]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?|\p{N}{1,3}|
+//                ?[^\s\p{L}\p{N}]+[\r\n/]*|\s*[\r\n]+|\s+(?!\S)|\s+
+//               with U = [\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}], W = [\p{Ll}\p{Lm}\p{Lo}\p{M}]
+//               (o200k: Phi-4-mini, Llama 4); as the HF regex, marks included
 
 #include <string_view>
 #include <vector>
@@ -21,7 +26,7 @@
 
 namespace dynalm {
 
-enum class PreTokenizer { kGpt2, kLlama3, kQwen2, kStarCoder };
+enum class PreTokenizer { kGpt2, kLlama3, kQwen2, kStarCoder, kGpt4o };
 
 // Maps a GGUF `tokenizer.ggml.pre` id (e.g. "llama-bpe", "qwen2", "smollm").
 // Unknown ids are an error: silently using the wrong split changes token IDs.

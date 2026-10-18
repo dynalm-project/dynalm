@@ -363,7 +363,7 @@ void test_accuracy() {
   GeneratedBackend gen(pool, table());
   ReferenceBackend ref(pool, this_isa());
   ReferenceBackend packed_ref(pool, this_isa());
-  const bool int8_dot = ref.target().int8_dot;
+  const bool int8_dot = ref.target().int8_dot, int8_sx = ref.target().int8_subscaled;
   Stats s_gen, s_f32, s_per32, s_sx, s_packed;
   int same_as_f32 = 0, total = 0, packed_cases = 0;
   uint32_t seed = 100;
@@ -391,10 +391,16 @@ void test_accuracy() {
     // Reference, auto contract (int8 on AVX2), unpacked.
     std::vector<float> ya(yg.size());
     CHECK(run_on(ref, mm, w, x, s.k, bias, ya, s.n, s.m).ok());
-    const Path pa = !int8_dot ? Path::kFp32 : s.m == 1 ? Path::kInt8Per32 : Path::kInt8Subscale;
+    // The auto contract: per-32 for one row; sub-scaled for 2..8 rows on a
+    // tier with that family (AVX2); per-32 up to int8_decode_max_rows on NEON with SDOT.
+    const int64_t per32_rows = KernelPlan::defaults().int8_decode_max_rows;
+    const Path pa = !int8_dot ? Path::kFp32
+                    : s.m == 1 ? Path::kInt8Per32
+                    : int8_sx  ? (s.m <= 8 ? Path::kInt8Subscale : Path::kFp32)
+                               : (s.m <= per32_rows ? Path::kInt8Per32 : Path::kFp32);
     check_bound(w, x, s.k, bp, ya.data(), s.n, s.m, pa, pa == Path::kInt8Per32 ? s_per32 : pa == Path::kInt8Subscale ? s_sx : s_f32);
     // Reference, auto contract, prepacked interleaved Q4_K (AVX2, N % 8 == 0, M 2..8).
-    if (int8_dot && s.n % 8 == 0 && s.m >= 2) {
+    if (int8_sx && s.n % 8 == 0 && s.m >= 2) {
       auto pk = packed_ref.prepack_weight(view2(w.blocks.data(), DType::kQ4_K, s.n, s.k));
       if (!pk.ok()) std::fprintf(stderr, "%s\n", pk.status().to_string().c_str());
       CHECK(pk.ok());

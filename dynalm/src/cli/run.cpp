@@ -19,6 +19,7 @@
 #include "dynacore/cpu/cpu_device.h"
 #include "dynacore/hardware/isa.h"
 #include "dynacore/hardware/thread_qos.h"
+#include "runtime/autotune.h"
 #include "runtime/engine.h"
 #include "runtime/speculative.h"
 #include "runtime/text_stream.h"
@@ -43,14 +44,17 @@ void usage() {
                "  -c, --ctx N           KV cache capacity in tokens (default 4096)\n"
                "  --batch N             max tokens per forward pass (default 256)\n"
                "  --kv f16|f32|q8_0     KV cache dtype (default f16; q8_0 halves its memory)\n"
-               "  --int8-decode N       int8 activations for matmuls of <= N rows (default 4, 0 = off)\n"
+               "  --int8-decode N       native CPU: int8 activations for matmuls of <= N rows (default 4, 64 on ARM; 0 = off)\n"
                "  --gpu                 use the GPU (the default when it can run the model)\n"
                "  --cpu                 use the CPU\n"
                "  --backend B           auto (default: GPU first, else CPU) | gpu | cpu | metal | vulkan | cuda\n"
+               "                        | native-cpu (DynaCore CPU kernels, DD-053; cpu = fast ggml kernels when built)\n"
+               "  --mode M              auto (default) | performance | exact (DD-053 accuracy everywhere)\n"
+               "                        | safe (fp32 CPU reference kernels); see dynalm autotune\n"
                "  --execution MODE      reference (default) | compiled: DynaCore IR + fusion (DD-072)\n"
                "  --no-stream           print only the final text\n"
                "sampling (default: greedy; chat: temp 0.8, top-k 40, top-p 0.9, repeat-penalty 1.1):\n"
-               "  --temp T              temperature (0 = greedy)\n"
+               "  --temp T              temperature (0 = greedy; also --temperature)\n"
                "  --top-k K, --top-p P, --min-p P\n"
                "  --repeat-penalty R, --presence-penalty P, --frequency-penalty F, --repeat-last-n N\n"
                "  --seed S              RNG seed (reproducible output)\n"
@@ -190,7 +194,7 @@ int run_speculative(const std::string& path, const std::string& spec, int k, boo
 // Options `run` takes from the config file and DYNALM_* (config/config.h).
 constexpr OptionSpec kRunConfigOptions[] = {
     {"model"}, {"threads"}, {"ctx"}, {"batch"}, {"kv"}, {"backend"}, {"cpu", false}, {"gpu", false}, {"execution"}, {"int8-decode"}, {"temperature"},
-    {"max-tokens"},
+    {"max-tokens"}, {"mode"},
 };
 
 int cmd_run(std::span<const std::string_view> raw_args) {
@@ -209,7 +213,8 @@ int cmd_run(std::span<const std::string_view> raw_args) {
   int spec_k = 4;
   bool spec_fixed = false;
   EngineOptions opts;
-  opts.backend_auto = true;  // --backend auto
+  (void)apply_backend_choice("auto", opts);  // --backend auto
+  TuneMode mode = TuneMode::kAuto;
   GenerateParams params;
 
   for (size_t i = 0; i < args.size(); ++i) {
@@ -249,6 +254,11 @@ int cmd_run(std::span<const std::string_view> raw_args) {
       ok = apply_backend_choice(value(), opts).ok();
     } else if (a == "--cpu" || a == "--gpu") {
       (void)apply_backend_choice(a.substr(2), opts);  // shorthands for --backend cpu / gpu
+    } else if (a == "--mode") {
+      auto m = parse_tune_mode(value());
+      ok = m.ok();
+      if (ok) mode = *m;
+      else std::fprintf(stderr, "%s: %s\n", "run", m.status().message().c_str());
     } else if (a == "--execution") {
       auto x = parse_execution_mode(value());
       ok = x.ok();
@@ -268,6 +278,10 @@ int cmd_run(std::span<const std::string_view> raw_args) {
       usage();
       return 1;
     }
+  }
+  if (Status st = apply_tune_mode(mode, opts); !st.ok()) {
+    std::fprintf(stderr, "run: %s\n", st.message().c_str());
+    return 1;
   }
   if (path.empty()) path = config_model;  // model.path from the config file
   if (ctx == 0) ctx = 4096;               // auto

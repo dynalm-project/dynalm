@@ -201,9 +201,11 @@ dynalm run <model> -p <prompt> [options]
 | `-c, --ctx N` | Context / KV cache size in tokens (default 4096) |
 | `--batch N` | Max tokens per forward pass (default 256) |
 | `--kv f16\|f32` | KV cache precision (default f16) |
-| `--int8-decode N` | int8 activations for matmuls of ≤ N rows (default 4; 0 = off, making output independent of batching) |
+| `--int8-decode N` | DynaLM's CPU kernels (`native-cpu`, `--mode exact`): int8 activations for matmuls of ≤ N rows (default 4, 64 on ARM64; 0 = off, making output independent of batching) |
 | `--gpu` / `--cpu` | Use the GPU (the default when it can run the model) / use the CPU. Same as `--backend gpu` / `--backend cpu` |
 | `--backend auto\|gpu\|cpu\|metal\|vulkan\|cuda` | Compute backend. `auto` (default): a GPU built into this binary (CUDA, then Metal, then Vulkan) when it starts and runs the model, else the CPU (the reason is logged). Each GPU needs its build option (`-DENABLE_METAL/VULKAN/CUDA=ON`); see [gpu.md](gpu.md). `DYNACORE_GPU_INDEX=N` picks the N-th GPU of that kind |
+| `--backend cpu` / `native-cpu` / `ggml-cpu` | The CPU. `cpu` (and `auto` without a GPU) uses ggml's CPU kernels: 8-bit activations as in llama.cpp, about 4× the speed of the native kernels, llama.cpp-level accuracy (Qwen2.5-1.5B: mean KL 0.023 against the fp32 reference). Models they cannot run (mixture-of-experts, Gemma 3) use the native kernels. `native-cpu`: DynaLM's own kernels, DD-053 accuracy (int8 activations per 32 values for up to 4 rows, 64 on ARM64, with SIMD on AVX2 and on ARM with dot-product instructions; fp32 otherwise). `ggml-cpu`: the fast kernels only, an error if they cannot run the model |
+| `--mode M` | `auto` (default), `performance`, `exact` (DD-053 accuracy on every device, never ggml's 8-bit CPU kernels) or `safe` (fp32 CPU reference kernels only). See [Execution modes and AutoTune](#execution-modes-and-autotune) |
 | `--no-stream` | Print the answer at the end instead of word by word |
 
 Sampling (default for `run`: greedy, i.e. always the most likely token):
@@ -263,6 +265,8 @@ dynalm serve <model> [options]
 | `--disable-admin` | Turn off `POST /admin/shutdown` (used by `dynalm stop`) |
 | `--api-key-file FILE` | Require `Authorization: Bearer <key>` on every endpoint except `GET /health`; the key is the first line of FILE (or set `DYNALM_API_KEY`), at least 16 characters |
 | `--allow-unauthenticated` | Allow a non-loopback `--host` without a key (only behind an authenticating gateway; [deployment.md](deployment.md)) |
+| `--spec ngram\|DRAFT` | Speculative decoding for every stream, same output as without it. `ngram`: drafts from text already in the conversation (good for summaries, code edits, extraction). `DRAFT`: a small model with the same vocabulary, a file or a name (for a Qwen2.5 target, `qwen2.5:0.5b`); it drafts for all streams in a few batched passes on the same device. A stream whose drafts keep failing stops drafting for a while. `/metrics`: `dynalm_spec_drafted_tokens_total`, `dynalm_spec_accepted_tokens_total` |
+| `--spec-k K` | With `--spec`: most drafted tokens per stream and step (default 4) |
 
 Every option can also be set as `DYNALM_<OPTION>` (e.g. `DYNALM_PORT=9000`) or in the config file.
 Precedence: command line > environment > file.
@@ -307,13 +311,53 @@ Request fields: `messages` / `prompt`, `max_tokens`, `temperature`, `top_p`, `to
 
 | Command | What it shows |
 |---|---|
-| `dynalm doctor [--json]` | System report for bug reports. Versions (DynaLM, DynaCore), OS, CPU and cores (P/E), caches, ISA support, RAM, GPUs, the device and kernel tier DynaLM will use, thread count, model store, config file, actionable warnings, and status. Exit code 1 when not ready. (`dynalm info` is an alias.) |
+| `dynalm doctor [--json]` | System report for bug reports; loads no model and runs no benchmark. Versions (DynaLM, DynaCore), OS, CPU and cores (P/E), caches, ISA support (detected at run time), RAM, the backends built in (native CPU, ggml CPU, Metal / Vulkan / CUDA with the devices each finds), the device `--backend auto` tries first, default thread counts, model store, config file, the AutoTune cache state, a short kernel self-test, actionable warnings, and status. Exit code 1 when not ready. (`dynalm info` is an alias.) |
 | `dynalm version` | DynaLM and DynaCore versions, build type, compiler, compiled and selected kernels |
 | `dynalm config [show]` | Every configuration key, its effective value and its source (default, file, environment) |
 | `dynalm config path` / `init` | The config file in use / write a commented starter `~/.dynalm/config.yaml` |
 | `dynalm benchmark <model> [options]` | Load test: throughput and P50-P99 latency |
+| `dynalm autotune` | The CPU features detected at run time, the GPU backends built in, which kernels each CPU path uses, what each `--mode` runs, and the tuned settings stored for this machine |
+| `dynalm autotune --run <model>` | Measures decode speed at a few CPU thread counts and stores the fastest for this model and device (see below) |
+| `dynalm autotune --clear` | Deletes the tuning cache |
 
 Configuration keys and precedence: [configuration.md](configuration.md).
+
+### Execution modes and AutoTune
+
+`run`, `chat`, `serve` and `benchmark` take `--mode` (config key `runtime.mode`,
+`DYNALM_MODE`):
+
+| Mode | What runs |
+|---|---|
+| `auto` (default), `performance` | The fastest validated path: a GPU that runs the model, else ggml's CPU kernels (llama.cpp-level accuracy), else DynaLM's CPU kernels |
+| `exact` | DD-053 accuracy everywhere: the GPU (validated per backend), else DynaLM's CPU kernels; never ggml's 8-bit CPU kernels. `--backend ggml-cpu` with `--mode exact` is an error |
+| `safe` | DynaLM's fp32 CPU reference kernels only: no GPU, no int8. For debugging and unusual hardware. A GPU request (`--gpu`, `--backend metal`, ...) with `--mode safe` is an error |
+
+An explicitly requested GPU (`--gpu`, `--backend metal`, ...) never falls back to the CPU in any mode.
+
+`dynalm autotune --run MODEL` tunes the CPU thread count, the setting with the
+largest effect on a hybrid CPU (M4 Pro, Qwen2.5-1.5B decode with ggml's kernels:
+138 tok/s on the 8 performance cores, 81 tok/s on all 12):
+
+1. It checks the machine: on AC power, not thermally limited, load average below 1.5. Where it
+   cannot read these (Windows), the result counts as unverified and needs `--force`.
+2. For a few thread counts (around the performance-core count, and the default)
+   it loads the model, warms up, and generates 64 tokens three times; the median counts.
+3. It keeps the default unless another count is at least 3% faster.
+4. It stores the result in `~/.dynalm/autotune.json` (`DYNALM_AUTOTUNE_CACHE`
+   overrides the path). If the machine was not quiet, it does not store the
+   result; `--force` stores it marked `UNRELIABLE`.
+
+Options: `--backend cpu|native-cpu|ggml-cpu` (default `cpu`), `--budget S` (stop
+trying more counts after about S seconds, default 120), `--tokens N`, `--force`.
+
+The stored setting is used only when `--threads` is not given. Each entry is keyed
+by the device and the model (architecture, width, depth, quantization). The file
+is keyed by the CPU, its features, the core counts, the OS, the DynaLM version,
+the compiler, the ggml revision and the binary itself, so any rebuild or other
+machine ignores it (`dynalm autotune` says why). `DYNALM_AUTOTUNE=0` ignores it;
+`dynalm autotune --clear` deletes it. Tuning only runs DynaLM's built-in kernels:
+nothing is downloaded or compiled.
 
 `dynalm benchmark` options:
 
@@ -337,6 +381,8 @@ Configuration keys and precedence: [configuration.md](configuration.md).
 | `DYNALM_MODELS_DIR` | Model store for `pull`, `models`, `rm` and name lookup (default `~/.dynalm/models`) |
 | `DYNALM_CONFIG` | Config file (default `~/.dynalm/config.yaml` when present) |
 | `DYNALM_LOG_LEVEL` | Default log level |
+| `DYNALM_AUTOTUNE` | `0`: ignore the tuning cache |
+| `DYNALM_AUTOTUNE_CACHE` | Tuning cache file (default `~/.dynalm/autotune.json`) |
 | `DYNALM_<OPTION>` | Any configurable `serve`/`run` option, e.g. `DYNALM_PORT`, `DYNALM_HOST`, `DYNALM_THREADS` |
 | `HF_TOKEN` | Hugging Face token for gated models (`pull`) |
 

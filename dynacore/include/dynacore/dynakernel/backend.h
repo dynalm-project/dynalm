@@ -39,6 +39,9 @@ struct TargetDesc {
   std::string isa;        // "avx2", "generic", ...
   int32_t threads = 1;
   bool int8_dot = false;  // integer-dot kernels are accelerated on this tier
+  // ... including the sub-scaled family and the interleaved Q4_K layout
+  // (DD-077 / DD-078: AVX2 today); without it, int8 means per-32 only (NEON).
+  bool int8_subscaled = false;
 };
 
 // Caller memory for a program's values. Bindings never own memory: every

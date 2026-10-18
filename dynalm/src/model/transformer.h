@@ -49,8 +49,11 @@ struct ForwardProfile {
 
 class Transformer {
  public:
+  // `context_tokens`: the longest sequence this instance serves (0 = unknown);
+  // selects LongRoPE's long factors when above rope.original_context.
   static Result<std::unique_ptr<Transformer>> create(const ModelConfig& config, const TensorRegistry& weights,
-                                                     Device& backend, int32_t max_batch_tokens);
+                                                     Device& backend, int32_t max_batch_tokens,
+                                                     int64_t context_tokens = 0);
 
   const ModelConfig& config() const { return config_; }
   int32_t max_batch_tokens() const { return max_batch_; }
@@ -94,6 +97,7 @@ class Transformer {
     // tensors (gate, up, down); optional shared expert with sigmoid gate.
     TensorView router;
     std::vector<std::array<TensorView, 3>> experts;
+    TensorView gate_exps, up_exps, down_exps;  // the 3-D expert tensors (Device::moe_ffn)
     TensorView sh_router, sh_gate, sh_up, sh_down;
   };
   // Routed MoE MLP for rows of `xn`, accumulated into `out` (zeroed first).
@@ -116,11 +120,13 @@ class Transformer {
 
   TensorView tok_embd_, output_norm_, output_norm_b_, lm_head_;
   std::vector<float> rope_freq_factors_;
+  int64_t context_tokens_ = 0;
   std::vector<Layer> layers_;
   std::vector<Tensor> owned_;  // fp32 conversions + scratch
 
   // Scratch [max_batch, ...]
   Tensor x_, xn_, qkv_, attn_, o_, ff_a_, ff_b_;
+  Tensor q_sep_, k_sep_;  // per-head Q/K norm models: contiguous Q and K (else empty)
   // MoE scratch: router logits, gathered rows, expert intermediates/outputs.
   Tensor router_, moe_x_, moe_a_, moe_b_, moe_y_, sh_gate_;
   std::vector<std::vector<std::pair<int32_t, float>>> expert_rows_;  // per expert: (row, weight)

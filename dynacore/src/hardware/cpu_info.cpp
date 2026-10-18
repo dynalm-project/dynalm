@@ -23,6 +23,9 @@
 #include <set>
 #include <sstream>
 #include <unistd.h>
+#if ENGINE_ARCH_ARM64
+#include <sys/auxv.h>
+#endif
 #elif ENGINE_OS_MACOS
 #include <mach/mach.h>
 #include <sys/sysctl.h>
@@ -293,6 +296,40 @@ void detect_topology_macos(CpuInfo& info) {
 
 }  // namespace
 
+#if ENGINE_ARCH_ARM64
+// What the CPU and OS support, at run time (a compiler macro says only what
+// the build targets).
+static void detect_arm_features(CpuFeatures& f) {
+#if ENGINE_OS_MACOS
+  auto has = [](const char* name) {
+    int v = 0;
+    size_t len = sizeof(v);
+    return sysctlbyname(name, &v, &len, nullptr, 0) == 0 && v != 0;
+  };
+  f.arm_dotprod = has("hw.optional.arm.FEAT_DotProd");
+  f.arm_i8mm = has("hw.optional.arm.FEAT_I8MM");
+  f.arm_fp16 = has("hw.optional.arm.FEAT_FP16") || has("hw.optional.neon_fp16");
+  f.arm_bf16 = has("hw.optional.arm.FEAT_BF16");
+  f.arm_sme = has("hw.optional.arm.FEAT_SME");
+#elif ENGINE_OS_LINUX
+  const unsigned long hw = getauxval(AT_HWCAP), hw2 = getauxval(AT_HWCAP2);
+  f.arm_dotprod = (hw & (1UL << 20)) != 0;   // HWCAP_ASIMDDP
+  f.arm_fp16 = (hw & (1UL << 10)) != 0;      // HWCAP_ASIMDHP
+  f.arm_sve = (hw & (1UL << 22)) != 0;       // HWCAP_SVE
+  f.arm_i8mm = (hw2 & (1UL << 13)) != 0;     // HWCAP2_I8MM
+  f.arm_bf16 = (hw2 & (1UL << 14)) != 0;     // HWCAP2_BF16
+  f.arm_sme = (hw2 & (1UL << 23)) != 0;      // HWCAP2_SME
+#elif ENGINE_OS_WINDOWS
+  f.arm_dotprod = IsProcessorFeaturePresent(43) != 0;  // PF_ARM_V82_DP_INSTRUCTIONS_AVAILABLE
+#if defined(PF_ARM_V82_I8MM_INSTRUCTIONS_AVAILABLE)
+  f.arm_i8mm = IsProcessorFeaturePresent(PF_ARM_V82_I8MM_INSTRUCTIONS_AVAILABLE) != 0;
+#endif
+#else
+  (void)f;
+#endif
+}
+#endif
+
 CpuInfo detect_cpu_info() {
   CpuInfo info;
 #if ENGINE_ARCH_X86_64
@@ -300,9 +337,7 @@ CpuInfo detect_cpu_info() {
 #elif ENGINE_ARCH_ARM64
   info.vendor = "ARM";
   info.features.neon = true;  // mandatory on AArch64
-#if defined(__ARM_FEATURE_DOTPROD)
-  info.features.arm_dotprod = true;
-#endif
+  detect_arm_features(info.features);
 #endif
 
 #if ENGINE_OS_WINDOWS

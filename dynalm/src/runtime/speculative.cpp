@@ -93,6 +93,120 @@ void ModelDrafter::propose(std::span<const TokenId> ctx, int32_t k, std::vector<
   }
 }
 
+// --- BatchDrafter --------------------------------------------------------------------
+
+Result<std::unique_ptr<BatchDrafter>> BatchDrafter::create(Transformer& draft, KvBlockPool& cache,
+                                                           const Tokenizer& draft_tok, const Tokenizer& target_tok) {
+  if (draft_tok.vocab_size() != target_tok.vocab_size()) {
+    return InvalidArgument("draft model vocabulary (" + std::to_string(draft_tok.vocab_size()) +
+                           ") differs from the target's (" + std::to_string(target_tok.vocab_size()) + ")");
+  }
+  for (TokenId id = 0; id < draft_tok.vocab_size(); ++id) {
+    if (draft_tok.token_text(id) != target_tok.token_text(id)) {
+      return InvalidArgument("draft and target vocabularies differ at token " + std::to_string(id));
+    }
+  }
+  return std::unique_ptr<BatchDrafter>(new BatchDrafter(draft, cache));
+}
+
+BatchDrafter::Stream& BatchDrafter::stream(uint64_t id) {
+  auto& s = streams_[id];
+  if (!s) s = std::make_unique<Stream>(cache_);
+  return *s;
+}
+
+void BatchDrafter::release(uint64_t id) { streams_.erase(id); }
+
+Status BatchDrafter::run(std::span<const SeqBatch> batch, size_t rows_with_logits) {
+  logits_.resize(rows_with_logits * static_cast<size_t>(model_.config().vocab_size));
+  ++passes_;
+  return model_.forward_batch(batch, cache_, logits_);
+}
+
+void BatchDrafter::propose(std::span<const Request> requests) {
+  for (const Request& r : requests) r.out->clear();
+  if (!status_.ok() || requests.empty()) return;
+  const auto vocab = static_cast<size_t>(model_.config().vocab_size);
+  const int32_t cap = model_.max_batch_tokens();
+  struct Live {
+    const Request* r;
+    Stream* s;
+    size_t fed = 0;  // catch-up tokens of r->context already computed this round
+  };
+  std::vector<Live> live;
+  for (const Request& r : requests) {
+    if (r.k <= 0 || r.context.empty() ||
+        static_cast<int64_t>(r.context.size()) + r.k > model_.config().context_length) {
+      continue;
+    }
+    Stream& s = stream(r.id);
+    size_t common = 0;
+    while (common < s.computed.size() && common < r.context.size() && s.computed[common] == r.context[common]) ++common;
+    common = std::min(common, r.context.size() - 1);  // keep >= 1 token to feed
+    s.computed.resize(common);
+    s.kv.truncate(static_cast<int64_t>(common));
+    live.push_back({&r, &s, common});
+  }
+  auto fail = [&](Status st) {
+    status_ = std::move(st);  // drafting is an optimization: stop, never fail a request
+    for (const Request& r : requests) r.out->clear();
+  };
+  std::vector<SeqBatch> batch;
+  std::vector<Live*> owner;
+  // Catch-up: every stream's missing tokens, in passes of at most `cap` rows;
+  // a stream gets logits in the pass that completes its catch-up.
+  for (;;) {
+    batch.clear();
+    owner.clear();
+    int32_t rows = 0;
+    size_t with_logits = 0;
+    for (Live& l : live) {
+      const size_t left = l.r->context.size() - l.fed;
+      if (left == 0 || rows >= cap) continue;
+      const auto n = static_cast<int32_t>(std::min<size_t>(left, static_cast<size_t>(cap - rows)));
+      if (Status st = l.s->kv.reserve(static_cast<int64_t>(l.fed) + n); !st.ok()) return fail(st);
+      const bool last = static_cast<size_t>(n) == left;
+      batch.push_back({l.r->context.subspan(l.fed, static_cast<size_t>(n)), static_cast<int32_t>(l.fed),
+                       l.s->kv.block_table(), last});
+      owner.push_back(&l);
+      with_logits += last ? 1 : 0;
+      rows += n;
+    }
+    if (batch.empty()) break;
+    if (Status st = run(batch, with_logits); !st.ok()) return fail(st);
+    size_t li = 0;
+    for (size_t b = 0; b < batch.size(); ++b) {
+      Live& l = *owner[b];
+      l.s->computed.insert(l.s->computed.end(), batch[b].tokens.begin(), batch[b].tokens.end());
+      l.fed += batch[b].tokens.size();
+      if (batch[b].want_logits) l.r->out->push_back(sample_greedy({logits_.data() + li++ * vocab, vocab}));
+    }
+  }
+  // Then one token per stream and pass until each has k drafts.
+  for (;;) {
+    batch.clear();
+    owner.clear();
+    for (Live& l : live) {
+      if (l.r->out->empty() || static_cast<int32_t>(l.r->out->size()) >= l.r->k ||
+          static_cast<int32_t>(batch.size()) >= cap) {
+        continue;
+      }
+      const auto pos = static_cast<int64_t>(l.s->computed.size());
+      if (Status st = l.s->kv.reserve(pos + 1); !st.ok()) return fail(st);
+      batch.push_back({std::span<const TokenId>(&l.r->out->back(), 1), static_cast<int32_t>(pos), l.s->kv.block_table(),
+                       true});
+      owner.push_back(&l);
+    }
+    if (batch.empty()) break;
+    if (Status st = run(batch, batch.size()); !st.ok()) return fail(st);
+    for (size_t b = 0; b < batch.size(); ++b) {
+      Live& l = *owner[b];
+      l.s->computed.push_back(batch[b].tokens[0]);
+      l.r->out->push_back(sample_greedy({logits_.data() + b * vocab, vocab}));
+    }
+  }
+}
+
 // --- SpecController ----------------------------------------------------------------
 
 SpecController::SpecController(int32_t max_k) {

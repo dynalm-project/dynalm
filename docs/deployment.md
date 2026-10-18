@@ -93,8 +93,8 @@ Terminate TLS in the proxy and forward to DynaLM on a private address. Requireme
     with a higher ITL p99 (up to about 175 ms). It is still below llama.cpp's server in
     multi-user throughput (0.66–0.94×).
   - Use `--policy latency` when token-to-token tail latency matters more than throughput.
-- **GPU limitations:** MoE models, YaRN or Llama 3 RoPE scaling, or Qwen3-style per-head Q/K
-  norm currently run on CPU. See [gpu.md](gpu.md).
+- **GPU limitations:** YaRN RoPE scaling, and MoE models on CUDA, currently run on the CPU.
+  See [gpu.md](gpu.md).
 
 ## Checks before going live
 
