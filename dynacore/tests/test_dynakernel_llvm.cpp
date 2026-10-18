@@ -192,8 +192,8 @@ void test_fallback() {
     ReferenceBackend ref(pool, this_isa());
     CHECK(ref.run(mm.p, bind_mm(mm, w, x, 1280, none, y, 24, 2)).ok());
     Stats st;
-    q4kref::check_bound(w, x, 1280, nullptr, y.data(), 24, 2, this_isa() == CpuIsa::kAvx2 ? Path::kInt8Subscale : Path::kFp32,
-                        st);
+    q4kref::check_bound(w, x, 1280, nullptr, y.data(), 24, 2,
+                        q4kref::auto_path(ref.target().int8_dot, ref.target().int8_subscaled, 2), st);
     std::printf("  fallback (%s): refused (%s); reference backend result within bound\n",
                 llvm_lowering_name(l).data(), r.message().c_str());
     ++refused;

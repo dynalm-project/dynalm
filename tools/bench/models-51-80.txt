@@ -1,0 +1,70 @@
+# Models 51-80, for tools/bench/model_matrix.sh --list tools/bench/models-51-80.txt.
+# Each model as a GGUF file (single-file Q4_K_M; where the list named a repo page or a search,
+# the file was resolved from the repo's file list on 2026-10-18) and as its safetensors repo.
+# Most are 9-35B: their full-precision safetensors exceed --max-gb 16 and are reported as too-large;
+# use --max-gb on a larger machine. Command R 35B Q4_K_M (20 GB) needs a 32 GB machine.
+# '(also in models-50.txt)': the same files as that list.
+
+# --- GGUF ---
+Qwen/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf                                                                        # 51. Qwen3 8B (4.7 GB; also in models-50.txt)
+Qwen/Qwen3-14B-GGUF/Qwen3-14B-Q4_K_M.gguf                                                                      # 52. Qwen3 14B (8.4 GB)
+bartowski/Qwen2.5-14B-Instruct-GGUF/Qwen2.5-14B-Instruct-Q4_K_M.gguf                                           # 53. Qwen2.5 14B Instruct (8.4 GB)
+bartowski/Qwen2.5-Coder-14B-Instruct-GGUF/Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf                               # 54. Qwen2.5 Coder 14B Instruct (8.4 GB)
+bartowski/Qwen2.5-Math-7B-Instruct-GGUF/Qwen2.5-Math-7B-Instruct-Q4_K_M.gguf                                   # 55. Qwen2.5 Math 7B Instruct (4.4 GB; file resolved from a search / repo page)
+bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf                               # 56. Llama 3.1 8B Instruct (4.6 GB; also in models-50.txt)
+QuantFactory/Meta-Llama-3.1-8B-GGUF/Meta-Llama-3.1-8B.Q4_K_M.gguf                                              # 57. Llama 3.1 8B Base (4.6 GB; file resolved from a search / repo page)
+bartowski/google_gemma-3-12b-it-GGUF/google_gemma-3-12b-it-Q4_K_M.gguf                                         # 58. Gemma 3 12B IT (6.8 GB)
+bartowski/gemma-2-9b-it-GGUF/gemma-2-9b-it-Q4_K_M.gguf                                                         # 59. Gemma 2 9B IT (6.4 GB; plain Q4_K_M, not the -fp16 variant; also in models-50.txt)
+QuantFactory/gemma-2-9b-GGUF/gemma-2-9b.Q4_K_M.gguf                                                            # 60. Gemma 2 9B Base (5.4 GB; file resolved from a search / repo page)
+bartowski/phi-4-GGUF/phi-4-Q4_K_M.gguf                                                                         # 61. Phi-4 14B (8.4 GB; file resolved from a search / repo page)
+bartowski/DeepSeek-R1-Distill-Qwen-14B-GGUF/DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf                           # 62. DeepSeek R1 Distill Qwen 14B (8.4 GB; file resolved from a search / repo page)
+bartowski/DeepSeek-R1-Distill-Llama-8B-GGUF/DeepSeek-R1-Distill-Llama-8B-Q4_K_M.gguf                           # 63. DeepSeek R1 Distill Llama 8B (4.6 GB; also in models-50.txt)
+bartowski/Mistral-Nemo-Instruct-2407-GGUF/Mistral-Nemo-Instruct-2407-Q4_K_M.gguf                               # 64. Mistral Nemo 12B Instruct (7.0 GB)
+bartowski/mistralai_Mistral-Small-3.1-24B-Instruct-2503-GGUF/mistralai_Mistral-Small-3.1-24B-Instruct-2503-Q4_K_M.gguf # 65. Mistral Small 3.1 24B Instruct (13.3 GB; file resolved from a search / repo page)
+bartowski/Yi-1.5-9B-Chat-GGUF/Yi-1.5-9B-Chat-Q4_K_M.gguf                                                       # 66. Yi 1.5 9B Chat (5.0 GB; also in models-50.txt)
+QuantFactory/Yi-1.5-9B-GGUF/Yi-1.5-9B.Q4_K_M.gguf                                                              # 67. Yi 1.5 9B (5.0 GB; file resolved from a search / repo page)
+bartowski/internlm2_5-7b-chat-GGUF/internlm2_5-7b-chat-Q4_K_M.gguf                                             # 68. InternLM2.5 7B Chat (4.4 GB; file resolved from a search / repo page; also in models-50.txt)
+bartowski/Codestral-22B-v0.1-GGUF/Codestral-22B-v0.1-Q4_K_M.gguf                                               # 69. Codestral 22B (12.4 GB; file resolved from a search / repo page)
+bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF/DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf                     # 70. DeepSeek Coder V2 Lite Instruct (9.7 GB; file resolved from a search / repo page)
+QuantFactory/starcoder2-15b-GGUF/starcoder2-15b.Q4_K_M.gguf                                                    # 71. StarCoder2 15B (9.2 GB; file resolved from a search / repo page)
+TheBloke/CodeLlama-13B-Instruct-GGUF/codellama-13b-instruct.Q4_K_M.gguf                                        # 72. CodeLlama 13B Instruct (7.3 GB; file resolved from a search / repo page)
+TheBloke/CodeLlama-13B-Python-GGUF/codellama-13b-python.Q4_K_M.gguf                                            # 73. CodeLlama 13B Python (7.3 GB; file resolved from a search / repo page)
+TheBloke/Llama-2-13B-chat-GGUF/llama-2-13b-chat.Q4_K_M.gguf                                                    # 74. Llama 2 13B Chat (7.3 GB; file resolved from a search / repo page)
+TheBloke/Llama-2-13B-GGUF/llama-2-13b.Q4_K_M.gguf                                                              # 75. Llama 2 13B Base (7.3 GB; file resolved from a search / repo page)
+TheBloke/Orca-2-13B-GGUF/orca-2-13b.Q4_K_M.gguf                                                                # 76. Orca 2 13B (7.3 GB; file resolved from a search / repo page)
+TheBloke/SOLAR-10.7B-Instruct-v1.0-GGUF/solar-10.7b-instruct-v1.0.Q4_K_M.gguf                                  # 77. SOLAR 10.7B Instruct (6.0 GB; file resolved from a search / repo page)
+bartowski/c4ai-command-r-v01-GGUF/c4ai-command-r-v01-Q4_K_M.gguf                                               # 78. Command R 35B (20.0 GB; file resolved from a search / repo page)
+bartowski/gemma-4-12B-it-GGUF/gemma-4-12B-it-Q4_K_M.gguf                                                       # 79. Gemma 4 12B IT (7.1 GB)
+bartowski/Mistral-Nemo-Prism-12B-GGUF/Mistral-Nemo-Prism-12B-Q4_K_M.gguf                                       # 80. Mistral Nemo Prism 12B (7.0 GB)
+
+# --- Safetensors (Hugging Face repos) ---
+hf:Qwen/Qwen3-8B                                                                                               # 51. Qwen3 8B (also in models-50.txt)
+hf:Qwen/Qwen3-14B                                                                                              # 52. Qwen3 14B
+hf:Qwen/Qwen2.5-14B-Instruct                                                                                   # 53. Qwen2.5 14B Instruct
+hf:Qwen/Qwen2.5-Coder-14B-Instruct                                                                             # 54. Qwen2.5 Coder 14B Instruct
+hf:Qwen/Qwen2.5-Math-7B-Instruct                                                                               # 55. Qwen2.5 Math 7B Instruct
+hf:meta-llama/Llama-3.1-8B-Instruct                                                                            # 56. Llama 3.1 8B Instruct (also in models-50.txt)
+hf:meta-llama/Meta-Llama-3.1-8B                                                                                # 57. Llama 3.1 8B Base
+hf:google/gemma-3-12b-it                                                                                       # 58. Gemma 3 12B IT
+hf:google/gemma-2-9b-it                                                                                        # 59. Gemma 2 9B IT (also in models-50.txt)
+hf:google/gemma-2-9b                                                                                           # 60. Gemma 2 9B Base
+hf:microsoft/phi-4                                                                                             # 61. Phi-4 14B
+hf:deepseek-ai/DeepSeek-R1-Distill-Qwen-14B                                                                    # 62. DeepSeek R1 Distill Qwen 14B
+hf:deepseek-ai/DeepSeek-R1-Distill-Llama-8B                                                                    # 63. DeepSeek R1 Distill Llama 8B (also in models-50.txt)
+hf:mistralai/Mistral-Nemo-Instruct-2407                                                                        # 64. Mistral Nemo 12B Instruct
+hf:mistralai/Mistral-Small-3.1-24B-Instruct-2503                                                               # 65. Mistral Small 3.1 24B Instruct
+hf:01-ai/Yi-1.5-9B-Chat                                                                                        # 66. Yi 1.5 9B Chat (also in models-50.txt)
+hf:01-ai/Yi-1.5-9B                                                                                             # 67. Yi 1.5 9B
+hf:internlm/internlm2_5-7b-chat                                                                                # 68. InternLM2.5 7B Chat (also in models-50.txt)
+hf:mistralai/Codestral-22B-v0.1                                                                                # 69. Codestral 22B
+hf:deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct                                                                 # 70. DeepSeek Coder V2 Lite Instruct
+hf:bigcode/starcoder2-15b                                                                                      # 71. StarCoder2 15B
+hf:codellama/CodeLlama-13b-Instruct-hf                                                                         # 72. CodeLlama 13B Instruct
+hf:codellama/CodeLlama-13b-Python-hf                                                                           # 73. CodeLlama 13B Python
+hf:meta-llama/Llama-2-13b-chat-hf                                                                              # 74. Llama 2 13B Chat
+hf:meta-llama/Llama-2-13b-hf                                                                                   # 75. Llama 2 13B Base
+hf:microsoft/Orca-2-13b                                                                                        # 76. Orca 2 13B
+hf:upstage/SOLAR-10.7B-Instruct-v1.0                                                                           # 77. SOLAR 10.7B Instruct
+hf:CohereForAI/c4ai-command-r-v01                                                                              # 78. Command R 35B
+hf:google/gemma-4-12B-it                                                                                       # 79. Gemma 4 12B IT
+hf:nbeerbower/Mistral-Nemo-Prism-12B                                                                           # 80. Mistral Nemo Prism 12B

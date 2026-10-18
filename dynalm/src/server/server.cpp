@@ -422,6 +422,8 @@ std::string Server::Impl::render_metrics() const {
   render_gauge("dynalm_requests_active", "Requests currently being served", active.load(), out);
   counter("dynalm_prompt_tokens_total", "Prompt tokens of completed requests", prompt_tokens.value());
   counter("dynalm_generation_tokens_total", "Tokens generated", st.scheduler.tokens_generated);
+  counter("dynalm_spec_drafted_tokens_total", "Speculative draft tokens scored (--spec)", st.scheduler.spec_drafted);
+  counter("dynalm_spec_accepted_tokens_total", "Speculative draft tokens accepted (--spec)", st.scheduler.spec_accepted);
   counter("dynalm_prefill_tokens_total", "Prompt tokens computed (excludes prefix-cache hits)", st.prefill_tokens);
   counter("dynalm_tokens_processed_total", "Token rows computed by the model (prefill + decode)",
           st.scheduler.tokens_computed);

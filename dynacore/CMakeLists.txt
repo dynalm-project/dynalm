@@ -16,6 +16,7 @@ add_library(dynacore STATIC
   src/dynakernel/reference_backend.cpp
   src/execution/thread_pool.cpp
   src/gpu/ggml_device.cpp
+  src/gpu/ggml_graph.cpp
   src/hardware/cpu_info.cpp
   src/hardware/isa.cpp
   src/hardware/perf_counters.cpp
@@ -44,6 +45,7 @@ add_library(dynacore STATIC
   cpu/avx2/kernels_avx2.cpp
   cpu/avx2/kernels_avxvnni.cpp
   cpu/neon/kernels_neon.cpp
+  cpu/neon/kernels_neon_dot.cpp
 )
 target_include_directories(dynacore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(dynacore PUBLIC engine_options)
@@ -74,6 +76,9 @@ else()
 endif()
 
 # SIMD tiers: per-file ISA flags only (DD-003).
+if(ENABLE_NEON AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64|ARM64)$" AND NOT CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
+  engine_set_isa(NEONDOT cpu/neon/kernels_neon_dot.cpp)
+endif()
 if(ENABLE_AVX2)
   engine_set_isa(AVX2 cpu/avx2/kernels_avx2.cpp)
   engine_set_isa(AVXVNNI cpu/avx2/kernels_avxvnni.cpp)
@@ -102,6 +107,9 @@ if(ENABLE_BENCHMARKS)
   target_link_libraries(test_dynakernel_quant PRIVATE dynacore)
   add_executable(test_packed_8rows tests/test_packed_8rows.cpp)
   target_link_libraries(test_packed_8rows PRIVATE dynacore)
+  # Integer-activation kernels of every tier (DD-053 int8, DD-076 int16) vs an exact reference.
+  add_executable(test_int_kernels tests/test_int_kernels.cpp)
+  target_link_libraries(test_int_kernels PRIVATE dynacore)
   add_executable(test_int16_prefill tests/test_int16_prefill.cpp)
   target_link_libraries(test_int16_prefill PRIVATE dynacore)
   add_executable(test_thread_pool tests/test_thread_pool.cpp)

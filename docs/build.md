@@ -33,10 +33,12 @@ in this repository.
 |---|---|---|
 | `ENABLE_BENCHMARKS`, `ENABLE_SERVER` | ON | components |
 | `ENABLE_AVX2` / `ENABLE_AVX512` / `ENABLE_AMX` | ON / OFF / OFF | x86-64 kernel tiers (selected at run time; off on other CPUs) |
-| `ENABLE_NEON` | ON | ARM64 kernel tier |
+| `ENABLE_NEON` | ON | ARM64 kernel tier. Its int8 kernels use the dot-product instructions (built with `+dotprod`, selected at run time when the CPU has them); MSVC and clang-cl builds have no dot-product kernels and run them in fp32 |
 | `ENABLE_METAL` | OFF | Metal GPU backend (Apple Silicon); preset `macos-metal` |
 | `ENABLE_VULKAN` | OFF | Vulkan GPU backend (AMD, Intel, NVIDIA, Qualcomm; macOS through MoltenVK). Needs the Vulkan headers, loader, `glslc` and SPIRV-Headers. Presets `linux-vulkan`, `msvc-vulkan`, `macos-vulkan` |
 | `ENABLE_CUDA` | OFF | CUDA GPU backend (NVIDIA). Needs the CUDA toolkit; `CMAKE_CUDA_ARCHITECTURES` picks GPU generations. Presets `linux-cuda`, `msvc-cuda` |
+| `ENABLE_GGML_CPU` | ON (OFF with CMake < 3.28 or MSVC on ARM64) | ggml's CPU kernels as the default CPU path (`--cpu`): about 4× faster, llama.cpp-level accuracy. GPU builds always include them. OFF: the CPU uses DynaLM's native kernels only, and no ggml is fetched. On x86-64 they need AVX2, FMA and F16C (otherwise the native kernels run) |
+| `DYNALM_GGML_NATIVE` | OFF | build ggml's CPU kernels for this machine's CPU only (as llama.cpp does by default): faster locally, not portable. Keep OFF for packages. On Linux / Windows ARM64 the portable build targets ARMv8.0, without ggml's dot-product and repacked kernels (they are chosen at compile time); ON adds them for the build machine |
 | `ENABLE_HIP` | OFF | not implemented (configure error); use `ENABLE_VULKAN` for AMD GPUs |
 
 GPU backends can be combined, and all of them need CMake 3.28 or newer. `--backend auto`
@@ -44,7 +46,8 @@ tries the built-in GPUs in this order: CUDA, Metal, Vulkan.
 
 **Windows on ARM:** open an *ARM64* Developer Command Prompt and run
 `cmake --preset msvc-release`, or `cmake --preset windows-arm64` to build with clang-cl.
-Both use the NEON kernels.
+Both use the NEON kernels, without the dot-product int8 kernels or ggml's CPU kernels (MSVC), so
+the CPU is slower than on other ARM64 systems.
 | `DYNALM_CORE_ONLY` | OFF | configure DynaCore only |
 | `DYNALM_STATIC_RUNTIME` | OFF (ON in release builds) | static C/C++ runtime |
 | `DYNALM_LTO` | OFF | link-time optimization (DD-063) |
@@ -93,9 +96,14 @@ BENCH_PREFILL_CHUNKS=32,64` for the prefill paths, with the path's environment s
 | Platform | Kernels | Verified by |
 |---|---|---|
 | Linux x86-64 | generic + AVX2 | CI: gcc, clang, ASAN/UBSAN, TSAN |
-| Linux ARM64 | generic + NEON | CI (`ubuntu-24.04-arm`) |
-| macOS Apple Silicon | NEON | CI (`macos-14`) |
+| Linux ARM64 | generic + NEON (+ dot product) | CI (`ubuntu-24.04-arm`) |
+| macOS Apple Silicon | NEON (+ dot product) | CI (`macos-14`); speed and accuracy measured on an M4 Pro |
+| macOS Intel | generic + AVX2 | CI: x86_64 build under Rosetta (`macos-14`); no real Intel Mac |
 | Windows x64 | generic + AVX2 | MSVC build locally; CI |
+| Windows ARM64 | generic + NEON (no dot product) | CI (`windows-11-arm`) |
+
+"Verified by CI" means the model-free test suite (`tools/ci/run_tests.sh`). Speed and accuracy
+with real models are measured only where noted; see docs/benchmarks.md for what was measured where.
 
 ## Models for local runs
 

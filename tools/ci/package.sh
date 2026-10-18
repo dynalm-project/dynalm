@@ -58,9 +58,11 @@ if missing or unexpected:
 print(f"package contents ok: {len(names)} entries, licences present")
 PYEOF
 SBOM_ARGS=()
-for a in "$@"; do  # any GPU backend links ggml
-  case "$a" in -DENABLE_METAL=ON|-DENABLE_VULKAN=ON|-DENABLE_CUDA=ON) SBOM_ARGS=(--ggml) ;; esac
-done
+# ggml is linked by any GPU backend and by ggml's CPU kernels (ENABLE_GGML_CPU,
+# on by default): read what this build actually configured.
+if grep -qE '^(ENABLE_GGML_CPU|ENABLE_METAL|ENABLE_VULKAN|ENABLE_CUDA):BOOL=ON$' "$BUILD/CMakeCache.txt"; then
+  SBOM_ARGS=(--ggml)
+fi
 "$PY" tools/ci/sbom.py ${SBOM_ARGS[@]+"${SBOM_ARGS[@]}"} > "$DIST/$NAME.cdx.json"
 echo "SBOM: $DIST/$NAME.cdx.json"
 

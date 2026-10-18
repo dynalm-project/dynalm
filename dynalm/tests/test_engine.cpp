@@ -22,14 +22,21 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include "api/json.h"
+#include "chat_template/chat_template.h"
+#include "diagnostics/doctor.h"
 #include "dynacore/gpu/ggml_device.h"
 #include "dynacore/hardware/process_stats.h"
 #include "loader/model_loader.h"
+#include "runtime/autotune.h"
+#include "tokenizer/pretokenizer.h"
 #include "runtime/engine.h"
 #include "tests/tiny_gguf.h"
 
@@ -48,6 +55,13 @@ int g_checks = 0;
   } while (0)
 
 std::string g_model;
+// ggml's CPU kernels are built in AND this CPU runs them (x86-64: AVX2, FMA,
+// F16C); a build without them, or e.g. Rosetta without AVX, uses the native CPU.
+bool ggml_cpu_usable() {
+  static const bool usable = dynacore::ggml_gpu_compiled(dynacore::DeviceType::kCpu) &&
+                             dynacore::create_ggml_gpu_device(dynacore::DeviceType::kCpu).ok();
+  return usable;
+}
 
 std::unique_ptr<Engine> make_engine(DeviceKind dev, bool prefix_cache = true, int32_t solo = -1, bool trace = false) {
   EngineOptions o;
@@ -209,6 +223,130 @@ void test_solo_prefill_never_stalls_decode(DeviceKind dev) {
   (void)solo_steps;
 }
 
+// Speculative decoding in the batch (SchedulerConfig::spec_k): the
+// same greedy text as plain decoding, alone and with several streams in one
+// batch; drafts were scored and some accepted (the tiny model loops, so
+// prompt lookup finds continuations); the KV pool is not leaked.
+// `draft`: a draft model file (BatchDrafter), empty = prompt lookup.
+void test_speculative_batch(DeviceKind dev, bool exact, const std::string& draft = "") {
+  auto make = [&](int32_t k) {
+    EngineOptions o;
+    o.model_path = g_model;
+    o.backend = dev;
+    o.threads = 2;
+    o.kv_tokens = 2048;
+    o.int8_decode_rows = 0;
+    o.scheduler.spec_k = k;
+    if (k > 0) o.draft_model_path = draft;
+    auto e = Engine::create(o);
+    if (!e.ok()) std::fprintf(stderr, "engine: %s\n", e.status().to_string().c_str());
+    CHECK(e.ok());
+    return std::move(*e);
+  };
+  auto plain = make(0), spec = make(4);
+  const std::vector<std::string> prompts = {kPrompts[0], kPrompts[2], kPrompts[3], "abc abc abc abc abc abc"};
+  std::vector<Out> want;
+  for (const auto& p : prompts) want.push_back(gen(*plain, p, 48));
+  std::vector<std::shared_ptr<RequestStream>> streams;
+  for (const auto& p : prompts) {
+    auto st = spec->generate_text(p, false, greedy(48));
+    CHECK(st.ok());
+    streams.push_back(*st);
+  }
+  for (size_t i = 0; i < prompts.size(); ++i) {
+    const Out o = drain(streams[i]);
+    CHECK(o.finish == StreamFinish::kLength && o.tokens == 48);
+    if (exact) CHECK(o.text == want[i].text);
+  }
+  const Out alone = gen(*spec, prompts[1], 48);
+  CHECK(alone.tokens == 48);
+  if (exact) CHECK(alone.text == want[1].text);
+  const SchedulerStats ss = spec->stats().scheduler;
+  CHECK(ss.spec_drafted > 0 && ss.spec_accepted > 0 && ss.spec_accepted <= ss.spec_drafted);
+  CHECK(spec->stats().kv_blocks_used == plain->stats().kv_blocks_used);  // rejected drafts' blocks returned
+}
+
+// Device selection policy (runtime/device_select.h): pure, so every GPU
+// combination is checked on any machine.
+void test_device_plan() {
+  ModelConfig dense;
+  dense.architecture = "qwen2";
+  ModelConfig moe = dense;
+  moe.moe.num_experts = 8;
+  using K = DeviceKind;
+  const std::vector<K> metal = {K::kCpu, K::kMetal}, vulkan = {K::kCpu, K::kVulkan}, none = {K::kCpu};
+  const std::vector<K> several = {K::kCpu, K::kCuda, K::kMetal, K::kVulkan};
+  DeviceRequest autoc;
+  autoc.backend_auto = autoc.cpu_ggml = true;
+  // auto: the GPUs that run the model, in build order, then the CPU path.
+  DevicePlan p = plan_devices(dense, autoc, several, true);
+  CHECK(p.error.ok() && (p.candidates == std::vector<K>{K::kCuda, K::kMetal, K::kVulkan, K::kGgmlCpu}) && p.native_cpu_last);
+  p = plan_devices(dense, autoc, metal, true);
+  CHECK((p.candidates == std::vector<K>{K::kMetal, K::kGgmlCpu}) && p.native_cpu_last && p.note.empty());
+  // MoE: Metal, Vulkan and ggml-cpu; not CUDA (yet): a CUDA build runs it on the ggml CPU kernels.
+  p = plan_devices(moe, autoc, vulkan, true);
+  CHECK((p.candidates == std::vector<K>{K::kVulkan, K::kGgmlCpu}));
+  p = plan_devices(moe, autoc, std::vector<K>{K::kCpu, K::kCuda}, true);
+  CHECK((p.candidates == std::vector<K>{K::kGgmlCpu}) && p.native_cpu_last && p.note.find("not verified") != std::string::npos);
+  p = plan_devices(moe, autoc, metal, true);
+  CHECK((p.candidates == std::vector<K>{K::kMetal, K::kGgmlCpu}));
+  // No GPU built in: the CPU path, with the reason.
+  p = plan_devices(dense, autoc, none, true);
+  CHECK((p.candidates == std::vector<K>{K::kGgmlCpu}) && p.note.find("no GPU support") != std::string::npos);
+  // --gpu: never the CPU; an error when no GPU can run the model.
+  DeviceRequest gpu = autoc;
+  gpu.require_gpu = true;
+  p = plan_devices(dense, gpu, metal, true);
+  CHECK((p.candidates == std::vector<K>{K::kMetal}) && !p.native_cpu_last);
+  CHECK(plan_devices(dense, gpu, none, true).error.code() == StatusCode::kUnsupported);
+  CHECK(plan_devices(moe, gpu, std::vector<K>{K::kCpu, K::kCuda}, true).error.code() == StatusCode::kUnsupported);
+  // cpu: ggml kernels when built and able; native-cpu: native only; a named device: exactly it.
+  DeviceRequest cpu;
+  cpu.cpu_ggml = true;
+  CHECK((plan_devices(dense, cpu, metal, true).candidates == std::vector<K>{K::kGgmlCpu}));
+  p = plan_devices(dense, cpu, none, false);
+  CHECK(p.candidates.empty() && p.native_cpu_last && p.note.find("ENABLE_GGML_CPU") != std::string::npos);
+  ModelConfig yarn = dense;
+  yarn.rope.scaling = RopeScaling::kYarn;
+  p = plan_devices(yarn, cpu, metal, true);
+  CHECK(p.candidates.empty() && p.native_cpu_last);
+  DeviceRequest native;
+  p = plan_devices(dense, native, metal, true);
+  CHECK(p.candidates.empty() && p.native_cpu_last && p.note.empty());
+  DeviceRequest named;
+  named.backend = K::kVulkan;
+  p = plan_devices(moe, named, metal, true);
+  CHECK((p.candidates == std::vector<K>{K::kVulkan}) && !p.native_cpu_last);
+}
+
+// DD-079 predictive mode: rows = (target - 1) x decode time / row cost,
+// clamped; no row cost: the maximum; no decode time yet: the minimum.
+void test_predictive_mixed_budget() {
+  CHECK(predict_mixed_prefill_budget(12.0, 0.5, 4.0, 64, 256) == 72);   // 3 x 12 / 0.5
+  CHECK(predict_mixed_prefill_budget(12.0, 0.01, 4.0, 64, 256) == 256);  // cheap rows: the maximum
+  CHECK(predict_mixed_prefill_budget(12.0, 5.0, 4.0, 64, 256) == 64);    // costly rows: the minimum
+  CHECK(predict_mixed_prefill_budget(12.0, 0.0, 4.0, 64, 256) == 256);   // no cost sample yet
+  CHECK(predict_mixed_prefill_budget(0.0, 0.5, 4.0, 64, 256) == 64);     // no decode-only step yet: protect
+  CHECK(predict_mixed_prefill_budget(12.0, 0.5, 1.0, 64, 256) == 64);    // target 1x: nothing spare
+  CHECK(predict_mixed_prefill_budget(12.0, 0.5, 4.0, 512, 256) == 256);  // min above max: max wins
+  CHECK(predict_mixed_prefill_budget(12.0, 1e-300, 4.0, 1, 256) == 256); // overflow-safe
+}
+
+// Memory admission: weights + KV within 90% of RAM (95% of free GPU memory);
+// the error names the largest --ctx that fits.
+void test_memory_admission() {
+  constexpr int64_t G = int64_t{1} << 30;
+  CHECK(check_memory_fit(8 * G, 8 * G, 128 << 10, 24 * G, -1).ok());               // 16 of 21.6 GiB
+  const Status s = check_memory_fit(8 * G, 16 * G, 128 << 10, 24 * G, -1);       // 24 > 21.6 GiB
+  CHECK(s.code() == StatusCode::kResourceExhausted);
+  CHECK(s.message().find("--ctx 111408") != std::string::npos);                  // (24 GiB x 0.9 - 8 GiB) / 128 KiB, multiple of 16
+  CHECK(s.message().find("--kv q8_0") != std::string::npos);
+  CHECK(check_memory_fit(8 * G, 1 * G, 128 << 10, 24 * G, 6 * G).code() == StatusCode::kResourceExhausted);  // GPU
+  CHECK(check_memory_fit(4 * G, 1 * G, 128 << 10, 24 * G, 6 * G).ok());
+  CHECK(check_memory_fit(30 * G, 1 * G, 128 << 10, 24 * G, -1).message().find("does not fit") != std::string::npos);
+  CHECK(check_memory_fit(8 * G, 64 * G, 128 << 10, 0, -1).ok());                   // unknown RAM: not checked
+}
+
 void test_memory_bounded(Engine& e) {
   for (int i = 0; i < 5; ++i) (void)gen(e, kPrompts[static_cast<size_t>(i) % kPrompts.size()], 32);
   const int64_t before = dynacore::process_rss_bytes();
@@ -244,24 +382,34 @@ void test_device_selection(const std::string& dir, bool gpu_usable, DeviceKind g
   auto loaded = load_model(g_model);
   CHECK(loaded.ok());
   const ModelConfig base = (*loaded)->config;
-  CHECK(gpu_model_support(base, DType::kF16).ok());
-  CHECK(gpu_model_support(base, DType::kQ8_0).ok());
-  CHECK(!gpu_model_support(base, DType::kQ4_K).ok());
+  CHECK(gpu_model_support(base, DType::kF16, DeviceKind::kMetal).ok());
+  CHECK(gpu_model_support(base, DType::kQ8_0, DeviceKind::kMetal).ok());
+  CHECK(!gpu_model_support(base, DType::kQ4_K, DeviceKind::kMetal).ok());
   ModelConfig c = base;
-  c.moe.num_experts = 8;
-  CHECK(!gpu_model_support(c, DType::kF16).ok());
+  c.moe.num_experts = 8;  // routed MoE: Metal, Vulkan and ggml-cpu (verified), not yet CUDA
+  CHECK(gpu_model_support(c, DType::kF16, DeviceKind::kMetal).ok());
+  CHECK(gpu_model_support(c, DType::kF16, DeviceKind::kGgmlCpu).ok());
+  CHECK(gpu_model_support(c, DType::kF16, DeviceKind::kVulkan).ok());
+  CHECK(!gpu_model_support(c, DType::kF16, DeviceKind::kCuda).ok());
+  c.moe.shared_intermediate_size = 64;  // a shared expert (Qwen2-MoE): in the same device op
+  CHECK(gpu_model_support(c, DType::kF16, DeviceKind::kMetal).ok());
   c = base;
-  c.attn_qk_norm = true;
-  CHECK(!gpu_model_support(c, DType::kF16).ok());
+  c.attn_qk_norm = true;  // per-head Q/K norm: verified on the GPU for Qwen3 and Gemma 3
+  c.architecture = "qwen3";
+  CHECK(gpu_model_support(c, DType::kF16, DeviceKind::kMetal).ok());
+  c.architecture = "gemma3";
+  CHECK(gpu_model_support(c, DType::kF16, DeviceKind::kMetal).ok());
+  c.architecture = "olmo2";  // not verified on the GPU
+  CHECK(!gpu_model_support(c, DType::kF16, DeviceKind::kMetal).ok());
   c = base;
   c.rope.scaling = RopeScaling::kLinear;
-  CHECK(gpu_model_support(c, DType::kF16).ok());
+  CHECK(gpu_model_support(c, DType::kF16, DeviceKind::kMetal).ok());
   c.rope.scaling = RopeScaling::kYarn;
-  CHECK(!gpu_model_support(c, DType::kF16).ok());
+  CHECK(!gpu_model_support(c, DType::kF16, DeviceKind::kMetal).ok());
   c = base;
   c.has_rope_local = true;
   c.rope_local.scaling = RopeScaling::kLlama3;
-  CHECK(!gpu_model_support(c, DType::kF16).ok());
+  CHECK(!gpu_model_support(c, DType::kF16, DeviceKind::kMetal).ok());
 
   const std::string qwen3 = dir + "/tiny-qwen3.gguf";
   test::TinyModelSpec spec;
@@ -285,11 +433,12 @@ void test_device_selection(const std::string& dir, bool gpu_usable, DeviceKind g
     CHECK(o.finish == StreamFinish::kLength && o.tokens == 8);
   }
   {
+    // Qwen3 (per-head Q/K norm): the GPU when one is usable; deterministic.
     auto e = on(qwen3, true, gpu_kind);
     CHECK(e.ok());
-    CHECK(!is_gpu(**e));
-    const Out o = gen(**e, kPrompts[0], 8);
-    CHECK(o.finish == StreamFinish::kLength && o.tokens == 8);
+    CHECK(is_gpu(**e) == gpu_usable);
+    const Out o = gen(**e, kPrompts[0], 8), o2 = gen(**e, kPrompts[0], 8);
+    CHECK(o.finish == StreamFinish::kLength && o.tokens == 8 && o.text == o2.text);
   }
   // --gpu / --cpu / --backend choices (apply_backend_choice).
   {
@@ -299,25 +448,290 @@ void test_device_selection(const std::string& dir, bool gpu_usable, DeviceKind g
     CHECK(apply_backend_choice("auto", o).ok() && o.backend_auto && !o.backend_require_gpu);
     CHECK(apply_backend_choice("metal", o).ok() && !o.backend_auto && o.backend == DeviceKind::kMetal);
     CHECK(!apply_backend_choice("tpu", o).ok());
-    // --gpu never falls back to the CPU: an unsupported model (or a build
-    // without a GPU) is an error naming the reason.
+    // cpu: ggml's CPU kernels when built in; native-cpu: DynaCore's fp32 kernels.
+    CHECK(apply_backend_choice("cpu", o).ok() && o.cpu_ggml && o.backend == DeviceKind::kCpu);
+    CHECK(apply_backend_choice("native-cpu", o).ok() && !o.cpu_ggml && o.backend == DeviceKind::kCpu);
+    CHECK(apply_backend_choice("auto", o).ok() && o.cpu_ggml);
+    CHECK(apply_backend_choice("ggml-cpu", o).ok() && o.backend == DeviceKind::kGgmlCpu);
+    for (const char* choice : {"cpu", "native-cpu"}) {
+      EngineOptions c;
+      c.model_path = qwen3;
+      c.threads = 2;
+      c.kv_tokens = 512;
+      CHECK(apply_backend_choice(choice, c).ok());
+      auto e = Engine::create(c);
+      CHECK(e.ok());
+      const bool ggml = (*e)->backend_name().find("ggml-CPU") != std::string::npos;
+      CHECK(ggml == (std::string_view(choice) == "cpu" && ggml_cpu_usable()));
+      const Out a = gen(**e, kPrompts[0], 8), b = gen(**e, kPrompts[0], 8);
+      CHECK(a.finish == StreamFinish::kLength && a.tokens == 8 && a.text == b.text);
+    }
+    // --gpu never falls back to the CPU: without a usable GPU it is an error
+    // naming the reason. (Models the GPU cannot run are covered by the
+    // gpu_model_support checks above; the tiny generator makes none of them.)
     o = EngineOptions();
     o.model_path = qwen3;
     o.threads = 2;
     o.kv_tokens = 512;
     CHECK(apply_backend_choice("gpu", o).ok());
     auto e = Engine::create(o);
-    CHECK(!e.ok() && e.status().code() == StatusCode::kUnsupported);
     if (gpu_usable) {
-      o.model_path = g_model;
-      auto g = Engine::create(o);
-      CHECK(g.ok() && is_gpu(**g));
+      CHECK(e.ok() && is_gpu(**e));
+    } else {
+      CHECK(!e.ok() && e.status().code() == StatusCode::kUnsupported);
     }
   }
-  if (dynacore::ggml_gpu_compiled()) {
-    auto e = on(qwen3, false, gpu_kind);
-    CHECK(!e.ok() && e.status().code() == StatusCode::kUnsupported);
+}
+
+bool write_text(const std::string& path, const std::string& text) {
+  std::ofstream f(path, std::ios::binary | std::ios::trunc);
+  f << text;
+  return static_cast<bool>(f);
+}
+
+void set_env(const char* name, const std::string& value) {
+#if defined(_WIN32)
+  _putenv_s(name, value.c_str());
+#else
+  if (value.empty()) unsetenv(name);
+  else setenv(name, value.c_str(), 1);
+#endif
+}
+
+// AutoTune (runtime/autotune.h): modes, the versioned cache and its
+// invalidation, and the Engine using a tuned thread count.
+void test_autotune(const std::filesystem::path& dir) {
+  for (TuneMode m : {TuneMode::kAuto, TuneMode::kPerformance, TuneMode::kExact, TuneMode::kSafe}) {
+    auto r = parse_tune_mode(tune_mode_name(m));
+    CHECK(r.ok() && *r == m);
   }
+  CHECK(!parse_tune_mode("fastest").ok());
+  {
+    EngineOptions o;
+    CHECK(apply_backend_choice("auto", o).ok());
+    CHECK(apply_tune_mode(TuneMode::kAuto, o).ok() && o.backend_auto && o.cpu_ggml);
+    CHECK(apply_tune_mode(TuneMode::kExact, o).ok() && o.backend_auto && !o.cpu_ggml);  // GPUs stay, ggml-cpu goes
+    CHECK(apply_tune_mode(TuneMode::kSafe, o).ok());
+    CHECK(!o.backend_auto && o.backend == DeviceKind::kCpu && !o.cpu_ggml && o.int8_decode_rows == 0);
+    EngineOptions g;
+    CHECK(apply_backend_choice("ggml-cpu", g).ok());
+    CHECK(!apply_tune_mode(TuneMode::kExact, g).ok());  // below DD-053: refused, not silently replaced
+    CHECK(!apply_tune_mode(TuneMode::kSafe, g).ok());
+    EngineOptions gpu;
+    CHECK(apply_backend_choice("gpu", gpu).ok());
+    CHECK(!apply_tune_mode(TuneMode::kSafe, gpu).ok());  // --gpu is never silently replaced by the CPU
+    CHECK(apply_tune_mode(TuneMode::kExact, gpu).ok() && gpu.backend_require_gpu);
+    EngineOptions n;
+    CHECK(apply_backend_choice("native-cpu", n).ok());
+    CHECK(apply_tune_mode(TuneMode::kExact, n).ok() && n.backend == DeviceKind::kCpu && !n.cpu_ggml);
+  }
+
+  const std::string path = (dir / "autotune.json").string();
+  std::string why;
+  CHECK(load_tune_cache(path, &why).entries.empty() && why.find("no tuning cache") != std::string::npos);
+  auto loaded = load_model(g_model);
+  CHECK(loaded.ok());
+  const ModelConfig& cfg = (*loaded)->config;
+  const std::string model_key = tune_model_key(cfg, (*loaded)->quantization);
+  TuneCache c;
+  c.put({"cpu", model_key, 5, 10.0, 8.0, "AC, load 0.2", ""});
+  c.put({"ggml-cpu", model_key, 4, 20.0, 19.0, "AC", ""});
+  c.put({"cpu", model_key, 3, 11.0, 8.0, "AC", ""});  // replaces the first
+  CHECK(c.entries.size() == 2 && c.find("cpu", model_key)->threads == 3);
+  CHECK(save_tune_cache(c, path).ok());
+  TuneCache r = load_tune_cache(path, &why);
+  CHECK(r.entries.size() == 2 && r.machine == tune_machine_key());
+  CHECK(r.find("cpu", model_key)->threads == 3 && r.find("cpu", model_key)->tok_s == 11.0);
+  CHECK(!r.find("cpu", model_key)->measured_at.empty());
+  CHECK(r.find("metal", model_key) == nullptr && r.find("cpu", "llama/4096x32/Q4_K_M") == nullptr);
+
+  // The Engine takes the tuned count only when threads are on auto, and never
+  // with DYNALM_AUTOTUNE=0.
+  set_env("DYNALM_AUTOTUNE_CACHE", path);
+  CHECK(tuned_threads(DeviceKind::kCpu, cfg, (*loaded)->quantization) == 3);
+  EngineOptions o;
+  o.model_path = g_model;
+  o.backend = DeviceKind::kCpu;
+  o.kv_tokens = 256;
+  {
+    auto e = Engine::create(o);
+    CHECK(e.ok() && (*e)->threads() == 3);
+  }
+  o.threads = 2;
+  {
+    auto e = Engine::create(o);
+    CHECK(e.ok() && (*e)->threads() == 2);
+  }
+  set_env("DYNALM_AUTOTUNE", "0");
+  CHECK(tuned_threads(DeviceKind::kCpu, cfg, (*loaded)->quantization) == 0);
+  set_env("DYNALM_AUTOTUNE", "");
+
+  // Any other machine, build or format version invalidates the whole file.
+  auto rewrite = [&](const std::string& from, const std::string& to) {
+    std::ifstream in(path);
+    std::stringstream ss;
+    ss << in.rdbuf();
+    std::string text = ss.str();
+    const size_t at = text.find(from);
+    CHECK(at != std::string::npos);
+    text.replace(at, from.size(), to);
+    CHECK(write_text(path, text));
+  };
+  rewrite("\"version\":1", "\"version\":2");
+  CHECK(load_tune_cache(path, &why).entries.empty() && why.find("version") != std::string::npos);
+  rewrite("\"version\":2", "\"version\":1");
+  CHECK(load_tune_cache(path).entries.size() == 2);
+  rewrite(tune_machine_key(), "Some Other CPU | avx2 | 8c/8p | Linux x86_64");
+  CHECK(load_tune_cache(path, &why).entries.empty() && why.find("another machine") != std::string::npos);
+  CHECK(write_text(path, "{not json"));
+  CHECK(load_tune_cache(path, &why).entries.empty() && why.find("unreadable") != std::string::npos);
+  set_env("DYNALM_AUTOTUNE_CACHE", (dir / "none.json").string());
+  CHECK(tuned_threads(DeviceKind::kCpu, cfg, (*loaded)->quantization) == 0);
+  CHECK(autotune_report().find("Execution modes") != std::string::npos);
+  // Conditions: a problem, nothing readable before the run, all fine.
+  CHECK(!judge_tune_conditions({"AC"}, {"on battery"}, true).quiet);
+  CHECK(judge_tune_conditions({"AC"}, {"on battery"}, true).text == "on battery");
+  CHECK(!judge_tune_conditions({}, {}, true).quiet);  // unverified: not stored without --force
+  CHECK(judge_tune_conditions({}, {}, false).quiet);  // after the run: no new problem
+  CHECK(judge_tune_conditions({"AC", "load 0.4"}, {}, true).quiet);
+  CHECK(judge_tune_conditions({"AC", "load 0.4"}, {}, true).text == "AC, load 0.4");
+}
+
+// Chat formats this engine renders natively: DeepSeek-Coder detection and the
+// fallback by model name for files without a template.
+void test_chat_templates() {
+  const std::string dsc =
+      "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}"
+      "{%- if not ns.found -%}{{'You are an AI programming assistant, utilizing the Deepseek Coder model, developed "
+      "by Deepseek Company, and you only answer questions related to computer science. For politically sensitive "
+      "questions, security and privacy issues, and other non-computer science questions, you will refuse to "
+      "answer\\n'}}{%- endif %}{%- for message in messages %}{%- if message['role'] == 'system' %}{{ message['content'] }}"
+      "{%- else %}{%- if message['role'] == 'user' %}{{'### Instruction:\\n' + message['content'] + '\\n'}}"
+      "{%- else %}{{'### Response:\\n' + message['content'] + '\\n<|EOT|>\\n'}}{%- endif %}{%- endif %}{%- endfor %}"
+      "{% if add_generation_prompt %}{{'### Response:'}}{% endif %}";
+  auto t = ChatTemplate::from_jinja(dsc);
+  CHECK(t.ok() && t->format() == ChatFormat::kDeepSeekCoder);
+  const std::vector<ChatMessage> msgs = {{"user", "hi"}, {"assistant", "hello"}, {"user", "sum"}};
+  auto out = t->apply(msgs, true);
+  CHECK(out.ok());
+  CHECK(out->starts_with("You are an AI programming assistant") &&
+        out->find("refuse to answer\n### Instruction:\nhi\n### Response:\nhello\n<|EOT|>\n### Instruction:\nsum\n"
+                  "### Response:") != std::string::npos);
+  const std::vector<ChatMessage> with_sys = {{"system", "Be brief."}, {"user", "x"}};
+  CHECK(*t->apply(with_sys, true) == "Be brief.### Instruction:\nx\n### Response:");
+
+  // Phi-4-mini: the tag is built from the role, no newlines.
+  auto phi4 = ChatTemplate::from_jinja(
+      "{% for message in messages %}{% if message['role'] == 'system' and 'tools' in message %}"
+      "{{ '<|' + message['role'] + '|>' + message['content'] + '<|tool|>' + message['tools'] + '<|/tool|>' + '<|end|>' }}"
+      "{% else %}{{ '<|' + message['role'] + '|>' + message['content'] + '<|end|>' }}{% endif %}{% endfor %}"
+      "{% if add_generation_prompt %}{{ '<|assistant|>' }}{% else %}{{ eos_token }}{% endif %}");
+  CHECK(phi4.ok() && phi4->format() == ChatFormat::kPhi4);
+  CHECK(*phi4->apply(with_sys, true) == "<|system|>Be brief.<|end|><|user|>x<|end|><|assistant|>");
+  auto by_name = [](std::string_view a, std::string_view b) {
+    const std::string_view n[] = {a, b};
+    return ChatTemplate::from_model_name(n);
+  };
+  CHECK(by_name("LLaMA v2", "llama-2-7b-chat.Q4_K_M.gguf")->format() == ChatFormat::kLlama2);
+  CHECK(by_name("deepseek-ai_deepseek-coder-1.3b-instruct", "x.gguf")->format() == ChatFormat::kDeepSeekCoder);
+  CHECK(by_name("", "Mistral-7B-Instruct-v0.2.Q4_K_M.gguf")->format() == ChatFormat::kMistral);
+  CHECK(!by_name("LLaMA v2", "llama-2-7b.Q4_K_M.gguf").ok());  // a base model: no chat format
+  CHECK(!by_name("", "some-model-chat.gguf").ok());
+}
+
+// A fused Q|K|V weight (Phi-3) gives the same text as separate Q, K, V
+// weights holding the same values, on the CPU and on graph devices (ggml-cpu,
+// the GPU), where rope writes Q inside the fused value and then reads K.
+void test_fused_qkv(const std::filesystem::path& dir, DeviceKind dev) {
+  test::TinyModelSpec spec;
+  spec.fused_qkv = true;
+  const std::string fused = (dir / "tiny-fused.gguf").string();
+  CHECK(test::write_file(fused, test::tiny_model_gguf(spec)));
+  auto open = [&](const std::string& path) {
+    EngineOptions o;
+    o.model_path = path;
+    o.backend = dev;
+    o.threads = 2;
+    o.kv_tokens = 512;
+    o.int8_decode_rows = 0;
+    auto e = Engine::create(o);
+    if (!e.ok()) std::fprintf(stderr, "fused qkv on %s: %s\n", std::string(device_kind_name(dev)).c_str(),
+                              e.status().to_string().c_str());
+    CHECK(e.ok());
+    return std::move(*e);
+  };
+  auto a = open(g_model), b = open(fused);
+  for (const char* p : {"alpha beta", "the quick brown fox jumps over"}) {
+    const Out x = gen(*a, p, 16), y = gen(*b, p, 16);
+    CHECK(y.finish == StreamFinish::kLength && x.text == y.text);
+  }
+}
+
+// GPT-4o (o200k) pre-tokenizer: cases worked out from the HF regex by hand.
+void test_gpt4o_pretokenizer() {
+  auto split = [](std::string_view text) {
+    std::vector<std::string_view> w;
+    pretokenize(PreTokenizer::kGpt4o, text, w);
+    return std::vector<std::string>(w.begin(), w.end());
+  };
+  using V = std::vector<std::string>;
+  CHECK(pretokenizer_from_name("gpt-4o").ok() && *pretokenizer_from_name("gpt-4o") == PreTokenizer::kGpt4o);
+  CHECK(split("Hello world") == (V{"Hello", " world"}));
+  CHECK(split("HTTPServer ABC") == (V{"HTTPServer", " ABC"}));  // U*W+ backs off; U+W* for all caps
+  CHECK(split("don't I'M") == (V{"don't", " I'M"}));             // contractions, any case
+  CHECK(split("12345") == (V{"123", "45"}));
+  CHECK(split("a/b") == (V{"a", "/b"}));
+  CHECK(split("x.\n\ny") == (V{"x", ".\n\n", "y"}));
+  CHECK(split("  hi") == (V{" ", " hi"}));
+  CHECK(split("e\xCC\x81t\xC3\xA9") == (V{"e\xCC\x81t\xC3\xA9"}));      // combining mark stays in the word
+  CHECK(split("\xCE\x91\xCE\x92\xCE\xB3 x") == (V{"\xCE\x91\xCE\x92\xCE\xB3", " x"}));  // Greek AB + gamma
+  CHECK(split("a  \n b") == (V{"a", "  \n", " b"}));
+}
+
+// BOS when the GGUF has no add_bos_token key: as llama.cpp, the Llama 3
+// pre-tokenizers add it (many Llama 3 files omit the key); Qwen2 does not.
+void test_bos_default(const std::filesystem::path& dir) {
+  for (const auto& [pre, expect] : {std::pair{"llama-bpe", true}, std::pair{"qwen2", false}}) {
+    test::TinyModelSpec spec;
+    spec.pre = pre;
+    spec.add_bos = -1;
+    const std::string path = (dir / ("tiny-bos-" + std::string(pre) + ".gguf")).string();
+    CHECK(test::write_file(path, test::tiny_model_gguf(spec)));
+    auto m = load_model(path);
+    CHECK(m.ok());
+    const std::vector<TokenId> t = (*m)->tokenizer->encode("hello", true, false);
+    CHECK(!t.empty() && (t.front() == (*m)->tokenizer->bos()) == expect);
+  }
+}
+
+// `dynalm doctor`: no model, no benchmark; reports the backends, the default
+// device and the AutoTune state, in text and JSON.
+void test_doctor(const std::filesystem::path& dir) {
+  set_env("DYNALM_AUTOTUNE_CACHE", (dir / "doctor-none.json").string());
+  const DoctorReport r = collect_doctor_report();
+  CHECK(r.dynacore_ok && !r.kernel.empty() && r.threads > 0 && r.ggml_threads > 0);
+  CHECK(!r.device.empty() && r.autotune_entries == 0 && r.autotune_enabled);
+  CHECK(r.autotune_status.find("no tuning cache") != std::string::npos);
+  CHECK(r.ggml_cpu == dynacore::ggml_gpu_compiled(dynacore::DeviceType::kCpu));
+  CHECK(r.ggml_cpu_usable == ggml_cpu_usable());
+  // A GPU backend with a device is what --backend auto names first.
+  for (const DoctorReport::GpuBackend& g : r.gpu_backends) {
+    if (!g.devices.empty()) CHECK(r.device.find(g.provider + " GPU") == 0);
+  }
+  const std::string text = format_doctor_text(r);
+  for (const char* label : {"Backends:", "Default:", "Threads:", "AutoTune:", "CPU features:", "Status:"}) {
+    CHECK(text.find(label) != std::string::npos);
+  }
+  CHECK(text.find("this release runs on the CPU only") == std::string::npos);  // stale since GPU support
+  auto j = json::parse(format_doctor_json(r));
+  CHECK(j.ok() && j->is_object());
+  const json::Value* at = j->find("autotune");
+  CHECK(at != nullptr && at->is_object() && at->find("cache") != nullptr && at->find("enabled") != nullptr);
+  CHECK(j->find("gpu_backends") != nullptr && j->find("gpu_backends")->is_array());
+  CHECK(j->find("ggml_threads") != nullptr && j->find("device") != nullptr);
+  set_env("DYNALM_AUTOTUNE", "0");
+  CHECK(!collect_doctor_report().autotune_enabled);
+  set_env("DYNALM_AUTOTUNE", "");
 }
 
 int main() {
@@ -326,6 +740,24 @@ int main() {
   g_model = (dir / "tiny.gguf").string();
   CHECK(test::write_file(g_model, test::tiny_model_gguf()));
   int rc = 0;
+  test_device_plan();
+  std::printf("device plan: auto / --gpu / cpu / native-cpu / named, per model and build\n");
+  test_predictive_mixed_budget();
+  test_memory_admission();
+  // Isolated from the user's tuning cache (~/.dynalm/autotune.json).
+  set_env("DYNALM_AUTOTUNE_CACHE", (dir / "none.json").string());
+  test_autotune(dir);
+  test_chat_templates();
+  test_gpt4o_pretokenizer();
+  test_bos_default(dir);
+  test_doctor(dir);
+  std::printf("doctor: backends, default device, AutoTune state; text and JSON, no model loaded\n");
+  std::printf("BOS default without add_bos_token: Llama 3 pre-tokenizers add it, Qwen2 does not\n");
+  std::printf("GPT-4o pre-tokenizer (Phi-4-mini, Llama 4): regex cases\n");
+  std::printf("chat templates: DeepSeek-Coder, and by model name when the file has none\n");
+  std::printf("autotune: modes, versioned cache, invalidation, tuned threads and the opt-out\n");
+  std::printf("memory admission: refuses a KV cache that cannot fit, names a --ctx that does\n");
+  std::printf("DD-079 predictive mixed-step budget: target, clamps, missing samples\n");
   {
     std::printf("CPU:\n");
     auto e = make_engine(DeviceKind::kCpu);
@@ -339,6 +771,24 @@ int main() {
     std::printf("  solo prefill never stalls a decoding stream (scheduler trace)\n");
     test_memory_bounded(*e);
     std::printf("  memory bounded over repeated requests\n");
+    test_speculative_batch(DeviceKind::kCpu, /*exact=*/true);
+    std::printf("  speculative decoding in the batch: same text as plain decoding, drafts accepted\n");
+    // A draft model: the target itself (drafts mostly accepted) and an unrelated
+    // model of the same vocabulary (drafts mostly rejected): the text never changes.
+    test_speculative_batch(DeviceKind::kCpu, /*exact=*/true, g_model);
+    test::TinyModelSpec other;
+    other.seed = 99;
+    const std::string other_path = (dir / "tiny-other.gguf").string();
+    CHECK(test::write_file(other_path, test::tiny_model_gguf(other)));
+    test_speculative_batch(DeviceKind::kCpu, /*exact=*/true, other_path);
+    std::printf("  speculative decoding with a draft model (BatchDrafter): same text, matching and unrelated drafts\n");
+    test_fused_qkv(dir, DeviceKind::kCpu);
+    if (ggml_cpu_usable()) {
+      test_fused_qkv(dir, DeviceKind::kGgmlCpu);
+      std::printf("  fused Q|K|V weights (Phi-3) == separate ones, native and ggml-cpu\n");
+    } else {
+      std::printf("  fused Q|K|V weights (Phi-3) == separate ones, native (ggml-cpu: SKIP, not usable here)\n");
+    }
   }
   bool gpu_usable = false;
   // The GPU under test: the first one built in, or DYNACORE_TEST_GPU.
@@ -384,12 +834,18 @@ int main() {
       std::printf("  concurrent + shared prefixes, cancellation, deadline, solo prefill trace\n");
       test_memory_bounded(*g);
       std::printf("  memory bounded over repeated requests\n");
+      // GPU: no batch invariance, so lengths and acceptance, not text equality.
+      test_speculative_batch(gpu_kind, /*exact=*/false);
+      std::printf("  speculative decoding in the batch: completes, drafts accepted\n");
+      test_fused_qkv(dir, gpu_kind);
+      std::printf("  fused Q|K|V weights (Phi-3) == separate ones\n");
     }
   } else {
     std::printf("GPU: NOT BUILT (ENABLE_METAL/VULKAN/CUDA=OFF)\n");
   }
   test_device_selection(dir.string(), gpu_usable, gpu_kind);
-  std::printf("device selection: auto -> %s for a supported model, CPU for an unsupported one\n",
+  std::printf("device selection: auto -> %s for Qwen2 and Qwen3 (per-head Q/K norm); cpu -> ggml kernels when built; "
+              "--gpu/--cpu/--backend\n",
               gpu_usable ? "GPU" : "CPU");
   std::filesystem::remove_all(dir);
   std::printf("all engine tests passed (%d checks)\n", g_checks);

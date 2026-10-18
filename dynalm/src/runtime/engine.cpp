@@ -2,6 +2,7 @@
 
 #include "dynacore/ir/passes.h"
 #include "dynacore/ir/recording_device.h"
+#include "dynacore/gpu/ggml_device.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -11,6 +12,7 @@
 #include "logging/log.h"
 #include "dynacore/hardware/cpu_info.h"
 #include "dynacore/hardware/thread_qos.h"
+#include "runtime/autotune.h"
 #include "runtime/sequence.h"
 #include "runtime/text_stream.h"
 #include "common/core.h"
@@ -96,6 +98,22 @@ int64_t auto_kv_tokens(const ModelConfig& c, DType kv_dtype, int64_t weight_byte
   return std::max(kBlock, tokens / kBlock * kBlock);
 }
 
+Status check_memory_fit(int64_t weight_bytes, int64_t kv_bytes, int64_t kv_per_token, int64_t total_ram,
+                        int64_t device_free) {
+  auto gb = [](int64_t b) { return std::to_string(b / (1 << 20) / 1024) + "." + std::to_string(b / (1 << 20) % 1024 * 10 / 1024) + " GiB"; };
+  auto check = [&](int64_t limit, const char* where) -> Status {
+    if (limit <= 0 || weight_bytes + kv_bytes <= limit) return Status::Ok();
+    const int64_t fit = kv_per_token > 0 ? std::max<int64_t>(0, limit - weight_bytes) / kv_per_token / 16 * 16 : 0;
+    std::string m = std::string("not enough ") + where + ": the model needs " + gb(weight_bytes) + " and the KV cache " +
+                    gb(kv_bytes) + ", " + gb(weight_bytes + kv_bytes) + " in all; the limit is " + gb(limit);
+    m += fit >= 16 ? "; use --ctx " + std::to_string(fit) + " or less, or --kv q8_0 (half the KV memory)"
+                   : "; this model does not fit, use a smaller or more quantized model";
+    return ResourceExhausted(m);
+  };
+  if (device_free >= 0) ENGINE_RETURN_IF_ERROR(check(device_free / 100 * 95, "GPU memory"));
+  return check(total_ram / 10 * 9, "memory");
+}
+
 namespace {
 
 // Maps every weight page into the process before the first request. Weights
@@ -144,76 +162,71 @@ Result<ExecutionMode> parse_execution_mode(std::string_view s) {
 Status apply_backend_choice(std::string_view choice, EngineOptions& o) {
   o.backend_auto = choice == "auto" || choice == "gpu";
   o.backend_require_gpu = choice == "gpu";
-  if (o.backend_auto) {
+  o.cpu_ggml = choice == "auto" || choice == "cpu";
+  if (o.backend_auto || choice == "native-cpu") {
     o.backend = DeviceKind::kCpu;
     return Status::Ok();
   }
-  ENGINE_ASSIGN_OR_RETURN(o.backend, parse_device_kind(choice));
-  return Status::Ok();
-}
-
-Status gpu_model_support(const ModelConfig& c, DType kv_dtype) {
-  if (c.moe.num_experts > 0) return Unsupported("mixture-of-experts models are not supported on the GPU yet");
-  if (c.attn_qk_norm) return Unsupported("per-head Q/K norm (Qwen3, Gemma 3) is not supported on the GPU yet");
-  for (const RopeConfig* r : {&c.rope, c.has_rope_local ? &c.rope_local : nullptr}) {
-    if (r != nullptr && r->scaling != RopeScaling::kNone && r->scaling != RopeScaling::kLinear) {
-      return Unsupported("RoPE scaling other than none/linear (YaRN, Llama 3) is not supported on the GPU yet");
-    }
+  auto k = parse_device_kind(choice);
+  if (!k.ok()) {
+    return InvalidArgument("unknown backend '" + std::string(choice) +
+                           "' (auto, gpu, cpu, native-cpu, ggml-cpu, metal, vulkan, cuda)");
   }
-  if (kv_dtype != DType::kF16 && kv_dtype != DType::kF32 && kv_dtype != DType::kQ8_0) {
-    return Unsupported("KV cache dtype " + std::string(dtype_name(kv_dtype)) + " is not supported on the GPU (f16, f32, q8_0)");
-  }
+  o.backend = *k;
   return Status::Ok();
 }
 
 Result<std::unique_ptr<Engine>> Engine::create(EngineOptions opts) {
-  if (opts.backend_auto) {
-    // The first GPU built in (CUDA, Metal, Vulkan) that runs the model and
-    // starts; otherwise the CPU, with the reason logged.
-    // With --gpu (backend_require_gpu) there is no CPU fallback.
-    const bool require_gpu = opts.backend_require_gpu;
-    opts.backend_auto = false;
-    opts.backend_require_gpu = false;
-    opts.backend = DeviceKind::kCpu;
-    std::vector<DeviceKind> gpus;
-    for (DeviceKind k : compiled_devices()) {
-      if (k != DeviceKind::kCpu) gpus.push_back(k);
-    }
-    if (gpus.empty()) {
-      if (require_gpu) {
-        return Unsupported("--gpu: this DynaLM has no GPU support built in (install a GPU build, see docs/gpu.md); "
-                           "use --cpu");
-      }
-      return create(std::move(opts));
-    }
-    {
-      ENGINE_ASSIGN_OR_RETURN(auto probe, load_model(opts.model_path));
-      if (Status s = gpu_model_support(probe->config, opts.kv_dtype); !s.ok()) {
-        if (require_gpu) return Unsupported("--gpu: " + s.message() + "; use --cpu");
-        LOG_INFO("Device: auto selects the CPU: {}", s.message());
-        return create(std::move(opts));
-      }
-    }
-    Status last = Status::Ok();
-    for (DeviceKind k : gpus) {
-      EngineOptions gpu = opts;
-      gpu.backend = k;
-      auto r = create(std::move(gpu));
-      if (r.ok()) return r;
-      last = r.status();
-      LOG_WARN("Device: the {} GPU failed to start ({})", device_kind_name(k), r.status().message());
-    }
-    if (require_gpu) return Unsupported("--gpu: no GPU could start (" + last.message() + "); use --cpu");
-    LOG_INFO("Device: auto selects the CPU (no GPU started)");
-    return create(std::move(opts));
+  const bool choose = opts.backend_auto || (opts.backend == DeviceKind::kCpu && opts.cpu_ggml);
+  if (!choose) return create_on(std::move(opts));
+  // Pick devices (runtime/device_select.h), then open them in order.
+  ENGINE_ASSIGN_OR_RETURN(auto probe, load_model(opts.model_path));
+  const DeviceRequest req{opts.backend, opts.backend_auto, opts.backend_require_gpu, opts.cpu_ggml, opts.kv_dtype};
+  const std::vector<DeviceKind> compiled = compiled_devices();
+  const DevicePlan plan =
+      plan_devices(probe->config, req, compiled, dynacore::ggml_gpu_compiled(dynacore::DeviceType::kCpu));
+  probe.reset();
+  if (!plan.error.ok()) return plan.error;
+  if (!plan.note.empty()) LOG_INFO("Device: {}", plan.note);
+  opts.backend_auto = opts.backend_require_gpu = opts.cpu_ggml = false;
+  Status last = Status::Ok();
+  for (DeviceKind k : plan.candidates) {
+    EngineOptions o = opts;
+    o.backend = k;
+    auto r = create_on(std::move(o));
+    if (r.ok()) return r;
+    last = r.status();
+    LOG_WARN("Device: {} failed to start ({})", device_kind_name(k), r.status().message());
   }
+  if (!plan.native_cpu_last) return Unsupported("--gpu: no GPU could start (" + last.message() + "); use --cpu");
+  opts.backend = DeviceKind::kCpu;
+  return create_on(std::move(opts));
+}
+
+Result<std::unique_ptr<Engine>> Engine::create_on(EngineOptions opts) {
   request_full_speed_process();  // DD-052
   std::unique_ptr<Engine> e(new Engine());
   ENGINE_ASSIGN_OR_RETURN(e->model_, load_model(opts.model_path));
   const ModelConfig& c = e->model_->config;
-  if (opts.backend != DeviceKind::kCpu) ENGINE_RETURN_IF_ERROR(gpu_model_support(c, opts.kv_dtype));
-  const int threads = opts.threads > 0 ? opts.threads : cpu_info().physical_cores;
+  if (opts.backend != DeviceKind::kCpu) ENGINE_RETURN_IF_ERROR(gpu_model_support(c, opts.kv_dtype, opts.backend));
+  // Default threads: every physical core, except for ggml's CPU kernels on a
+  // hybrid CPU: they split work evenly and meet at barriers, so efficiency cores
+  // hold back the step (M4 Pro, 1.5B decode: 12 threads 81 tok/s, 8 P-cores 138).
+  // DynaCore's pool hands out chunks dynamically and keeps all cores.
+  int threads = opts.threads > 0 ? opts.threads : cpu_info().physical_cores;
+  if (opts.threads <= 0 && opts.backend == DeviceKind::kGgmlCpu && cpu_info().performance_cores > 0) {
+    threads = cpu_info().performance_cores;
+  }
+  // A thread count measured by `dynalm autotune --run` on this machine and
+  // build, when the caller left threads on auto (runtime/autotune.h).
+  if (opts.threads <= 0) {
+    if (const int32_t t = tuned_threads(opts.backend, c, e->model_->quantization); t > 0) {
+      LOG_INFO("Threads: {} (tuned, {})", t, tune_cache_path());
+      threads = t;
+    }
+  }
   e->pool_ = std::make_unique<ThreadPool>(threads);
+  e->kind_ = opts.backend;
   prefault_weights(e->model_->weights, e->model_->weight_bytes, *e->pool_);
   ENGINE_ASSIGN_OR_RETURN(e->backend_, create_device(opts.backend, *e->pool_));
   Device* device = e->backend_.get();
@@ -232,17 +245,27 @@ Result<std::unique_ptr<Engine>> Engine::create(EngineOptions opts) {
     opts.scheduler.prefill_token_budget = kGpuMixedPrefillBudget;
     opts.scheduler.max_prefill_chunk = kGpuMaxPrefillChunk;
     opts.scheduler.decode_latency_target = kGpuDecodeLatencyTarget;
+    opts.scheduler.decode_protect_predictive = kGpuDecodePredictive;
     opts.scheduler.protected_prefill_min = kGpuProtectedPrefillMin;
   }
   if (opts.max_batch_tokens <= 0) {
     opts.max_batch_tokens = std::max({256, opts.scheduler.prefill_token_budget + opts.scheduler.decode_token_budget + 1,
                                       opts.scheduler.solo_prefill_chunk});
   }
+  // int8 activation rows (DD-053) on DynaCore's CPU kernels. ARM64: up to
+  // kNeonInt8Rows, where the SDOT row kernels beat the fp32 expand GEMM at
+  // prefill sizes too (M4 Pro, Qwen2.5-1.5B, 401-token prompt: 2394 -> 1835 ms;
+  // the per-row arithmetic is decode's, prefill chunks of 32/64: perplexity
+  // +0.04%, mean KL 0.0012). x86: the plan default (4), the measured AVX2 crossover.
+  int32_t int8_rows = opts.int8_decode_rows;
+#if defined(__aarch64__) || defined(_M_ARM64)
+  if (int8_rows < 0 && opts.backend == DeviceKind::kCpu) int8_rows = kNeonInt8Rows;
+#endif
   if (opts.execution == ExecutionMode::kCompiled) {
     auto rec = std::make_unique<dynacore::ir::RecordingDevice>(*e->backend_, dynacore::ir::RecordingDevice::Mode::kDeferred);
     if (!segment_device) {  // the CPU compiler pipeline; a segment device plans its own graphs
       KernelPlan base = KernelPlan::defaults();
-      if (opts.int8_decode_rows >= 0) base.int8_decode_max_rows = opts.int8_decode_rows;
+      if (int8_rows >= 0) base.int8_decode_max_rows = int8_rows;
       dynacore::ir::CompileOptions co;
       co.cost = dynacore::ir::CostModel::from(base, threads);
       rec->set_planner(dynacore::ir::make_planner(co));
@@ -271,15 +294,51 @@ Result<std::unique_ptr<Engine>> Engine::create(EngineOptions opts) {
       LOG_WARN("ignoring DYNALM_KV_LAYOUT={} (head | slot)", v);
     }
   }
+  {
+    // Memory admission: refuse a KV cache that cannot fit instead of failing
+    // (or swapping) mid-run. Within physical RAM but above what is available
+    // now (other apps, file cache): a warning; macOS frees file cache on demand.
+    const int64_t kv_need = static_cast<int64_t>(kv_geom.total_bytes());
+    const int64_t dev_free = device->memory_stats().free_bytes;
+    ENGINE_RETURN_IF_ERROR(check_memory_fit(e->model_->weight_bytes, kv_need, c.kv_bytes_per_token(opts.kv_dtype),
+                                            memory_info().total_bytes, dev_free));
+    if (const int64_t avail = memory_info().available_bytes; avail > 0 && e->model_->weight_bytes + kv_need > avail) {
+      LOG_WARN("Memory: the model and KV cache need {} MiB; {} MiB is available now (other apps may be swapped out)",
+               (e->model_->weight_bytes + kv_need) >> 20, avail >> 20);
+    }
+  }
   ENGINE_ASSIGN_OR_RETURN(e->kv_, KvBlockPool::create(kv_geom, *device));
-  ENGINE_ASSIGN_OR_RETURN(e->transformer_, Transformer::create(c, e->model_->weights, *device, opts.max_batch_tokens));
+  ENGINE_ASSIGN_OR_RETURN(e->transformer_, Transformer::create(c, e->model_->weights, *device, opts.max_batch_tokens,
+                                                                  std::min<int64_t>(kv_tokens, c.context_length)));
   ENGINE_RETURN_IF_ERROR(device->take_error());
-  if (opts.int8_decode_rows >= 0) {
+  if (int8_rows >= 0) {
     KernelPlan base = KernelPlan::defaults();
-    base.int8_decode_max_rows = opts.int8_decode_rows;
+    base.int8_decode_max_rows = int8_rows;
     e->transformer_->set_kernel_base(base);
   }
+  if (!opts.draft_model_path.empty()) {
+    // The draft: same device, same KV dtype, its own KV pool sized like the target's.
+    ENGINE_ASSIGN_OR_RETURN(e->draft_model_, load_model(opts.draft_model_path));
+    const ModelConfig& dc = e->draft_model_->config;
+    if (opts.backend != DeviceKind::kCpu) ENGINE_RETURN_IF_ERROR(gpu_model_support(dc, opts.kv_dtype, opts.backend));
+    KvGeometry dg = kv_geometry_for(dc, opts.kv_dtype, 16, kv_tokens);
+    dg.layout = device->preferred_kv_layout();
+    ENGINE_RETURN_IF_ERROR(check_memory_fit(e->model_->weight_bytes + e->draft_model_->weight_bytes,
+                                            static_cast<int64_t>(kv_geom.total_bytes() + dg.total_bytes()),
+                                            c.kv_bytes_per_token(opts.kv_dtype) + dc.kv_bytes_per_token(opts.kv_dtype),
+                                            memory_info().total_bytes, device->memory_stats().free_bytes));
+    ENGINE_ASSIGN_OR_RETURN(e->draft_kv_, KvBlockPool::create(dg, *device));
+    ENGINE_ASSIGN_OR_RETURN(e->draft_transformer_,
+                            Transformer::create(dc, e->draft_model_->weights, *device, opts.max_batch_tokens));
+    ENGINE_RETURN_IF_ERROR(device->take_error());
+    ENGINE_ASSIGN_OR_RETURN(e->drafter_, BatchDrafter::create(*e->draft_transformer_, *e->draft_kv_,
+                                                              *e->draft_model_->tokenizer, *e->model_->tokenizer));
+    if (opts.scheduler.spec_k <= 0) opts.scheduler.spec_k = 4;
+    LOG_INFO("Speculative decoding: draft model {} ({}), up to {} drafts per stream",
+             dc.name.empty() ? dc.architecture : dc.name, e->draft_model_->quantization, opts.scheduler.spec_k);
+  }
   e->scheduler_ = std::make_unique<Scheduler>(*e->transformer_, *e->kv_, *e->model_->tokenizer, opts.scheduler);
+  if (e->drafter_) e->scheduler_->set_draft_model(e->drafter_.get());
   e->core_ = std::make_shared<Core>();
   e->core_->sched = e->scheduler_.get();
   e->thread_ = std::thread([eng = e.get()] { eng->loop(); });

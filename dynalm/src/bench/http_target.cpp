@@ -49,6 +49,7 @@ class HttpTarget final : public Target {
     std::string buf;
     int32_t deltas = 0;
     bool first = true, done = false;
+    std::string stream_error;  // an {"error": ...} event: the request failed mid-stream
     int64_t last = 0;
     const int64_t t0 = now_ns();
     // Parses complete SSE frames as bytes arrive (timing per delta).
@@ -66,6 +67,11 @@ class HttpTarget final : public Target {
         }
         auto v = json::parse(payload);
         if (!v.ok()) continue;
+        if (const json::Value* e = v->find("error"); e != nullptr && stream_error.empty()) {
+          const json::Value* m = e->is_object() ? e->find("message") : nullptr;
+          stream_error = m != nullptr && m->is_string() ? m->as_string() : std::string("error event");
+          continue;
+        }
         if (const json::Value* u = v->find("usage"); u && u->is_object()) {
           if (const json::Value* p = u->find("prompt_tokens"); p && p->is_number()) r.prompt_tokens = static_cast<int32_t>(p->as_number());
           if (const json::Value* c = u->find("completion_tokens"); c && c->is_number()) {
@@ -102,6 +108,10 @@ class HttpTarget final : public Target {
     if (first) r.ttft_ms = r.e2e_ms;
     r.ok = done || deltas > 0;
     if (!r.ok) r.error = "no tokens streamed";
+    if (!stream_error.empty()) {  // tokens may have arrived, but the server reported a failure
+      r.ok = false;
+      r.error = "stream error: " + stream_error;
+    }
     return r;
   }
 

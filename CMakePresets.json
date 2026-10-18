@@ -77,7 +77,8 @@
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
-        "ENABLE_TSAN": "ON"
+        "ENABLE_TSAN": "ON",
+        "ENABLE_GGML_CPU": "OFF"
       }
     },
     {
@@ -86,6 +87,7 @@
       "displayName": "Linux, clang, release",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "clang",
         "CMAKE_CXX_COMPILER": "clang++"
       }
     },

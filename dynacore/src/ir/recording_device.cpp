@@ -165,10 +165,20 @@ void RecordingDevice::sign(const Call& c) {
     s.push_back(static_cast<uint64_t>(c.ap.num_heads) | float_word(c.ap.scale) << 32);
     s.push_back(float_word(c.ap.softcap) | static_cast<uint64_t>(static_cast<uint32_t>(c.ap.sliding_window)) << 32);
   }
+  if (c.m == Call::M::kMoeFfn) {
+    for (const TensorView* t : {&c.moe.x, &c.moe.router, &c.moe.gate, &c.moe.up, &c.moe.down, &c.moe.sh_gate,
+                                &c.moe.sh_up, &c.moe.sh_down, &c.moe.sh_router, &c.moe.out}) {
+      view(*t);
+    }
+    s.push_back(static_cast<uint64_t>(static_cast<uint32_t>(c.moe.experts)) |
+                static_cast<uint64_t>(static_cast<uint32_t>(c.moe.top_k)) << 32);
+    s.push_back(static_cast<uint64_t>(c.moe.normalize_topk) | static_cast<uint64_t>(c.moe.act) << 8);
+  }
   if (c.m == Call::M::kRope) {
     s.push_back(static_cast<uint64_t>(c.rope.style) | static_cast<uint64_t>(c.rope.dim) << 8 |
                 float_word(c.rope.freq_base) << 32);
     s.push_back(ptr_word(c.freq));
+    s.push_back(float_word(c.rope.attn_factor) | float_word(c.rope.scaling_factor) << 32);
   }
   s.push_back(plan_word(*c.plan));
 }
@@ -300,6 +310,7 @@ int32_t RecordingDevice::build_ir(const Call& c) {
               {"base", static_cast<double>(c.rope.freq_base)}};
       if (c.rope.scaling != RopeScaling::kNone) a["scaling_factor"] = static_cast<double>(c.rope.scaling_factor);
       if (c.freq) a["freq_factors"] = int64_t{1};
+      if (c.rope.attn_factor != 1.0f) a["attn_factor"] = static_cast<double>(c.rope.attn_factor);
       record_op(&c, OpKind::kRope, {xv, pv}, std::move(a), c.a, true);
       break;
     }
@@ -372,6 +383,8 @@ int32_t RecordingDevice::build_ir(const Call& c) {
       record_op(&c, OpKind::kScatterAdd, {d, s, index_const(c.ints0, "rows"), wv}, {}, c.d, true);
       break;
     }
+    case M::kMoeFfn:  // segment executors only (supports_moe_ffn): no IR form
+      break;
   }
   return first;
 }
@@ -405,6 +418,7 @@ void RecordingDevice::run_call(const Call& c) {
     case M::kFill: d.fill(c.a, c.f); break;
     case M::kGather: d.gather_rows(c.a, c.ints0, c.d); break;
     case M::kScatterAdd: d.scatter_add_rows(c.a, c.ints0, c.floats, c.d); break;
+    case M::kMoeFfn: d.moe_ffn(c.moe); break;
   }
 }
 
@@ -765,6 +779,12 @@ void RecordingDevice::scatter_add_rows(const TensorView& src, std::span<const in
   c.d = dst;
   c.ints0.assign(rows.begin(), rows.end());
   c.floats.assign(weights.begin(), weights.end());
+  submit(c);
+}
+
+void RecordingDevice::moe_ffn(const MoeFfnParams& p) {
+  Call& c = next_call(static_cast<int>(Call::M::kMoeFfn));
+  c.moe = p;
   submit(c);
 }
 

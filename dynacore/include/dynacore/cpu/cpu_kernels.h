@@ -87,6 +87,9 @@ using DotQ16RowsFn = void (*)(const void* w, const ActBlockQ16* const* x, int m,
 
 struct CpuKernels {
   CpuIsa isa = CpuIsa::kGeneric;
+  // The int8 activation entries are SIMD kernels (AVX2, NEON dot product),
+  // not the scalar reference: the matmul registry may pick the int8 family.
+  bool int8_simd = false;
   float (*dot_f32)(const float* a, const float* b, int64_t n) = nullptr;
   // y += a * x
   void (*axpy_f32)(float a, const float* x, float* y, int64_t n) = nullptr;
@@ -189,6 +192,9 @@ void register_generic_kernels(CpuKernels& k);
 // Overrides entries with AVX2/FMA/F16C versions. Returns false (and changes
 // nothing) when the AVX2 tier was not compiled in.
 bool register_avx2_kernels(CpuKernels& k);
+// ARM64 int8 activation kernels with SDOT (FEAT_DotProd) on top of the NEON
+// table; false when not compiled. The caller checks the CPU feature.
+bool register_neon_dot_kernels(CpuKernels& k);
 // AVX-VNNI kernels on top of the AVX2 table (DD-080); false when not compiled
 // in. The caller checks the CPU feature.
 bool register_avxvnni_kernels(CpuKernels& k);

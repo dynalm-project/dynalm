@@ -245,10 +245,14 @@ const char* path_name(Path p) {
 // The path CpuDevice::matmul takes for a K-quant weight (k % 256 == 0, dense
 // x, no interleaved copy) under ReferenceBackend::plan_for(act): the rules of
 // CpuDevice::int8_kernel with KernelPlan::defaults().
+// int8_subscaled: the tier has the sub-scaled family (AVX2); without it
+// (NEON with SDOT) int8 is per-32 up to int8_decode_max_rows (4; 64 on ARM64).
+bool g_int8_subscaled = true;
 Path expected_path(bool int8_dot, ActFormat act, int64_t m) {
   if (act == ActFormat::kAuto && int8_dot) {
     if (m == 1) return Path::kInt8Per32;   // sub-scale needs >= 2 rows
-    if (m <= 8) return Path::kInt8Subscale;  // super-block family up to 8 rows
+    if (g_int8_subscaled && m <= 8) return Path::kInt8Subscale;  // super-block family up to 8 rows
+    if (!g_int8_subscaled && m <= KernelPlan::defaults().int8_decode_max_rows) return Path::kInt8Per32;
   }
   return m == 1 ? Path::kFused : Path::kPanel;  // expand_min_rows = 2
 }
@@ -407,6 +411,7 @@ void test_accuracy() {
   ThreadPool pool(4);
   ReferenceBackend be(pool, this_isa());
   const bool int8_dot = be.target().int8_dot;
+  g_int8_subscaled = be.target().int8_subscaled;
   const int64_t ks[] = {256, 768, 1280, 2304};  // 1, 3, 5 (crosses gemm_k_block 1024), 9 super-blocks
   const int64_t ns[] = {1, 5, 33};
   const int64_t ms[] = {1, 2, 3, 4, 5, 8, 9, 17};
@@ -474,6 +479,7 @@ void test_grouped_vs_single() {
   ThreadPool pool(4);
   ReferenceBackend be(pool, this_isa());
   const bool int8_dot = be.target().int8_dot;
+  g_int8_subscaled = be.target().int8_subscaled;
   for (int64_t k : {512, 1280}) {
     for (int64_t m : {1, 3, 12}) {
       QWeight wa = make_weight(DType::kQ4_K, 24, k, 31), wb = make_weight(DType::kQ6_K, 7, k, 32);
@@ -679,7 +685,7 @@ void test_prepack_validation() {
   auto short_buf = be.prepack_weight(view2(q4.data(), DType::kQ4_K, 16, 512), 16 * 2 * 144 - 1);
   CHECK(short_buf.status().code() == StatusCode::kInvalidArgument &&
         short_buf.status().message().find("but the buffer has") != std::string::npos);
-  if (!be.target().int8_dot) {
+  if (!be.target().int8_subscaled) {
     const Status s = be.prepack_weight(view2(q4.data(), DType::kQ4_K, 16, 512)).status();
     CHECK(s.code() == StatusCode::kUnsupported && s.message().find("no interleaved q4_K kernel") != std::string::npos);
     std::printf("  prepack on %s: rejected (no interleaved kernel); packed paths not reachable on this tier\n",
@@ -716,7 +722,7 @@ void test_prepack_validation() {
 void test_packed_kernel() {
   ThreadPool pool(4);
   ReferenceBackend be(pool, this_isa());
-  if (!be.target().int8_dot) return;  // reported by test_prepack_validation
+  if (!be.target().int8_subscaled) return;  // reported by test_prepack_validation
   {
     QWeight w = make_weight(DType::kQ4_K, 16, 512, 71);
     CHECK(be.prepack_weight(view2(w.data(), DType::kQ4_K, 16, 512)).ok());

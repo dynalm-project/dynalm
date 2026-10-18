@@ -37,10 +37,12 @@ bool present(const TensorView& v) { return v.data() != nullptr; }
 }  // namespace
 
 Result<std::unique_ptr<Transformer>> Transformer::create(const ModelConfig& config, const TensorRegistry& weights,
-                                                         Device& backend, int32_t max_batch_tokens) {
+                                                         Device& backend, int32_t max_batch_tokens,
+                                                         int64_t context_tokens) {
   ENGINE_RETURN_IF_ERROR(config.validate());
   if (max_batch_tokens <= 0) return InvalidArgument("max_batch_tokens must be > 0");
   std::unique_ptr<Transformer> t(new Transformer(config, backend));
+  t->context_tokens_ = context_tokens;
   ENGINE_RETURN_IF_ERROR(t->init(weights, max_batch_tokens));
   // One-time weight preparation for multi-row decode (DD-078): the backend
   // keeps interleaved copies of the weights it has kernels for.
@@ -118,7 +120,11 @@ Status Transformer::init(const TensorRegistry& w, int32_t max_batch) {
   ENGINE_RETURN_IF_ERROR(vec(TensorRole::kOutputNormBias, -1, output_norm_b_));
   ENGINE_RETURN_IF_ERROR(weight(TensorRole::kOutput, -1, lm_head_));
   if (!present(lm_head_)) lm_head_ = tok_embd_;  // tied embeddings
-  if (const Tensor* f = w.find(TensorRole::kRopeFreqs)) {
+  // LongRoPE picks its factors by context once, as llama.cpp does: the long
+  // ones when a sequence can exceed the original training context.
+  const Tensor* long_f = w.find(TensorRole::kRopeFreqsLong);
+  const bool use_long = long_f != nullptr && c.rope.original_context > 0 && context_tokens_ > c.rope.original_context;
+  if (const Tensor* f = use_long ? long_f : w.find(TensorRole::kRopeFreqs)) {
     rope_freq_factors_.resize(static_cast<size_t>(f->numel()));
     if (!dequantize_row(f->dtype(), f->data(), rope_freq_factors_.data(), f->numel())) {
       return Unsupported("rope_freqs dtype");
@@ -164,6 +170,9 @@ Status Transformer::init(const TensorRegistry& w, int32_t max_batch) {
       if (!present(L.router) || !present(gate3) || !present(up3) || !present(down3)) {
         return InvalidArgument("MoE layer " + std::to_string(l) + " is missing router or expert weights");
       }
+      L.gate_exps = gate3;
+      L.up_exps = up3;
+      L.down_exps = down3;
       L.experts.resize(static_cast<size_t>(c.moe.num_experts));
       for (int32_t e = 0; e < c.moe.num_experts; ++e) {
         ENGINE_ASSIGN_OR_RETURN(L.experts[static_cast<size_t>(e)][0], gate3.select(0, e));
@@ -194,6 +203,15 @@ Status Transformer::init(const TensorRegistry& w, int32_t max_batch) {
   ENGINE_RETURN_IF_ERROR(scratch(c.hidden_size, x_));
   ENGINE_RETURN_IF_ERROR(scratch(c.hidden_size, xn_));
   ENGINE_RETURN_IF_ERROR(scratch(q_dim + k_dim + v_dim, qkv_));
+  // Per-head Q/K norm with separate Q, K weights: Q and K in their own
+  // contiguous rows, so the norm is one call over [rows x heads, head_dim]
+  // instead of one per row (on a GPU, 2 graph nodes per layer instead of 2 x rows).
+  bool any_fused = false;
+  for (const Layer& L : layers_) any_fused = any_fused || L.fused_qkv;
+  if (c.attn_qk_norm && !any_fused) {
+    ENGINE_RETURN_IF_ERROR(scratch(q_dim, q_sep_));
+    ENGINE_RETURN_IF_ERROR(scratch(k_dim, k_sep_));
+  }
   ENGINE_RETURN_IF_ERROR(scratch(o_dim, attn_));
   ENGINE_RETURN_IF_ERROR(scratch(c.hidden_size, o_));
   ENGINE_RETURN_IF_ERROR(scratch(std::max<int64_t>(1, 2 * c.intermediate_size), ff_a_));
@@ -230,6 +248,31 @@ void Transformer::moe_mlp(const Layer& L, const TensorView& xn, const TensorView
   const auto row = [](const TensorView& t, int64_t r) {
     return reinterpret_cast<float*>(static_cast<std::byte*>(t.data()) + r * t.stride(0));
   };
+
+  // A device that routes on the device (GPU): the whole routed block is one
+  // op, with no host round trip (Device::moe_ffn); then the shared expert.
+  if (backend_.supports_moe_ffn()) {
+    MoeFfnParams p;
+    p.x = xn;
+    p.router = L.router;
+    p.gate = L.gate_exps;
+    p.up = L.up_exps;
+    p.down = L.down_exps;
+    p.out = out;
+    p.experts = ne;
+    p.top_k = k;
+    p.normalize_topk = c.moe.normalize_topk;
+    p.act = c.activation;
+    if (present(L.sh_up)) {  // shared expert (Qwen2-MoE), in the same op
+      p.sh_gate = L.sh_gate;
+      p.sh_up = L.sh_up;
+      p.sh_down = L.sh_down;
+      if (present(L.sh_router)) p.sh_router = L.sh_router;
+    }
+    backend_.moe_ffn(p);
+    mark(ForwardOp::kMoeExperts);
+    return;
+  }
 
   // 1. Router logits -> softmax -> top-k (ties: lower expert id) -> weights.
   const TensorView logits = rows_of(router_, m);
@@ -442,7 +485,10 @@ Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& c
   const TensorView x = rows_of(x_, m), xn = rows_of(xn_, m), qkv = rows_of(qkv_, m);
   const TensorView attn = rows_of(attn_, m), o = rows_of(o_, m);
   const TensorView ff_a = rows_of(ff_a_, m), ff_b = rows_of(ff_b_, m);
-  const TensorView q = cols_of(qkv, 0, q_dim), k = cols_of(qkv, q_dim, k_dim), v = cols_of(qkv, q_dim + k_dim, v_dim);
+  const bool qk_sep = q_sep_.data() != nullptr;
+  const TensorView q = qk_sep ? rows_of(q_sep_, m) : cols_of(qkv, 0, q_dim);
+  const TensorView k = qk_sep ? rows_of(k_sep_, m) : cols_of(qkv, q_dim, k_dim);
+  const TensorView v = cols_of(qkv, q_dim + k_dim, v_dim);
 
   if (profiling_) {
     mark_ns_ = now_ns();
@@ -467,7 +513,14 @@ Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& c
       backend_.matmul(xn, L.wv, present(L.bv) ? &L.bv : nullptr, v);
     }
     mark(ForwardOp::kQkv);
-    if (c.attn_qk_norm) {
+    if (c.attn_qk_norm && qk_sep) {
+      // Per-head RMSNorm over contiguous rows: one call on [rows x heads, head_dim]
+      // (row-wise, so identical to the per-row form; one graph node on a GPU).
+      const TensorView qh = view2d(q.data(), m * c.num_heads, c.head_dim, c.head_dim * 4);
+      const TensorView kh = view2d(k.data(), m * c.num_kv_heads, c.head_dim, c.head_dim * 4);
+      backend_.rms_norm(qh, L.q_norm, c.norm_eps, qh);
+      backend_.rms_norm(kh, L.k_norm, c.norm_eps, kh);
+    } else if (c.attn_qk_norm) {
       // Per-head RMSNorm: view each row's heads as [heads, head_dim].
       for (int64_t r = 0; r < m; ++r) {
         auto* qr = reinterpret_cast<float*>(static_cast<std::byte*>(q.data()) + r * q.stride(0));

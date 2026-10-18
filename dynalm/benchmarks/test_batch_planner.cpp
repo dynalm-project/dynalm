@@ -71,6 +71,7 @@ dynacore::MatmulKernelId ffn_kernel(const KernelPlan& kp, int rows) {
 int main() {
   const dynacore::HardwareProfile hw = dynacore::HardwareProfile::detect(4, "avx2");
   KernelPlan base = KernelPlan::defaults();
+  base.int8_decode_max_rows = 4;  // the AVX2 default (this test models an AVX2 machine; ARM64 builds default to 64)
   base.decode_wide_max_rows = 0;
   KernelPlan wide = base;
   wide.decode_wide_max_rows = 16;

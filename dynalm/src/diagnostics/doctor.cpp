@@ -10,6 +10,7 @@
 #include "config/config.h"
 #include "dynacore/cpu/cpu_device.h"
 #include "dynacore/device/device_registry.h"
+#include "dynacore/gpu/ggml_device.h"
 #include "dynacore/execution/thread_pool.h"
 #include "dynacore/hardware/cpu_info.h"
 #include "dynacore/hardware/isa.h"
@@ -17,6 +18,7 @@
 #include "dynacore/quantization/quant_formats.h"
 #include "dynacore/version.h"
 #include "registry/model_registry.h"
+#include "runtime/autotune.h"
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -62,12 +64,6 @@ std::string gib(int64_t bytes) {
   char buf[32];
   std::snprintf(buf, sizeof buf, "%.1f GiB", static_cast<double>(bytes) / kGiB);
   return buf;
-}
-
-std::string join(const std::vector<std::string>& v, const char* sep) {
-  std::string s;
-  for (const std::string& x : v) s += (s.empty() ? "" : sep) + x;
-  return s;
 }
 
 TensorView view2(void* p, DType d, int64_t r, int64_t c) {
@@ -143,6 +139,12 @@ DoctorReport collect_doctor_report() {
     if (isa_compiled(isa)) r.compiled_isas.emplace_back(isa_name(isa));
   }
   for (DeviceKind k : compiled_devices()) r.compiled_devices.emplace_back(device_kind_name(k));
+  r.ggml_cpu = dynacore::ggml_gpu_compiled(dynacore::DeviceType::kCpu);
+  r.ggml_cpu_usable = r.ggml_cpu && dynacore::ggml_cpu_usable_here();
+  for (auto [type, name] : {std::pair{dynacore::DeviceType::kMetal, "metal"}, std::pair{dynacore::DeviceType::kVulkan, "vulkan"},
+                            std::pair{dynacore::DeviceType::kCuda, "cuda"}}) {
+    if (dynacore::ggml_gpu_compiled(type)) r.gpu_backends.push_back({name, dynacore::ggml_gpu_device_names(type)});
+  }
 
   const OsInfo& os = os_info();
   r.os = os.name;
@@ -160,7 +162,8 @@ DoctorReport collect_doctor_report() {
   r.l3_bytes = cpu.l3_bytes;
   const CpuFeatures& f = cpu.features;
   if (os.arch == "arm64") {
-    r.isa = {{"NEON", f.neon}, {"DOTPROD", f.arm_dotprod}};
+    r.isa = {{"NEON", f.neon}, {"DOTPROD", f.arm_dotprod}, {"I8MM", f.arm_i8mm}, {"FP16", f.arm_fp16},
+             {"BF16", f.arm_bf16}, {"SVE", f.arm_sve}, {"SME", f.arm_sme}};
   } else {
     r.isa = {{"AVX2", f.avx2},         {"FMA", f.fma},          {"F16C", f.f16c},
              {"AVX-VNNI", f.avx_vnni}, {"AVX-512", f.avx512f},  {"AMX", f.amx_tile && f.amx_int8}};
@@ -172,9 +175,20 @@ DoctorReport collect_doctor_report() {
   for (const GpuInfo& g : gpu_info()) r.gpus.push_back({g.vendor + " " + g.name, g.memory_bytes, g.driver});
 
   const CpuIsa isa = select_isa(f, &r.isa_note);
-  r.device = "CPU";
   r.kernel = std::string(isa_name(isa));
   r.threads = cpu.physical_cores > 0 ? cpu.physical_cores : 1;
+  r.ggml_threads = cpu.performance_cores > 0 ? cpu.performance_cores : r.threads;
+  // `--backend auto`: the first built-in GPU with a device (models it cannot
+  // run fall back to the CPU), else the CPU (ggml's kernels when built in).
+  for (const DoctorReport::GpuBackend& g : r.gpu_backends) {
+    if (!g.devices.empty() && r.device.empty()) r.device = g.provider + " GPU (" + g.devices.front() + ")";
+  }
+  if (r.device.empty()) r.device = r.ggml_cpu_usable ? "CPU (ggml kernels)" : "CPU (DynaCore kernels, " + r.kernel + ")";
+
+  r.autotune_cache = tune_cache_path();
+  const TuneCache tc = load_tune_cache(r.autotune_cache, &r.autotune_status);
+  r.autotune_entries = static_cast<int32_t>(tc.entries.size());
+  if (const char* v = std::getenv("DYNALM_AUTOTUNE"); v != nullptr && std::string_view(v) == "0") r.autotune_enabled = false;
 
   r.executable = executable_path();
   if (!r.executable.empty()) {
@@ -200,8 +214,15 @@ DoctorReport collect_doctor_report() {
     r.warnings.push_back("this CPU has SIMD support this build lacks; a release build is several times faster.");
   }
   if (!r.isa_note.empty() && r.isa_note != "forced by DYNACORE_ISA") r.warnings.push_back(r.isa_note);
-  if (!r.gpus.empty()) {
-    r.warnings.push_back("a GPU is present; this release runs on the CPU only.");
+  if (!r.gpus.empty() && r.gpu_backends.empty()) {
+    r.warnings.push_back("a GPU is present, but this build has no GPU backend: it runs on the CPU. The Metal (macOS) "
+                         "and Vulkan (Linux, Windows) packages use it (docs/gpu.md).");
+  }
+  for (const DoctorReport::GpuBackend& g : r.gpu_backends) {
+    if (g.devices.empty()) {
+      r.warnings.push_back("the " + g.provider + " backend is built in but found no device: --backend auto runs on "
+                           "the CPU (check the GPU driver; docs/gpu.md).");
+    }
   }
   if (r.local_models == 0) r.warnings.push_back("no local models yet: dynalm pull qwen3:4b");
 #if defined(_WIN32)
@@ -233,18 +254,28 @@ std::string format_doctor_text(const DoctorReport& r) {
   std::string have, missing;
   for (const auto& [name, on] : r.isa) (on ? have : missing) += (on ? have : missing).empty() ? name : " " + name;
   line("CPU features:", (have.empty() ? "none" : have) + (missing.empty() ? "" : "  (not available: " + missing + ")"));
-  line("Backend:", r.device + " / " + r.kernel + (r.isa_note.empty() ? "" : "  [" + r.isa_note + "]"));
-  line("Threads:", std::to_string(r.threads));
+  std::string backends = "native-cpu (" + r.kernel + ")";
+  if (r.ggml_cpu) backends += r.ggml_cpu_usable ? ", cpu (ggml kernels)" : ", cpu (ggml kernels: not usable, this CPU lacks AVX2/FMA/F16C)";
+  for (const DoctorReport::GpuBackend& g : r.gpu_backends) backends += ", " + g.provider;
+  line("Backends:", backends + (r.isa_note.empty() ? "" : "  [" + r.isa_note + "]"));
+  line("Default:", r.device + "  (--backend auto)");
+  line("Threads:", std::to_string(r.threads) + " (DynaCore kernels)" +
+                       (r.ggml_cpu_usable ? ", " + std::to_string(r.ggml_threads) + " (ggml kernels)" : ""));
   line("Memory:", gib(r.ram_total) + " total, " + gib(r.ram_available) + " available");
-  if (r.gpus.empty()) {
-    line("GPU:", "none detected (not used by this build)");
-  } else {
-    for (const DoctorReport::Gpu& g : r.gpus) line("GPU:", g.name + " (not used by this build)");
+  for (const DoctorReport::GpuBackend& g : r.gpu_backends) {
+    std::string devs;
+    for (const std::string& d : g.devices) devs += (devs.empty() ? "" : ", ") + d;
+    line("GPU:", g.provider + ": " + (devs.empty() ? "no device found" : devs));
+  }
+  if (r.gpu_backends.empty()) {
+    if (r.gpus.empty()) line("GPU:", "none detected; this build has no GPU backend");
+    for (const DoctorReport::Gpu& g : r.gpus) line("GPU:", g.name + " (this build has no GPU backend)");
   }
   line("Installed:", r.executable.empty() ? "unknown" : r.executable);
   line("Compiler:", r.dynacorec_found ? "dynacorec found" : "dynacorec not found next to dynalm");
   line("Models:", std::to_string(r.local_models) + " local, store " + r.model_store);
   line("Config:", r.config_file.empty() ? "none (defaults)" : r.config_file);
+  line("AutoTune:", (r.autotune_enabled ? r.autotune_status : "off (DYNALM_AUTOTUNE=0)") + "  [" + r.autotune_cache + "]");
   s += "\n";
   line("DynaCore:", std::string(r.dynacore_ok ? "OK" : "FAILED") + " (" + r.dynacore_detail + ")");
   line("Runtime:", r.dynacore_ok ? "OK" : "not usable until the kernel self-test passes");
@@ -269,6 +300,10 @@ std::string format_doctor_json(const DoctorReport& r) {
     for (const std::string& x : v) a.emplace_back(x);
     return a;
   };
+  json::Array gpu_backends;
+  for (const DoctorReport::GpuBackend& g : r.gpu_backends) {
+    gpu_backends.emplace_back(json::Object{{"provider", g.provider}, {"devices", strings(g.devices)}});
+  }
   json::Object o{
       {"dynalm_version", r.dynalm_version},
       {"dynacore_version", r.dynacore_version},
@@ -276,6 +311,9 @@ std::string format_doctor_json(const DoctorReport& r) {
       {"compiler", r.compiler},
       {"compiled_isas", strings(r.compiled_isas)},
       {"compiled_devices", strings(r.compiled_devices)},
+      {"ggml_cpu", r.ggml_cpu},
+      {"ggml_cpu_usable", r.ggml_cpu_usable},
+      {"gpu_backends", gpu_backends},
       {"os", json::Object{{"name", r.os}, {"version", r.os_version}, {"arch", r.arch}}},
       {"cpu", json::Object{{"name", r.cpu},
                            {"vendor", r.cpu_vendor},
@@ -292,6 +330,11 @@ std::string format_doctor_json(const DoctorReport& r) {
       {"kernel", r.kernel},
       {"isa_note", r.isa_note},
       {"threads", r.threads},
+      {"ggml_threads", r.ggml_threads},
+      {"autotune", json::Object{{"cache", r.autotune_cache},
+                                {"status", r.autotune_status},
+                                {"entries", r.autotune_entries},
+                                {"enabled", r.autotune_enabled}}},
       {"executable", r.executable},
       {"dynacorec_found", r.dynacorec_found},
       {"model_store", r.model_store},

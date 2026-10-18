@@ -7,7 +7,7 @@ namespace dynalm {
 
 std::string_view tensor_role_name(TensorRole r) {
   static constexpr std::string_view kNames[] = {
-      "token_embedding", "output_norm", "output_norm_bias", "output", "rope_freqs",
+      "token_embedding", "output_norm", "output_norm_bias", "output", "rope_freqs", "rope_freqs_long",
       "attn_norm", "attn_norm_bias", "attn_q", "attn_k", "attn_v", "attn_qkv",
       "attn_q_bias", "attn_k_bias", "attn_v_bias", "attn_qkv_bias", "attn_output",
       "attn_output_bias", "attn_q_norm", "attn_k_norm", "post_attn_norm",

@@ -8,5 +8,9 @@ Third-party components (not stored in this repository; fetched at build time):
   Used by the HTTP server; the exact header is verified by SHA-256. Its license text is in
   THIRD_PARTY_LICENSES.md, installed next to this file.
 - ggml v0.27.0 (MIT License), https://github.com/ggml-org/ggml, commit a05c9922613c
-  (GPU builds only: -DENABLE_METAL, -DENABLE_VULKAN or -DENABLE_CUDA). Its license text is in
-  THIRD_PARTY_LICENSES.md.
+  (GPU builds, -DENABLE_METAL, -DENABLE_VULKAN or -DENABLE_CUDA, and builds with ggml's CPU
+  kernels, -DENABLE_GGML_CPU, on by default). Its license text is in THIRD_PARTY_LICENSES.md.
+
+Data:
+- Unicode Character Database 15.0.0 (Unicode License V3), https://www.unicode.org: the tokenizer's
+  character-class tables are generated from it. The license text is in THIRD_PARTY_LICENSES.md.

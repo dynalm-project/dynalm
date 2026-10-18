@@ -97,9 +97,9 @@ Status validate_standard_decoder(const ModelConfig& c, const TensorRegistry& w) 
     ENGINE_RETURN_IF_ERROR(expect_shape(w, TensorRole::kFfnDown, l, {d, ff}));
     if (c.post_ffn_norm) ENGINE_RETURN_IF_ERROR(expect_shape(w, TensorRole::kPostFfnNorm, l, {d}));
   }
-  if (const Tensor* f = w.find(TensorRole::kRopeFreqs)) {
-    if (!(f->shape() == TensorShape{c.rope.dim / 2})) {
-      return InvalidArgument("rope_freqs has shape " + f->shape().to_string());
+  for (TensorRole r : {TensorRole::kRopeFreqs, TensorRole::kRopeFreqsLong}) {
+    if (const Tensor* f = w.find(r); f != nullptr && !(f->shape() == TensorShape{c.rope.dim / 2})) {
+      return InvalidArgument(std::string(tensor_role_name(r)) + " has shape " + f->shape().to_string());
     }
   }
   return Status::Ok();

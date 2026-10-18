@@ -117,7 +117,7 @@ inline float apply_act(Activation a, float x) {
 
 CpuDevice::CpuDevice(ThreadPool& pool, CpuIsa isa)
     : pool_(pool), k_(make_cpu_kernels(isa)), name_("CPU/" + std::string(isa_name(k_.isa))) {
-  int8_accelerated_ = k_.isa == CpuIsa::kAvx2;  // NEON integer kernels: not written yet
+  int8_accelerated_ = k_.int8_simd;  // AVX2, or NEON with the dot-product instructions
 }
 
 Result<std::shared_ptr<Storage>> CpuDevice::allocate(size_t bytes) { return Storage::allocate_host(bytes); }
@@ -892,7 +892,7 @@ void CpuDevice::rope(const TensorView& x, int32_t num_heads, int32_t head_dim, s
       const float p = static_cast<float>(positions[r]) * pos_scale;
       for (int32_t i = 0; i < half; ++i) {
         const float theta = p * freqs[i];
-        const float c = std::cos(theta), s = std::sin(theta);
+        const float c = std::cos(theta) * rope.attn_factor, s = std::sin(theta) * rope.attn_factor;
         for (int32_t h = 0; h < num_heads; ++h) {
           float* hx = xr + static_cast<int64_t>(h) * head_dim;
           const int32_t a = interleaved ? 2 * i : i;

@@ -42,6 +42,25 @@ struct AttentionParams {
   int32_t sliding_window = 0;   // 0 = full causal attention
 };
 
+// A routed mixture-of-experts feed-forward block in one op (devices that
+// route on the device; Device::supports_moe_ffn). Per row: softmax over the
+// router logits, the top_k experts (normalized to sum 1 when normalize_topk),
+// out = sum over the chosen e of p_e * down_e(act(gate_e x) * up_e x).
+// Expert weights are 3-D: gate/up [experts, ff, d], down [experts, d, ff].
+// Optional shared expert (Qwen2-MoE; empty views = none): out +=
+// s * sh_down(act(sh_gate x) * sh_up x), s = sigmoid(sh_router . x) when
+// sh_router ([1, d]) is given, else 1.
+struct MoeFfnParams {
+  TensorView x;       // [m, d] fp32 (normalized input)
+  TensorView router;  // [experts, d] weight
+  TensorView gate, up, down;
+  TensorView sh_gate, sh_up, sh_down, sh_router;
+  TensorView out;     // [m, d] fp32 (overwritten)
+  int32_t experts = 0, top_k = 0;
+  bool normalize_topk = false;
+  Activation act{};
+};
+
 class Device {
  public:
   virtual ~Device() = default;
@@ -178,6 +197,10 @@ class Device {
   // dst[rows[i], :] += weights[i] * src[i, :]   (rows may repeat; applied in order)
   virtual void scatter_add_rows(const TensorView& src, std::span<const int32_t> rows, std::span<const float> weights,
                                 const TensorView& dst) = 0;
+  // Device-side routed MoE (MoeFfnParams). Without it the model routes on the
+  // host and uses gather / matmul_many / scatter_add_rows.
+  virtual bool supports_moe_ffn() const { return false; }
+  virtual void moe_ffn(const MoeFfnParams& p) { (void)p; }
 };
 
 }  // namespace dynacore

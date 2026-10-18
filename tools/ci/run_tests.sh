@@ -20,6 +20,7 @@ TESTS=(
   dynacore/test_matmul_registry
   dynacore/test_int16_prefill
   dynacore/test_packed_8rows
+  dynacore/test_int_kernels
   dynacore/test_thread_pool
   dynacore/test_ggml_device
   dynacore/test_dynakernel
@@ -60,7 +61,7 @@ for t in "${TESTS[@]}"; do
   fi
 done
 PY="$(command -v python3 || command -v python)"
-for t in tools/test_compare_engines.py tools/test_bench_analyze.py; do
+for t in tools/test_compare_engines.py tools/test_bench_analyze.py tools/test_bench_report.py; do
   out="$("$PY" "$t" 2>&1)"
   code=$?
   ran=$((ran + 1))

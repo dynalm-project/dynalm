@@ -16,6 +16,7 @@
 #include "registry/model_registry.h"
 #include "logging/log.h"
 #include "dynacore/hardware/cpu_info.h"
+#include "runtime/autotune.h"
 #include "runtime/engine.h"
 #include "server/server.h"
 #include "common/core.h"
@@ -33,6 +34,7 @@ constexpr OptionSpec kServeOptions[] = {
     {"max-active"},   {"request-timeout"}, {"temperature"}, {"backend"}, {"cpu", false}, {"gpu", false}, {"execution"}, {"shutdown-timeout"}, {"disable-admin", false}, {"int8-decode"}, {"policy"},
     {"api-key-file"}, {"allow-unauthenticated", false},
     {"solo-prefill-chunk"}, {"solo-prefill-split", false}, {"prefill-order"}, {"prefill-aging-ms"},
+    {"spec"}, {"spec-k"}, {"mode"},
 };
 
 void usage() {
@@ -46,7 +48,7 @@ void usage() {
                "  -c, --ctx N|auto        KV cache capacity in tokens (auto: from free RAM)\n"
                "  --batch N|auto          max tokens per forward pass (auto: 256)\n"
                "  --kv f16|f32|q8_0       KV cache dtype (default f16; q8_0 halves its memory)\n"
-               "  --int8-decode N         int8 activations for matmuls of <= N rows (default 4, 0 = off;\n"
+               "  --int8-decode N         native CPU: int8 activations for matmuls of <= N rows (default 4, 64 on ARM; 0 = off;\n"
                "                          off makes outputs independent of batching, DD-053)\n"
                "  --policy P              balanced (default) | latency | throughput: first-token wait vs\n"
                "                          smooth streaming under load (DD-061)\n"
@@ -55,9 +57,16 @@ void usage() {
                "  --solo-prefill-split    with --solo-prefill-chunk: split it across waiting prompts\n"
                "  --prefill-order O       EXPERIMENTAL: fifo (default) | srpt (shortest remaining prompt first)\n"
                "  --prefill-aging-ms N    with srpt: prompts prefilling longer than N ms go first (default 20000)\n"
+               "  --spec ngram|DRAFT      speculative decoding for every stream, same output: prompt-lookup\n"
+               "                          drafts (ngram), or a small draft model with the same vocabulary\n"
+               "                          (a file or name, e.g. qwen2.5:0.5b for a Qwen2.5 target)\n"
+               "  --spec-k K              most drafted tokens per stream and step (default 4)\n"
                "  --gpu                   use the GPU (the default when it can run the model)\n"
                "  --cpu                   use the CPU\n"
                "  --backend B             auto (default: GPU first, else CPU) | gpu | cpu | metal | vulkan | cuda\n"
+               "                          | native-cpu (DynaCore CPU kernels, DD-053; cpu = fast ggml kernels when built)\n"
+               "  --mode M                auto (default) | performance | exact (DD-053 accuracy everywhere)\n"
+               "                          | safe (fp32 CPU reference kernels); see dynalm autotune\n"
                "  --execution MODE        reference (default) | compiled: DynaCore IR + fusion (DD-072)\n"
                "  --max-active N          concurrent requests before 503 (default 64)\n"
                "  --http-threads N|auto   HTTP workers (auto: max-active + 8)\n"
@@ -96,9 +105,12 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
   const std::vector<std::string>& args = *merged;
 
   EngineOptions eo;
-  eo.backend_auto = true;  // --backend auto
+  (void)apply_backend_choice("auto", eo);  // --backend auto
+  TuneMode mode = TuneMode::kAuto;
   ServerOptions so;
   int threads = 0, ctx = 0, batch = 0, http_threads = 0, max_tokens = 1024, max_active = 64;
+  std::string spec;  // --spec: "" / "off" or "ngram"
+  int32_t spec_k = 4;
   std::string api_key_file;
   bool allow_unauthenticated = false;
   int request_timeout_s = 600, shutdown_timeout_s = 30;
@@ -117,6 +129,8 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
     else if (a == "--policy") ok = parse_scheduler_policy(value(), eo.scheduler.policy);
     else if (a == "--solo-prefill-chunk") ok = parse_int(value(), eo.scheduler.solo_prefill_chunk) && eo.scheduler.solo_prefill_chunk >= 0;
     else if (a == "--solo-prefill-split") eo.scheduler.solo_prefill_split = true;
+    else if (a == "--spec") spec = value();
+    else if (a == "--spec-k") ok = parse_int(value(), spec_k) && spec_k >= 1 && spec_k <= 16;
     else if (a == "--prefill-order") ok = parse_prefill_order(value(), eo.scheduler.prefill_order);
     else if (a == "--prefill-aging-ms") ok = parse_int(value(), eo.scheduler.prefill_aging_ms) && eo.scheduler.prefill_aging_ms >= 0;
     else if (a == "--http-threads") ok = parse_int_or_auto(value(), http_threads);
@@ -137,6 +151,11 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
       ok = apply_backend_choice(value(), eo).ok();
     } else if (a == "--cpu" || a == "--gpu") {
       (void)apply_backend_choice(a.substr(2), eo);  // shorthands for --backend cpu / gpu
+    } else if (a == "--mode") {
+      auto m = parse_tune_mode(value());
+      ok = m.ok();
+      if (ok) mode = *m;
+      else std::fprintf(stderr, "%s: %s\n", "serve", m.status().message().c_str());
     } else if (a == "--execution") {
       auto x = parse_execution_mode(value());
       ok = x.ok();
@@ -152,6 +171,10 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
       usage();
       return 1;
     }
+  }
+  if (Status st = apply_tune_mode(mode, eo); !st.ok()) {
+    std::fprintf(stderr, "serve: %s\n", st.message().c_str());
+    return 1;
   }
   if (eo.model_path.empty() || max_tokens <= 0 || max_active <= 0 || request_timeout_s < 0 || shutdown_timeout_s < 0 ||
       so.port < 0 || so.port > 65535) {
@@ -184,6 +207,18 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
     return 1;
   }
   eo.threads = threads;
+  if (spec == "ngram") {
+    eo.scheduler.spec_k = spec_k;
+  } else if (!spec.empty() && spec != "off") {
+    // A draft model: a file or a registry name (downloaded like the target).
+    auto draft = ensure_model(spec, true);
+    if (!draft.ok()) {
+      std::fprintf(stderr, "serve: --spec: %s\n", draft.status().message().c_str());
+      return 1;
+    }
+    eo.draft_model_path = *draft;
+    eo.scheduler.spec_k = spec_k;
+  }
   eo.kv_tokens = ctx;
   eo.max_batch_tokens = batch;  // 0 = the device default (Engine)
   so.http_threads = http_threads;
@@ -217,6 +252,7 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
              sc.solo_prefill_split ? "split across prompts" : "FIFO");
   }
   LOG_INFO("Prefix cache: {}", eo.scheduler.enable_prefix_cache ? "enabled (radix)" : "disabled");
+  if (sc.spec_k > 0) LOG_INFO("Speculative decoding: prompt lookup, up to {} drafts per stream", sc.spec_k);
 
   Server server(e, so);
   if (Status st = server.start(); !st.ok()) {

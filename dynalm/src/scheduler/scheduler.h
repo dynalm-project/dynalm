@@ -42,6 +42,8 @@
 
 namespace dynalm {
 
+class BatchDrafter;  // runtime/speculative.h
+
 struct RequestEvent {
   uint64_t request_id = 0;
   TokenId token = kNoToken;  // valid for token events
@@ -138,6 +140,18 @@ struct SchedulerConfig {
   bool decode_protect = true;
   int32_t protected_prefill_min = 32;
   float decode_latency_target = 6.0f;
+  // DD-079 predictive mode (false = the halve/double controller above). The
+  // budget is set from a cost model instead of being stepped after a miss:
+  // a mixed step costs about one decode-only step plus prefill rows x the
+  // per-row cost, learned (EMA) from earlier mixed steps, so the next budget is
+  // (decode_latency_target - 1) x decode-only time / per-row cost, clamped to
+  // [protected_prefill_min, prefill_token_budget] (predict_mixed_prefill_budget).
+  // The halving controller overshoots the target before it reacts, and those
+  // overshooting steps set the ITL p99; this one targets it from the first
+  // step after one mixed sample. Off by default, also in the Engine's GPU
+  // profile (kGpuDecodePredictive: it made ITL p50 3-4x worse there);
+  // DYNALM_DECODE_PREDICTIVE=0|1 overrides.
+  bool decode_protect_predictive = false;
   // EXPERIMENTAL (off by default): in steps with no decode rows and exactly
   // one sequence prefilling (a lone prompt), prefill uses a chunk of
   // solo_prefill_chunk rows and a budget of max(prefill_token_budget,
@@ -174,16 +188,38 @@ struct SchedulerConfig {
   // Record a per-step and per-request trace (take_step_trace /
   // take_request_trace). Statistics only: scheduling is unchanged.
   bool trace = false;
+  // Speculative decoding in the batch (DD-044): each decoding stream drafts
+  // up to spec_k tokens, by prompt lookup (NgramDrafter: continue the latest
+  // earlier occurrence of the context's suffix) or, with a draft model
+  // attached (Scheduler::set_draft_model), by that model for all streams in
+  // k batched passes (BatchDrafter); the target scores
+  // them inside the stream's decode row (1 + drafts rows, one pass). Output
+  // equals plain decoding, greedy or sampled (Sampler::sample_speculative);
+  // KV of rejected drafts is rolled back. A stream whose acceptance (EMA)
+  // falls below 25% stops drafting for spec_probe_steps steps, then tries
+  // again. 0 = off. `dynalm serve --spec ngram|DRAFT.gguf --spec-k K`.
+  int32_t spec_k = 0;
+  int32_t spec_probe_steps = 32;
   // Reuse KV of shared prompt prefixes across requests (DD-029).
   bool enable_prefix_cache = true;
   PrefixCacheKind prefix_cache_kind = PrefixCacheKind::kRadix;
   int32_t prefix_cache_max_blocks = 0;  // 0 = bounded only by the KV pool
 };
 
+// DD-079 predictive mode: the prefill rows that keep a mixed step within
+// `target` x the decode-only step time, given the cost of one prefill row.
+// Unknown row cost (row_ms <= 0): `max_rows`; known row cost but no
+// decode-only step yet (decode_ms <= 0): `min_rows`. Clamped to
+// [min_rows, max_rows].
+int32_t predict_mixed_prefill_budget(double decode_ms, double row_ms, double target, int32_t min_rows,
+                                     int32_t max_rows);
+
 struct SchedulerStats {
   uint64_t steps = 0;
   uint64_t tokens_computed = 0;  // rows through the model
   uint64_t tokens_generated = 0;
+  uint64_t spec_drafted = 0;   // speculative draft tokens scored
+  uint64_t spec_accepted = 0;  // of those, accepted (spec_accepted / spec_drafted = acceptance)
   uint64_t preemptions = 0;
   uint64_t completed = 0;
   uint64_t cancelled = 0;
@@ -257,6 +293,9 @@ class Scheduler {
   const PrefixCache* prefix_cache() const { return prefix_cache_.get(); }
   // Thread-safe: hands over (and clears) the trace recorded so far
   // (empty unless SchedulerConfig::trace).
+  // A draft model for speculative decoding (SchedulerConfig::spec_k > 0);
+  // null = prompt lookup. The drafter must outlive the scheduler.
+  void set_draft_model(BatchDrafter* drafter) { draft_ = drafter; }
   std::vector<StepTrace> take_step_trace();
   std::vector<RequestTrace> take_request_trace();
 
@@ -275,7 +314,19 @@ class Scheduler {
     std::unique_ptr<Sampler> sampler;  // null: greedy
     int64_t admit_ns = 0;       // latest admission (prefill aging)
     RequestTrace trace;         // filled only with SchedulerConfig::trace
+    // Speculative decoding (SchedulerConfig::spec_k): this step's decode
+    // row [last token, drafts...], its draft count, and acceptance history.
+    std::vector<TokenId> spec_feed;
+    std::vector<TokenId> spec_model_drafts;  // draft model's proposal for this step
+    int32_t spec_drafts = 0;
+    double spec_accept_ema = 1.0;
+    uint64_t spec_resume_step = 0;
   };
+  // Drafts for e's decode row, at most `room` (SchedulerConfig::spec_k).
+  int32_t plan_drafts(Entry& e, int32_t room, uint64_t step_no);
+  // Draft-model drafts of every eligible decoding stream, once per step.
+  void draft_with_model(uint64_t step_no);
+  BatchDrafter* draft_ = nullptr;
 
   void drain_incoming();
   void expire_deadlines(int64_t now);
@@ -286,6 +337,7 @@ class Scheduler {
 
   // Decode-protected prefill state (DD-079).
   double decode_step_ema_ms_ = 0;
+  double prefill_row_ema_ms_ = 0;  // predictive mode: cost of one prefill row in a mixed step
   int32_t mixed_prefill_budget_ = 0;
   // Trace (SchedulerConfig::trace), handed over by take_*_trace from any thread.
   std::mutex trace_mu_;

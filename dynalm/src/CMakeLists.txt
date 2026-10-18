@@ -34,6 +34,8 @@ add_library(dynalm_runtime STATIC
   prefix_cache/hash_prefix_cache.cpp
   prefix_cache/radix_prefix_cache.cpp
   registry/model_registry.cpp
+  runtime/device_select.cpp
+  runtime/autotune.cpp
   runtime/engine.cpp
   runtime/generator.cpp
   runtime/speculative.cpp
@@ -51,7 +53,7 @@ target_include_directories(dynalm_runtime PUBLIC
   ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_link_libraries(dynalm_runtime PUBLIC dynacore)
 
-add_executable(dynalm cli/main.cpp cli/benchmark.cpp cli/inspect.cpp cli/manage.cpp cli/chat.cpp cli/pull.cpp cli/run.cpp cli/system.cpp)
+add_executable(dynalm cli/main.cpp cli/autotune.cpp cli/benchmark.cpp cli/inspect.cpp cli/manage.cpp cli/chat.cpp cli/pull.cpp cli/run.cpp cli/system.cpp)
 if(WIN32)
   target_sources(dynalm PRIVATE cli/dynalm.manifest)  # UTF-8 process code page
 endif()

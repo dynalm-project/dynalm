@@ -86,4 +86,14 @@ bool is_whitespace(uint32_t cp) {
   return in_ranges(kWhitespaceRanges, cp);
 }
 
+bool is_upper_class(uint32_t cp) {
+  if (cp < 0x80) return cp >= 'A' && cp <= 'Z';
+  return in_ranges(kUpperClassRanges, cp);
+}
+
+bool is_lower_class(uint32_t cp) {
+  if (cp < 0x80) return cp >= 'a' && cp <= 'z';
+  return in_ranges(kLowerClassRanges, cp);
+}
+
 }  // namespace dynalm::unicode

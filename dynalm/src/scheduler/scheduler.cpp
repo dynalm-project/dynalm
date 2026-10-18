@@ -7,6 +7,7 @@
 #include "dynacore/base/env.h"
 #include "dynacore/base/timer.h"
 #include "logging/log.h"
+#include "runtime/speculative.h"
 #include "sampling/sampler.h"
 #include "common/core.h"
 
@@ -40,6 +41,16 @@ bool parse_scheduler_policy(std::string_view s, SchedulerPolicy& out) {
   return true;
 }
 
+int32_t predict_mixed_prefill_budget(double decode_ms, double row_ms, double target, int32_t min_rows,
+                                     int32_t max_rows) {
+  min_rows = std::max(1, std::min(min_rows, max_rows));
+  if (!(row_ms > 0)) return max_rows;      // no cost sample: nothing to predict from
+  if (!(decode_ms > 0)) return min_rows;   // no decode-only step yet: protect the first tokens
+  const double rows = std::max(0.0, target - 1.0) * decode_ms / row_ms;
+  if (!(rows < static_cast<double>(max_rows))) return max_rows;  // also NaN / inf
+  return std::max(min_rows, static_cast<int32_t>(rows));
+}
+
 Scheduler::Scheduler(Transformer& model, KvBlockPool& kv, const Tokenizer& tokenizer, SchedulerConfig config)
     : model_(model), kv_(kv), tokenizer_(tokenizer), config_(config) {
   if (config_.policy == SchedulerPolicy::kLatencyFirst) config_.prefill_token_budget = 32;
@@ -70,6 +81,13 @@ Scheduler::Scheduler(Transformer& model, KvBlockPool& kv, const Tokenizer& token
       config_.decode_latency_target = static_cast<float>(dv);
     } else {
       LOG_WARN("ignoring DYNALM_DECODE_TARGET='{}' (expected a number > 0)", dt);
+    }
+  }
+  if (const char* pp = dynacore::env_value("DYNALM_DECODE_PREDICTIVE")) {
+    if (dynacore::parse_env_long(pp, lv)) {
+      config_.decode_protect_predictive = lv != 0;
+    } else {
+      LOG_WARN("ignoring DYNALM_DECODE_PREDICTIVE='{}' (expected 0 or 1)", pp);
     }
   }
   if (const char* pm = dynacore::env_value("DYNALM_PROTECT_MIN")) {
@@ -141,6 +159,7 @@ void Scheduler::emit_final(Entry& e) {
 }
 
 void Scheduler::retire(Entry& e) {
+  if (draft_ != nullptr) draft_->release(e.id);
   switch (e.seq->status()) {
     case SequenceStatus::kFinished: ++stats_.completed; break;
     case SequenceStatus::kCancelled: ++stats_.cancelled; break;
@@ -342,6 +361,7 @@ bool Scheduler::step() {
   std::vector<Entry*> order;
   bool solo = false, solo_skipped = false, srpt = false;
   int32_t traced_budget = 0, traced_chunk = 0, traced_prefilling = 0;
+  if (draft_ != nullptr && config_.spec_k > 0) draft_with_model(step_no);
   for (int attempt = 0;; ++attempt) {
     batch_.clear();
     batch_owner_.clear();
@@ -406,6 +426,8 @@ bool Scheduler::step() {
       int32_t n = std::min(e->seq->pending(), budget - used);
       if (!decode && prefill_chunk > 0) n = std::min(n, prefill_chunk);
       if (n <= 0) continue;
+      e->spec_drafts = 0;
+      if (decode && config_.spec_k > 0) n += plan_drafts(*e, budget - used - 1, step_no);
       const int64_t t_kv = now_ns();
       const Status st = e->seq->reserve_kv(n);
       stats_.kv_reserve_ms += static_cast<double>(now_ns() - t_kv) * 1e-6;
@@ -427,9 +449,14 @@ bool Scheduler::step() {
         continue;
       }
       const int32_t start = e->seq->num_computed();
-      // Logits only when this chunk completes the sequence's pending work.
-      batch_.push_back({e->seq->tokens().subspan(static_cast<size_t>(start), static_cast<size_t>(n)), start,
-                        e->seq->block_table(), n == e->seq->pending()});
+      if (e->spec_drafts > 0) {
+        // Speculative decode row: the last token and its drafts, all scored.
+        batch_.push_back({e->spec_feed, start, e->seq->block_table(), true, 1 + e->spec_drafts});
+      } else {
+        // Logits only when this chunk completes the sequence's pending work.
+        batch_.push_back({e->seq->tokens().subspan(static_cast<size_t>(start), static_cast<size_t>(n)), start,
+                          e->seq->block_table(), n == e->seq->pending()});
+      }
       batch_owner_.push_back(e);
       used += n;
     }
@@ -479,7 +506,7 @@ bool Scheduler::step() {
     return true;
   }
   size_t n_logits = 0;
-  for (const SeqBatch& b : batch_) n_logits += b.want_logits ? 1 : 0;
+  for (const SeqBatch& b : batch_) n_logits += b.want_logits ? static_cast<size_t>(b.logits_last) : 0;
   const auto vocab = static_cast<size_t>(model_.config().vocab_size);
   logits_.resize(n_logits * vocab);
   // How this batch runs on this hardware (DD-051); part of planning time.
@@ -499,9 +526,22 @@ bool Scheduler::step() {
     ++stats_.steps_decode_only;
     stats_.forward_decode_only_ms += fwd_ms;
     decode_step_ema_ms_ = decode_step_ema_ms_ == 0 ? fwd_ms : 0.8 * decode_step_ema_ms_ + 0.2 * fwd_ms;
+    if (config_.decode_protect_predictive && prefill_row_ema_ms_ > 0) {
+      mixed_prefill_budget_ =
+          predict_mixed_prefill_budget(decode_step_ema_ms_, prefill_row_ema_ms_, config_.decode_latency_target,
+                                       config_.protected_prefill_min, config_.prefill_token_budget);
+    }
   } else if (stats_.last_decode_rows == 0) {
     ++stats_.steps_prefill_only;
     stats_.forward_prefill_only_ms += fwd_ms;
+    // Predictive DD-079: a prompt-only step (always before the first mixed
+    // one) seeds the per-row cost, so the first mixed step is sized too.
+    if (config_.decode_protect_predictive && prefill_row_ema_ms_ == 0) {
+      prefill_row_ema_ms_ = fwd_ms / stats_.last_prefill_rows;
+      mixed_prefill_budget_ =
+          predict_mixed_prefill_budget(decode_step_ema_ms_, prefill_row_ema_ms_, config_.decode_latency_target,
+                                       config_.protected_prefill_min, config_.prefill_token_budget);
+    }
   } else {
     ++stats_.steps_mixed;
     stats_.forward_mixed_ms += fwd_ms;
@@ -510,7 +550,15 @@ bool Scheduler::step() {
     // Mixed step (DD-079): steer the next mixed step's prefill share toward
     // decode_latency_target x the decode-only step time.
     const double target = config_.decode_latency_target * decode_step_ema_ms_;
-    if (fwd_ms > target) {
+    if (config_.decode_protect_predictive) {
+      // Mixed step = decode-only step + rows x per-row cost; learn the per-row
+      // cost and size the next mixed step to the target directly.
+      const double row_ms = std::max(0.0, fwd_ms - decode_step_ema_ms_) / stats_.last_prefill_rows;
+      prefill_row_ema_ms_ = prefill_row_ema_ms_ == 0 ? row_ms : 0.7 * prefill_row_ema_ms_ + 0.3 * row_ms;
+      mixed_prefill_budget_ =
+          predict_mixed_prefill_budget(decode_step_ema_ms_, prefill_row_ema_ms_, config_.decode_latency_target,
+                                       config_.protected_prefill_min, config_.prefill_token_budget);
+    } else if (fwd_ms > target) {
       mixed_prefill_budget_ = std::max(config_.protected_prefill_min, mixed_prefill_budget_ / 2);
     } else if (fwd_ms < 0.5 * target) {
       mixed_prefill_budget_ = std::min(config_.prefill_token_budget, mixed_prefill_budget_ * 2);
@@ -533,7 +581,8 @@ bool Scheduler::step() {
       continue;
     }
     const bool was_decode = is_decode_row(e);
-    e.seq->mark_computed(static_cast<int32_t>(batch_[b].tokens.size()));
+    const int32_t drafts = e.spec_drafts;  // speculative row: only the real token is committed here
+    e.seq->mark_computed(drafts > 0 ? 1 : static_cast<int32_t>(batch_[b].tokens.size()));
     if (was_decode) e.last_step = step_no;
     if (config_.trace && !was_decode) e.trace.prefill_forward_ms += fwd_ms;
     if (prefix_cache_) {
@@ -547,21 +596,54 @@ bool Scheduler::step() {
       }
     }
     if (!batch_[b].want_logits) continue;
-    const std::span<float> row(logits_.data() + li * vocab, vocab);
-    ++li;
+    const size_t li0 = li;
+    li += static_cast<size_t>(batch_[b].logits_last);
     if (e.seq->pending() != 0 || e.seq->status() != SequenceStatus::kDecode) continue;
-    const TokenId next = e.sampler ? e.sampler->sample(row, e.seq->tokens()) : sample_greedy(row);
-    e.seq->append_token(next, tokenizer_);
-    if (config_.trace && e.trace.first_token_ns == 0) e.trace.first_token_ns = now_ns();
-    ++stats_.tokens_generated;
-    if (e.on_event) {
-      const int64_t t0 = now_ns();
-      RequestEvent ev;
-      ev.request_id = e.id;
-      ev.token = next;
-      ev.status = e.seq->status();
-      e.on_event(ev);
-      emit_ns += now_ns() - t0;
+    auto emit = [&](TokenId next) {
+      e.seq->append_token(next, tokenizer_);
+      if (config_.trace && e.trace.first_token_ns == 0) e.trace.first_token_ns = now_ns();
+      ++stats_.tokens_generated;
+      if (e.on_event) {
+        const int64_t t0 = now_ns();
+        RequestEvent ev;
+        ev.request_id = e.id;
+        ev.token = next;
+        ev.status = e.seq->status();
+        e.on_event(ev);
+        emit_ns += now_ns() - t0;
+      }
+    };
+    // Row i scores the token after feed[i]: drafts are accepted while they
+    // match (exactly as plain decoding would choose); the first mismatch
+    // yields the target's own token, a fully accepted draft a bonus token.
+    int32_t accepted = 0;
+    for (int32_t i = 0; i <= drafts; ++i) {
+      const std::span<float> row(logits_.data() + (li0 + static_cast<size_t>(i)) * vocab, vocab);
+      bool ok = false;
+      TokenId next;
+      if (i < drafts) {
+        const TokenId draft = e.spec_feed[static_cast<size_t>(i) + 1];
+        if (e.sampler) {
+          next = e.sampler->sample_speculative(row, e.seq->tokens(), draft, ok);
+        } else {
+          next = sample_greedy(row);
+          ok = next == draft;
+        }
+      } else {
+        next = e.sampler ? e.sampler->sample(row, e.seq->tokens()) : sample_greedy(row);
+      }
+      emit(next);
+      if (e.seq->status() != SequenceStatus::kDecode || !ok) break;
+      e.seq->mark_computed(1);  // the accepted draft's K/V (row i + 1) is valid
+      ++accepted;
+    }
+    if (drafts > 0) {
+      stats_.spec_drafted += static_cast<uint64_t>(drafts);
+      stats_.spec_accepted += static_cast<uint64_t>(accepted);
+      e.spec_accept_ema = 0.7 * e.spec_accept_ema + 0.3 * static_cast<double>(accepted) / drafts;
+      if (e.spec_accept_ema < 0.25) e.spec_resume_step = step_no + static_cast<uint64_t>(config_.spec_probe_steps);
+      if (e.seq->status() == SequenceStatus::kDecode) e.seq->rollback_kv();  // drop rejected drafts' blocks
+      e.spec_drafts = 0;
     }
   }
   // Post-forward time = sampling + stop checks + cache inserts + callbacks.
@@ -576,6 +658,41 @@ bool Scheduler::step() {
     step_trace_.push_back(std::move(cur));
   }
   return true;
+}
+
+int32_t Scheduler::plan_drafts(Entry& e, int32_t room, uint64_t step_no) {
+  const SequenceState& q = *e.seq;
+  // Up to the tokens this request may still generate after the next one.
+  const int32_t left = q.stop().max_new_tokens - q.generated() - 1;
+  const int32_t k = std::min({config_.spec_k, room, left});
+  if (k <= 0 || step_no < e.spec_resume_step) return 0;
+  if (e.spec_accept_ema < 0.25) e.spec_accept_ema = 0.5;  // probing again after a pause
+  e.spec_feed.assign(1, q.tokens().back());
+  std::vector<TokenId> drafts;
+  if (draft_ != nullptr) {
+    drafts.assign(e.spec_model_drafts.begin(),
+                  e.spec_model_drafts.begin() + std::min<ptrdiff_t>(k, static_cast<ptrdiff_t>(e.spec_model_drafts.size())));
+  } else {
+    NgramDrafter().propose(q.tokens(), k, drafts);
+  }
+  if (drafts.empty()) return 0;
+  e.spec_feed.insert(e.spec_feed.end(), drafts.begin(), drafts.end());
+  e.spec_drafts = static_cast<int32_t>(drafts.size());
+  return e.spec_drafts;
+}
+
+void Scheduler::draft_with_model(uint64_t step_no) {
+  std::vector<BatchDrafter::Request> reqs;
+  for (Entry& e : running_) {
+    e.spec_model_drafts.clear();
+    if (is_terminal(e.seq->status()) || e.seq->status() != SequenceStatus::kDecode || e.seq->pending() != 1) continue;
+    if (step_no < e.spec_resume_step) continue;
+    const int32_t left = e.seq->stop().max_new_tokens - e.seq->generated() - 1;
+    const int32_t k = std::min(config_.spec_k, left);
+    if (k <= 0) continue;
+    reqs.push_back({e.id, e.seq->tokens(), k, &e.spec_model_drafts});
+  }
+  draft_->propose(reqs);
 }
 
 std::vector<StepTrace> Scheduler::take_step_trace() {

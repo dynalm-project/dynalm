@@ -56,7 +56,7 @@ else()
 endif()
 
 # --- Per-file ISA flags ----------------------------------------------------
-# engine_set_isa(<isa> <files...>) where isa is AVX2 | AVX512 | AMX.
+# engine_set_isa(<isa> <files...>) where isa is AVX2 | AVXVNNI | AVX512 | AMX | NEONDOT (ARM64).
 function(engine_set_isa isa)
   if(MSVC)
     if(isa STREQUAL "AVX2" OR isa STREQUAL "AVXVNNI")
@@ -73,7 +73,12 @@ function(engine_set_isa isa)
       set(_flags -mavx512f -mavx512bw -mavx512vl -mavx512dq -mavx512vnni -mfma -mf16c)
     elseif(isa STREQUAL "AMX")
       set(_flags -mavx512f -mavx512bw -mavx512vl -mamx-tile -mamx-int8 -mamx-bf16)
+    elseif(isa STREQUAL "NEONDOT")
+      set(_flags -march=armv8.2-a+dotprod)
     endif()
+  endif()
+  if(MSVC AND isa STREQUAL "NEONDOT")
+    return()  # MSVC: no per-file flag; the file compiles to its fallback
   endif()
   if(NOT _flags)
     message(FATAL_ERROR "engine_set_isa: unknown ISA '${isa}'")

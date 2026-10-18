@@ -40,6 +40,8 @@ constexpr std::array<DTypeInfo, static_cast<size_t>(DType::kCount)> kInfo = {{
     {"q5_K", kQK_K, 176, true, false},
     {"q6_K", kQK_K, 210, true, false},
     {"q8_K", kQK_K, 292, true, false},
+    {"iq4_nl", kQK, 18, true, false},
+    {"iq4_xs", kQK_K, 136, true, false},
 }};
 
 }  // namespace

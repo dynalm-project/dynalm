@@ -67,6 +67,32 @@ ChatTemplate granite_template(std::string_view j) {
   return ChatTemplate(ChatFormat::kGranite, std::move(system), std::move(sep));
 }
 
+// DeepSeek-Coder injects a literal system prompt when none is given:
+//   {{'You are an AI programming assistant, ... refuse to answer\n'}}
+std::string deepseek_coder_default_system(std::string_view j) {
+  constexpr std::string_view kHead = "You are an AI programming assistant";
+  const size_t p = j.find(kHead);
+  if (p == std::string_view::npos) return {};
+  const size_t q = j.find('\'', p);
+  if (q == std::string_view::npos) return {};
+  std::string out;
+  const std::string_view body = j.substr(p, q - p);
+  for (size_t i = 0; i < body.size(); ++i) {
+    if (body[i] == '\\' && i + 1 < body.size() && body[i + 1] == 'n') {
+      out += '\n';
+      ++i;
+    } else {
+      out += body[i];
+    }
+  }
+  return out;
+}
+
+constexpr std::string_view kDeepSeekCoderSystem =
+    "You are an AI programming assistant, utilizing the Deepseek Coder model, developed by Deepseek Company, and you "
+    "only answer questions related to computer science. For politically sensitive questions, security and privacy "
+    "issues, and other non-computer science questions, you will refuse to answer\n";
+
 }  // namespace
 
 std::string_view chat_format_name(ChatFormat f) {
@@ -77,15 +103,17 @@ std::string_view chat_format_name(ChatFormat f) {
     case ChatFormat::kMistral: return "mistral";
     case ChatFormat::kGemma: return "gemma";
     case ChatFormat::kPhi3: return "phi3";
+    case ChatFormat::kPhi4: return "phi4";
     case ChatFormat::kDeepSeek2: return "deepseek2";
     case ChatFormat::kGranite: return "granite";
+    case ChatFormat::kDeepSeekCoder: return "deepseek-coder";
   }
   return "?";
 }
 
 Result<ChatFormat> parse_chat_format(std::string_view name) {
   for (ChatFormat f : {ChatFormat::kChatMl, ChatFormat::kLlama3, ChatFormat::kLlama2, ChatFormat::kMistral,
-                       ChatFormat::kGemma, ChatFormat::kPhi3, ChatFormat::kDeepSeek2, ChatFormat::kGranite}) {
+                       ChatFormat::kGemma, ChatFormat::kPhi3, ChatFormat::kPhi4, ChatFormat::kDeepSeek2, ChatFormat::kGranite, ChatFormat::kDeepSeekCoder}) {
     if (chat_format_name(f) == name) return f;
   }
   return InvalidArgument("unknown chat template '" + std::string(name) + "'");
@@ -98,10 +126,36 @@ Result<ChatTemplate> ChatTemplate::from_jinja(std::string_view j) {
   if (contains(j, "<|start_of_role|>")) return granite_template(j);
   if (contains(j, "<start_of_turn>")) return ChatTemplate(ChatFormat::kGemma);
   if (contains(j, "<|user|>") && contains(j, "<|end|>")) return ChatTemplate(ChatFormat::kPhi3);
+  // Phi-4-mini builds the tag from the role: '<|' + message['role'] + '|>'.
+  if (contains(j, "'<|' + message['role'] + '|>'") && contains(j, "<|end|>") && contains(j, "<|assistant|>")) {
+    return ChatTemplate(ChatFormat::kPhi4);
+  }
   if (contains(j, "<｜User｜>")) return ChatTemplate(ChatFormat::kDeepSeek2);
   if (contains(j, "<<SYS>>")) return ChatTemplate(ChatFormat::kLlama2);
   if (contains(j, "[INST]")) return ChatTemplate(ChatFormat::kMistral);
+  if (contains(j, "### Instruction:") && contains(j, "### Response:")) {
+    return ChatTemplate(ChatFormat::kDeepSeekCoder, deepseek_coder_default_system(j));
+  }
   return Unsupported("unrecognized chat template; pass an explicit format");
+}
+
+Result<ChatTemplate> ChatTemplate::from_model_name(std::span<const std::string_view> names) {
+  std::string n;
+  for (std::string_view s : names) {
+    for (char c : s) n += static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
+    n += ' ';
+  }
+  // Only instruction-tuned names: a base model has no chat format.
+  const bool tuned = contains(n, "chat") || contains(n, "instruct");
+  if (!tuned) return Unsupported("model has no chat template");
+  if (contains(n, "llama-2") || contains(n, "llama2") || contains(n, "llama v2") || contains(n, "llama 2")) {
+    return ChatTemplate(ChatFormat::kLlama2);
+  }
+  if (contains(n, "mistral") || contains(n, "mixtral")) return ChatTemplate(ChatFormat::kMistral);
+  if (contains(n, "deepseek-coder") || contains(n, "deepseek coder")) {
+    return ChatTemplate(ChatFormat::kDeepSeekCoder, std::string(kDeepSeekCoderSystem));
+  }
+  return Unsupported("model has no chat template");
 }
 
 Result<std::string> ChatTemplate::apply(std::span<const ChatMessage> msgs, bool gen) const {
@@ -132,6 +186,11 @@ Result<std::string> ChatTemplate::apply(std::span<const ChatMessage> msgs, bool 
     case ChatFormat::kPhi3:
       for (const ChatMessage& m : msgs) out += "<|" + m.role + "|>\n" + m.content + "<|end|>\n";
       if (gen) out += "<|assistant|>\n";
+      break;
+
+    case ChatFormat::kPhi4:
+      for (const ChatMessage& m : msgs) out += "<|" + m.role + "|>" + m.content + "<|end|>";
+      if (gen) out += "<|assistant|>";
       break;
 
     case ChatFormat::kGemma: {
@@ -181,6 +240,21 @@ Result<std::string> ChatTemplate::apply(std::span<const ChatMessage> msgs, bool 
       if (gen) out += "<|start_of_role|>assistant<|end_of_role|>";
       break;
     }
+
+    case ChatFormat::kDeepSeekCoder:
+      // As the template: a given system prompt verbatim, else the default
+      // (which ends in a newline); no system turn markers.
+      out += has_system ? msgs.front().content : default_system_;
+      for (size_t i = has_system ? 1 : 0; i < msgs.size(); ++i) {
+        const ChatMessage& m = msgs[i];
+        if (m.role == "user") {
+          out += "### Instruction:\n" + m.content + "\n";
+        } else {
+          out += "### Response:\n" + m.content + "\n<|EOT|>\n";
+        }
+      }
+      if (gen) out += "### Response:";
+      break;
 
     case ChatFormat::kDeepSeek2:
       if (has_system) out += msgs.front().content;

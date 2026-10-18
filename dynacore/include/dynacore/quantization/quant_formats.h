@@ -28,12 +28,15 @@ struct BlockQ4_K { uint16_t d, dmin; uint8_t scales[12]; uint8_t qs[kQK_K / 2]; 
 struct BlockQ5_K { uint16_t d, dmin; uint8_t scales[12]; uint8_t qh[kQK_K / 8]; uint8_t qs[kQK_K / 2]; };
 struct BlockQ6_K { uint8_t ql[kQK_K / 2]; uint8_t qh[kQK_K / 4]; int8_t scales[kQK_K / 16]; uint16_t d; };
 struct BlockQ8_K { float d; int8_t qs[kQK_K]; int16_t bsums[kQK_K / 16]; };
+struct BlockIQ4_NL { uint16_t d; uint8_t qs[kQK / 2]; };
+struct BlockIQ4_XS { uint16_t d; uint16_t scales_h; uint8_t scales_l[kQK_K / 64]; uint8_t qs[kQK_K / 2]; };
 #pragma pack(pop)
 
 static_assert(sizeof(BlockQ4_0) == 18 && sizeof(BlockQ4_1) == 20 && sizeof(BlockQ5_0) == 22 &&
               sizeof(BlockQ5_1) == 24 && sizeof(BlockQ8_0) == 34 && sizeof(BlockQ8_1) == 36);
 static_assert(sizeof(BlockQ2_K) == 84 && sizeof(BlockQ3_K) == 110 && sizeof(BlockQ4_K) == 144 &&
               sizeof(BlockQ5_K) == 176 && sizeof(BlockQ6_K) == 210 && sizeof(BlockQ8_K) == 292);
+static_assert(sizeof(BlockIQ4_NL) == 18 && sizeof(BlockIQ4_XS) == 136);
 
 // Dequantize `nb` consecutive blocks into `y` (nb * block_elems floats).
 void dequantize_q4_0(const BlockQ4_0* x, float* y, int64_t nb);
@@ -50,6 +53,10 @@ void dequantize_q4_K(const BlockQ4_K* x, float* y, int64_t nb);
 void dequantize_q5_K(const BlockQ5_K* x, float* y, int64_t nb);
 void dequantize_q6_K(const BlockQ6_K* x, float* y, int64_t nb);
 void dequantize_q8_K(const BlockQ8_K* x, float* y, int64_t nb);
+// IQ4 codes index this codebook (GGML kvalues_iq4nl).
+inline constexpr int8_t kIQ4Values[16] = {-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113};
+void dequantize_iq4_nl(const BlockIQ4_NL* x, float* y, int64_t nb);
+void dequantize_iq4_xs(const BlockIQ4_XS* x, float* y, int64_t nb);
 
 // 6-bit scale/min unpacking shared by Q4_K and Q5_K (8 sub-blocks).
 inline void get_scale_min_k4(int j, const uint8_t* q, uint8_t& d, uint8_t& m) {

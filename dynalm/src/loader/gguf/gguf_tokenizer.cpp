@@ -1,4 +1,7 @@
 #include "loader/gguf/gguf_tokenizer.h"
+
+#include <algorithm>
+#include <iterator>
 #include "common/core.h"
 
 namespace dynalm::gguf {
@@ -55,10 +58,17 @@ Result<TokenizerData> read_tokenizer_data(const GgufFile& f) {
     if (TokenId id = optional_id(f, key); id != kNoToken) d.eog.push_back(id);
   }
 
-  // Defaults follow the model families: SPM vocabularies add BOS, byte-level
-  // BPE ones generally don't unless the metadata says so.
+  // Defaults when the metadata is silent, as llama.cpp's: SPM vocabularies add
+  // BOS, and so do the byte-level BPE families trained with it (Llama 3 and
+  // its pre-tokenizer ids, Tekken); other BPE ones don't. Many Llama 3 GGUFs
+  // have no add_bos_token key: without BOS their text scores worse (Llama 3.2
+  // 1B, wikitext-2: perplexity +0.9%) and chat prompts lose the template's BOS.
   const bool spm = d.model == TokenizerData::Model::kSpm;
-  d.add_bos = optional_bool(f, "tokenizer.ggml.add_bos_token", spm);
+  static constexpr std::string_view kBosBpe[] = {"llama3", "llama-v3", "llama-bpe", "falcon3", "falcon-h1",
+                                                 "pixtral", "midm-2.0", "lfm2", "jina-v5-nano", "tekken"};
+  const bool bpe_bos = d.model == TokenizerData::Model::kBpe &&
+                       std::find(std::begin(kBosBpe), std::end(kBosBpe), d.pre) != std::end(kBosBpe);
+  d.add_bos = optional_bool(f, "tokenizer.ggml.add_bos_token", spm || bpe_bos);
   d.add_eos = optional_bool(f, "tokenizer.ggml.add_eos_token", false);
   d.add_space_prefix = optional_bool(f, "tokenizer.ggml.add_space_prefix", spm);
   return d;

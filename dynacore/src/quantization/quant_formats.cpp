@@ -221,4 +221,29 @@ void dequantize_q8_K(const BlockQ8_K* x, float* y, int64_t nb) {
   }
 }
 
+void dequantize_iq4_nl(const BlockIQ4_NL* x, float* y, int64_t nb) {
+  for (int64_t i = 0; i < nb; ++i, y += kQK) {
+    const float d = fp16_to_fp32(x[i].d);
+    for (int j = 0; j < kQK / 2; ++j) {
+      y[j] = d * kIQ4Values[x[i].qs[j] & 0xF];
+      y[j + kQK / 2] = d * kIQ4Values[x[i].qs[j] >> 4];
+    }
+  }
+}
+
+void dequantize_iq4_xs(const BlockIQ4_XS* x, float* y, int64_t nb) {
+  for (int64_t i = 0; i < nb; ++i) {
+    const float d = fp16_to_fp32(x[i].d);
+    const uint8_t* qs = x[i].qs;
+    for (int ib = 0; ib < kQK_K / 32; ++ib, y += 32, qs += 16) {
+      const int ls = ((x[i].scales_l[ib / 2] >> (4 * (ib % 2))) & 0xF) | (((x[i].scales_h >> (2 * ib)) & 3) << 4);
+      const float dl = d * static_cast<float>(ls - 32);
+      for (int j = 0; j < 16; ++j) {
+        y[j] = dl * kIQ4Values[qs[j] & 0xF];
+        y[j + 16] = dl * kIQ4Values[qs[j] >> 4];
+      }
+    }
+  }
+}
+
 }  // namespace dynacore::quant

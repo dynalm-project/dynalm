@@ -260,8 +260,10 @@ int main(int argc, char** argv) {
   Fixture fx(**m, pool);
   std::printf("model: %s  threads %d\n", argv[1], threads);
 
-  // Defaults: the solo fields are off.
-  CHECK(SchedulerConfig{}.solo_prefill_chunk == 0);
+  // Defaults: the solo chunk is "the device's default" (-1: the Engine
+  // resolves it to 0 on the CPU, kGpuSoloPrefillChunk on a GPU); split is off.
+  // This fixture drives the Scheduler directly, which clamps -1 to 0 (off).
+  CHECK(SchedulerConfig{}.solo_prefill_chunk == -1);
   CHECK(!SchedulerConfig{}.solo_prefill_split);
 
   // 1. Off (default): one 300-token prompt -> 9 chunks of 32 + 12, then decode.

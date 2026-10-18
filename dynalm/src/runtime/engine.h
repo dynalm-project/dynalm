@@ -34,6 +34,8 @@
 #include "model/transformer.h"
 #include "dynacore/execution/thread_pool.h"
 #include "sampling/sampler.h"
+#include "runtime/device_select.h"
+#include "runtime/speculative.h"
 #include "scheduler/scheduler.h"
 #include "common/core.h"
 
@@ -62,12 +64,22 @@ struct EngineOptions {
   // With backend_auto: a GPU is required (`--gpu`). When no built-in GPU can
   // run the model, create() fails with the reason instead of using the CPU.
   bool backend_require_gpu = false;
+  // With backend kCpu (including auto's CPU choice): run on ggml's CPU kernels
+  // (DeviceKind::kGgmlCpu: 8-bit activations, llama.cpp-level accuracy, ~4x
+  // faster) when this build has them and the model runs there; else, or if
+  // that device fails to start, DynaCore's native kernels (DD-053). The
+  // CLI sets it for `cpu` and `auto`; `native-cpu` clears it.
+  bool cpu_ggml = false;
+  // Speculative decoding with a draft model (SchedulerConfig::spec_k > 0): a
+  // small GGUF sharing the target's vocabulary, run on the same device with
+  // its own KV cache (BatchDrafter). Empty = prompt lookup when spec_k > 0.
+  std::string draft_model_path;
   DType kv_dtype = DType::kF16;
   // Max tokens per forward pass; 0 = the device default: max(256, both step
   // budgets + 1, the solo-prefill chunk) (256 on the CPU with default budgets).
   int32_t max_batch_tokens = 0;
   // Max rows of a matmul that uses int8 activations (DD-053); -1 = default
-  // (KernelPlan, 4), 0 = never. 0 makes outputs independent of how requests
+  // (KernelPlan, 4; kNeonInt8Rows on ARM64), 0 = never. 0 makes outputs independent of how requests
   // are batched (DD-031); the int8 path is faster for 1-4 concurrent rows.
   int32_t int8_decode_rows = -1;
   SchedulerConfig scheduler;
@@ -78,8 +90,9 @@ struct EngineOptions {
 
 // Applies a device choice from --backend / --cpu / --gpu, `runtime.device` or
 // DYNALM_BACKEND to `o`: "auto" (a GPU when one runs the model, else the
-// CPU), "gpu" (any built-in GPU, never the CPU), "cpu", or a named GPU
-// ("metal", "vulkan", "cuda").
+// CPU), "gpu" (any built-in GPU, never the CPU), "cpu" (ggml's CPU kernels
+// when available, see cpu_ggml), "native-cpu" (DynaCore's CPU kernels, DD-053),
+// "ggml-cpu" (ggml's, no fallback), or a named GPU ("metal", "vulkan", "cuda").
 Status apply_backend_choice(std::string_view choice, EngineOptions& o);
 
 // Solo-prefill chunk on GPU devices when none is configured
@@ -94,8 +107,18 @@ inline constexpr int32_t kGpuSoloPrefillChunk = 256;
 // higher ITL p95/p99; --policy latency keeps the original DD-079 behaviour.
 inline constexpr int32_t kGpuMixedPrefillBudget = 256;
 inline constexpr int32_t kGpuMaxPrefillChunk = 128;
+// DD-079 on the GPU: the halving controller with target 12x (v0.1.7's profile).
+// The predictive controller (decode_protect_predictive, target 4x) halved the
+// ITL p99 at 4-16 users but, measured 2026-10-18 on an M4 Pro, worsened the
+// ITL p50 3-4x at 16 users (1.5B: 26.6 -> 83.5 ms; 8B: 80 -> 310 ms) and cost
+// 7% throughput at 8B: it pins every mixed step at the protected minimum.
+// It stays available: DYNALM_DECODE_PREDICTIVE=1 DYNALM_DECODE_TARGET=4.
 inline constexpr float kGpuDecodeLatencyTarget = 12.0f;
+inline constexpr bool kGpuDecodePredictive = false;
 inline constexpr int32_t kGpuProtectedPrefillMin = 64;
+// int8 activation rows on DynaCore's ARM64 CPU kernels when not configured
+// (EngineOptions::int8_decode_rows = -1); x86 keeps KernelPlan's 4.
+inline constexpr int32_t kNeonInt8Rows = 64;
 
 struct GenerateParams {
   int32_t max_tokens = 256;
@@ -149,13 +172,19 @@ class RequestStream {
 // the weights, capped at 65536 tokens, at least min(context, 2048), rounded
 // down to whole 16-token blocks. `available_ram` 0 (unknown) falls back to
 // min(context, 16384).
-// OK when the GPU backend runs this model with this KV dtype; otherwise
-// Unsupported naming the first missing feature (MoE, per-head Q/K norm, RoPE
-// scaling other than none/linear, KV dtype). Checked at startup, so neither
-// `auto` nor `--backend metal` finds out on the first request.
-Status gpu_model_support(const ModelConfig& c, DType kv_dtype);
+// gpu_model_support and plan_devices: runtime/device_select.h.
 
 int64_t auto_kv_tokens(const ModelConfig& c, DType kv_dtype, int64_t weight_bytes, int64_t available_ram);
+
+// Memory admission: whether a KV cache of `kv_bytes` (`kv_per_token` per
+// token) fits beside `weight_bytes` of weights. Host memory: weights + KV must
+// stay within 90% of physical RAM (`total_ram`), else the system swaps or the
+// process is killed mid-run. A GPU with its own memory (`device_free` >= 0, the
+// weights are copied there): weights + KV within 95% of its free memory.
+// Unknown sizes (<= 0) are not checked. The error names the largest
+// --ctx that fits and --kv q8_0.
+Status check_memory_fit(int64_t weight_bytes, int64_t kv_bytes, int64_t kv_per_token, int64_t total_ram,
+                        int64_t device_free);
 
 // Observability snapshot, refreshed by the scheduler thread after each step.
 struct EngineStats {
@@ -200,6 +229,8 @@ class Engine {
   // Interleaved weight copies made at load (DD-078).
   Device::PrepackStats prepack_stats() const { return backend_->prepack_stats(); }
   int threads() const { return pool_->size(); }
+  // The device this engine runs on (after create()'s selection).
+  DeviceKind device_kind() const { return kind_; }
   // Effective max tokens per forward pass (after device defaults).
   int32_t max_batch_tokens() const { return transformer_->max_batch_tokens(); }
   const KvGeometry& kv_geometry() const { return kv_->geometry(); }
@@ -221,6 +252,8 @@ class Engine {
   std::vector<RequestTrace> take_request_trace() { return scheduler_->take_request_trace(); }
 
  private:
+  // One device, no selection (create() picks the devices and calls this).
+  static Result<std::unique_ptr<Engine>> create_on(EngineOptions opts);
   Engine() = default;
   Result<std::shared_ptr<RequestStream>> submit(std::vector<TokenId> tokens, const GenerateParams& params);
   void loop();
@@ -234,9 +267,15 @@ class Engine {
   std::unique_ptr<LoadedModel> model_;
   std::unique_ptr<ThreadPool> pool_;
   std::unique_ptr<Device> backend_;
+  DeviceKind kind_ = DeviceKind::kCpu;
   std::unique_ptr<Device> compiled_;  // RecordingDevice over backend_ (kCompiled)
   std::unique_ptr<KvBlockPool> kv_;
   std::unique_ptr<Transformer> transformer_;
+  // Speculative draft model (EngineOptions::draft_model_path), on the same device.
+  std::unique_ptr<LoadedModel> draft_model_;
+  std::unique_ptr<KvBlockPool> draft_kv_;
+  std::unique_ptr<Transformer> draft_transformer_;
+  std::unique_ptr<BatchDrafter> drafter_;
   std::unique_ptr<Scheduler> scheduler_;
   std::shared_ptr<Core> core_;
 

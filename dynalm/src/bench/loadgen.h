@@ -111,6 +111,7 @@ struct RunContext {
 struct Diagnostics {
   bool valid = false;
   uint64_t steps = 0, steps_decode_only = 0, steps_prefill_only = 0, steps_mixed = 0;
+  uint64_t spec_drafted = 0, spec_accepted = 0;  // speculative decoding (--spec)
   uint64_t steps_solo_prefill = 0;  // steps planned with the experimental solo-prefill chunk
   uint64_t steps_solo_prefill_skipped = 0;  // steps without decode rows where several prompts kept the regular chunk
   uint64_t steps_prefill_srpt = 0;          // steps in shortest-remaining prefill order (>= 2 prompts prefilling)

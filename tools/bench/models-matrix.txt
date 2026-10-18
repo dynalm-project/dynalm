@@ -1,0 +1,65 @@
+# Models for tools/bench/model_matrix.sh: one per line, a registry name
+# (dynalm models --available), a local .gguf path, or a Hugging Face file
+# (<owner>/<repo>/<file>.gguf or a full link). '#' starts a comment.
+# Edit freely: a wrong link or an unsupported model is reported, not fatal.
+# The set spans architectures, sizes and quantization types; every model is
+# <= 8B, so a 16 GB machine runs it. Sizes are approximate downloads.
+
+# --- Registry (12) ---
+qwen3:0.6b                     # qwen3, Q8_0, 0.6 GB
+qwen3:1.7b                     # qwen3, Q8_0, 1.8 GB
+qwen3:4b                       # qwen3, Q4_K_M, 2.5 GB
+qwen2.5:0.5b                   # qwen2, Q4_K_M, 0.5 GB
+qwen2.5:1.5b                   # qwen2, Q4_K_M, 1.1 GB
+llama3.2:1b                    # llama, Q4_K_M, 0.8 GB
+llama3.2:3b                    # llama, Q4_K_M, 2.0 GB
+gemma3:270m                    # gemma3, Q8_0, 0.3 GB
+gemma3:1b                      # gemma3, Q4_K_M, 0.8 GB
+smollm2:135m                   # llama, Q8_0, 0.1 GB
+granite3.1-moe:1b              # granitemoe (MoE), Q4_K_M, 0.8 GB
+phi3.5:3.8b                    # phi3, Q4_K_M, 2.4 GB
+
+# --- Quantization types on one small model (Qwen2.5 0.5B, official files) ---
+Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q2_k.gguf
+Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q3_k_m.gguf
+Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q4_0.gguf
+Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q5_0.gguf
+Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q5_k_m.gguf
+Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q6_k.gguf
+Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q8_0.gguf
+Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-fp16.gguf
+
+# --- Llama family, other quantizations ---
+bartowski/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct-Q8_0.gguf
+bartowski/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct-f16.gguf
+bartowski/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct-IQ4_XS.gguf
+bartowski/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct-Q6_K_L.gguf
+bartowski/Llama-3.2-3B-Instruct-GGUF/Llama-3.2-3B-Instruct-Q5_K_M.gguf
+bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf
+TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+bartowski/SmolLM2-1.7B-Instruct-GGUF/SmolLM2-1.7B-Instruct-Q4_K_M.gguf
+bartowski/Mistral-7B-Instruct-v0.3-GGUF/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf
+bartowski/DeepSeek-R1-Distill-Llama-8B-GGUF/DeepSeek-R1-Distill-Llama-8B-Q4_K_M.gguf
+
+# --- Qwen family, other sizes and fine-tunes ---
+Qwen/Qwen2.5-1.5B-Instruct-GGUF/qwen2.5-1.5b-instruct-q8_0.gguf
+Qwen/Qwen2.5-3B-Instruct-GGUF/qwen2.5-3b-instruct-q4_k_m.gguf
+Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf
+bartowski/Qwen2.5-Math-1.5B-Instruct-GGUF/Qwen2.5-Math-1.5B-Instruct-Q4_K_M.gguf
+bartowski/DeepSeek-R1-Distill-Qwen-1.5B-GGUF/DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf
+Qwen/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf
+
+# --- Gemma, Phi ---
+bartowski/gemma-2-2b-it-GGUF/gemma-2-2b-it-Q4_K_M.gguf
+unsloth/gemma-3-4b-it-GGUF/gemma-3-4b-it-Q4_K_M.gguf
+ggml-org/gemma-3-1b-it-GGUF/gemma-3-1b-it-Q4_K_M.gguf
+bartowski/Phi-3.5-mini-instruct-GGUF/Phi-3.5-mini-instruct-Q8_0.gguf
+bartowski/microsoft_Phi-4-mini-instruct-GGUF/microsoft_Phi-4-mini-instruct-Q4_K_M.gguf
+
+# --- Mixture of experts ---
+bartowski/granite-3.1-3b-a800m-instruct-GGUF/granite-3.1-3b-a800m-instruct-Q4_K_M.gguf
+bartowski/OLMoE-1B-7B-0924-Instruct-GGUF/OLMoE-1B-7B-0924-Instruct-Q4_K_M.gguf   # olmoe: unsupported on purpose (the check must say so)
+
+# --- Larger (uncomment on machines with 32 GB or more) ---
+# bartowski/Qwen_Qwen3-30B-A3B-GGUF/Qwen_Qwen3-30B-A3B-Q4_K_M.gguf     # MoE, ~18 GB
+# bartowski/Mixtral-8x7B-Instruct-v0.1-GGUF/Mixtral-8x7B-Instruct-v0.1-Q4_K_M.gguf   # MoE, ~26 GB

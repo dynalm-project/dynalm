@@ -29,6 +29,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "dynacore/base/status.h"
 #include "dynacore/device/device.h"
@@ -42,17 +43,27 @@ struct GgmlDeviceOptions {
   // Attention spans are padded to a multiple of this many positions so a
   // decode stream reuses one graph per bucket instead of one per token.
   int32_t kv_bucket = 256;
+  // DeviceType::kCpu (ggml's CPU backend): compute threads; 0 = ggml's default.
+  int32_t threads = 0;
 };
 
 // True when DynaCore was built with any ggml GPU backend (ENABLE_METAL,
 // ENABLE_VULKAN, ENABLE_CUDA), or with the one named by `type`.
 bool ggml_gpu_compiled();
 bool ggml_gpu_compiled(DeviceType type);
+// ggml's CPU kernels are built in and this CPU can run them (x86-64: AVX2,
+// FMA and F16C, the tier they are compiled for; any ARM64 CPU).
+bool ggml_cpu_usable_here();
 
 // A GPU of the given provider (kMetal, kVulkan or kCuda) as a DynaCore Device:
 // its first device, or device DYNACORE_GPU_INDEX (0-based) when set.
 // kUnsupported when the provider is not compiled in or has no usable device.
 Result<std::unique_ptr<Device>> create_ggml_gpu_device(DeviceType type, const GgmlDeviceOptions& opts = {});
+
+// The devices a provider reports (descriptions, e.g. "Apple M4 Pro"), without
+// initializing any of them: for diagnostics (`dynalm doctor`). Empty when the
+// provider is not compiled in or finds no device.
+std::vector<std::string> ggml_gpu_device_names(DeviceType type);
 
 // The pinned ggml revision compiled in ("" when not compiled).
 std::string ggml_revision();

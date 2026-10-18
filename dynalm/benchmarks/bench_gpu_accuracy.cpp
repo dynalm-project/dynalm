@@ -6,7 +6,7 @@
 // arithmetic) and on the GPU device (ggml, through the RecordingDevice as the
 // engine runs it) and compares next-token distributions:
 //   1. decode shape: the fixed text one token at a time (M = 1);
-//   2. prefill shapes: the text in chunks of 32 and 64 tokens, every position;
+//   2. prefill shapes: the text in chunks of 32 and 64 tokens (BENCH_PREFILL_CHUNKS), every position;
 //   3. greedy continuations of several prompts: first diverging position;
 //   4. GPU determinism: the decode pass twice, logits bit-identical;
 //   5. two sequences in one batch with separate block tables (paged KV,
@@ -103,6 +103,49 @@ struct Stats {
 
 }  // namespace
 
+// Rows of two logit sets, compared as distributions: whether every row makes
+// the same choice (b's argmax is a's, or within 0.05 of it under a: a tie),
+// and the mean KL(a || b) over the rows. MoE models are judged by the KL
+// bound (the choice is reported, as DD-053 reports greedy agreement), not by
+// the largest logit difference: their top-k routing has many
+// near-ties (Granite-MoE 1B, CPU reference: the 8th and 9th experts within 0.2%
+// of the probability mass in ~12k row-layer choices), so a row-count-dependent
+// rounding difference swaps an expert and moves a few logits by up to ~1 while
+// the distribution barely changes.
+struct RowAgreement {
+  bool same_argmax = true;
+  double mean_kl = 0;
+};
+RowAgreement agree(const float* a, const float* b, int64_t rows, int64_t vocab) {
+  RowAgreement r;
+  for (int64_t row = 0; row < rows; ++row) {
+    const float* x = a + row * vocab;
+    const float* y = b + row * vocab;
+    int64_t ax = 0, ay = 0;
+    double mx = x[0], my = y[0];
+    for (int64_t i = 1; i < vocab; ++i) {
+      if (x[i] > x[ax]) ax = i;
+      if (y[i] > y[ay]) ay = i;
+      mx = std::max(mx, static_cast<double>(x[i]));
+      my = std::max(my, static_cast<double>(y[i]));
+    }
+    // The same choice, up to a tie: b's pick scores within 0.05 of a's best under a.
+    r.same_argmax = r.same_argmax && x[ay] >= x[ax] - 0.05f;
+    double zx = 0, zy = 0;
+    for (int64_t i = 0; i < vocab; ++i) {
+      zx += std::exp(x[i] - mx);
+      zy += std::exp(y[i] - my);
+    }
+    double kl = 0;
+    for (int64_t i = 0; i < vocab; ++i) {
+      const double lx = x[i] - mx - std::log(zx), ly = y[i] - my - std::log(zy);
+      kl += std::exp(lx) * (lx - ly);
+    }
+    r.mean_kl += kl / static_cast<double>(rows);
+  }
+  return r;
+}
+
 int main(int argc, char** argv) {
   using namespace dynalm;
   if (argc < 2) {
@@ -130,9 +173,10 @@ int main(int argc, char** argv) {
   if (!dynacore::ggml_gpu_compiled(gpu_type)) gpu_type = dynacore::DeviceType::kCuda;
   if (const char* g = std::getenv("BENCH_GPU"); g != nullptr && *g != '\0') {
     const std::string_view v(g);
-    gpu_type = v == "vulkan" ? dynacore::DeviceType::kVulkan
-               : v == "cuda" ? dynacore::DeviceType::kCuda
-                             : dynacore::DeviceType::kMetal;
+    gpu_type = v == "vulkan"     ? dynacore::DeviceType::kVulkan
+               : v == "cuda"     ? dynacore::DeviceType::kCuda
+               : v == "ggml-cpu" ? dynacore::DeviceType::kCpu  // ggml's CPU backend
+                                 : dynacore::DeviceType::kMetal;
   }
   auto gpu = dynacore::create_ggml_gpu_device(gpu_type);
   if (!tf_cpu.ok() || !gpu.ok()) {
@@ -217,8 +261,23 @@ int main(int argc, char** argv) {
     ok = ok && gpu_stats.pass() && identical;
   }
 
-  // 2. Prefill shapes.
-  for (const int chunk : {32, 64}) {
+  // 2. Prefill shapes. BENCH_PREFILL_CHUNKS=4,16,32 replaces the list (each <= kMaxRows).
+  std::vector<int> prefill_chunks = {32, 64};
+  if (const char* pc = std::getenv("BENCH_PREFILL_CHUNKS"); pc != nullptr && *pc != '\0') {
+    prefill_chunks.clear();
+    for (const char* s = pc; *s != 0;) {
+      char* end = nullptr;
+      const long v = std::strtol(s, &end, 10);
+      if (end == s || v <= 0 || v > kMaxRows || (*end != ',' && *end != 0)) {
+        std::fprintf(stderr, "BENCH_PREFILL_CHUNKS: expected chunk sizes 1..%d separated by commas, got '%s'\n",
+                     static_cast<int>(kMaxRows), pc);
+        return 2;
+      }
+      prefill_chunks.push_back(static_cast<int>(v));
+      s = *end == ',' ? end + 1 : end;
+    }
+  }
+  for (const int chunk : prefill_chunks) {
     auto kv_ref = make_kv(cpu), kv_gpu = make_kv(rec);
     KvBlockTable t_ref(*kv_ref), t_gpu(*kv_gpu);
     std::vector<float> lr, lg;
@@ -316,9 +375,15 @@ int main(int argc, char** argv) {
     // Batch invariance is not promised on the GPU (kernels may change with
     // the row count); the check is that a multi-sequence batch is correct,
     // i.e. within the decode-vs-reference error scale, not bit-identical.
-    const bool pass = dmax < 0.5;
+    bool pass = dmax < 0.5;
+    if (c.moe.num_experts > 0) {  // MoE: same choices and distributions (see agree())
+      const RowAgreement ra = agree(la.data(), lp.data(), 4, vocab), rb = agree(lb.data(), lp.data() + la.size(), 4, vocab);
+      pass = (ra.mean_kl + rb.mean_kl) / 2 <= 0.0025;  // DD-053's KL bound; the choice is reported, not gated
+      std::printf("\n[MoE: mean KL %.6f (<= 0.0025); greedy choice %s (reported, not gated, as in DD-053)]",
+                  (ra.mean_kl + rb.mean_kl) / 2, ra.same_argmax && rb.same_argmax ? "the same" : "differs in a row");
+    }
     std::printf("\n[two sequences in one batch vs each alone (GPU)] max |logit diff| %.5f: %s\n", dmax,
-                pass ? "PASS (< 0.5)" : "FAIL");
+                pass ? (c.moe.num_experts > 0 ? "PASS (MoE: KL)" : "PASS (< 0.5)") : "FAIL");
     ok = ok && pass;
   }
 
@@ -372,9 +437,15 @@ int main(int argc, char** argv) {
     for (size_t i = 0; i < la2.size(); ++i) da = std::max(da, std::abs(static_cast<double>(la2[i]) - la2_ref[i]));
     // Fork vs scratch differ only in how the prefix rows were batched (one
     // 40-row chunk vs one 52-row chunk): same arithmetic class, small tolerance.
-    const bool pass = db < 0.5 && da < 0.5;
+    bool pass = db < 0.5 && da < 0.5;
+    if (c.moe.num_experts > 0) {  // MoE: same choices and distributions (see agree())
+      const RowAgreement fb = agree(lb.data(), lref.data(), nb, vocab), fa = agree(la2.data(), la2_ref.data(), 1, vocab);
+      pass = fb.mean_kl <= 0.0025 && fa.mean_kl <= 0.0025;  // DD-053's KL bound; the choice is reported, not gated
+      std::printf("\n[MoE: mean KL fork %.6f, original %.6f (<= 0.0025); greedy choice %s (reported, not gated)]",
+                  fb.mean_kl, fa.mean_kl, fb.same_argmax && fa.same_argmax ? "the same" : "differs in a row");
+    }
     std::printf("\n[prefix sharing + copy-on-write (GPU)] fork vs scratch max |logit diff| %.5f; original after fork %.5f: %s\n",
-                db, da, pass ? "PASS (< 0.5)" : "FAIL");
+                db, da, pass ? (c.moe.num_experts > 0 ? "PASS (MoE: KL)" : "PASS (< 0.5)") : "FAIL");
     ok = ok && pass;
   } catch (const std::exception& ex) {
     std::printf("\n[prefix sharing + copy-on-write (GPU)] FAIL: %s\n", ex.what());

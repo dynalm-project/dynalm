@@ -96,7 +96,8 @@ TargetDesc ReferenceBackend::target() const {
   t.isa = isa_;
   t.threads = threads_;
   // Mirrors CpuDevice: integer-dot kernels are accelerated on the AVX2 tier only.
-  t.int8_dot = dev_->kernels().isa == CpuIsa::kAvx2;
+  t.int8_dot = dev_->kernels().int8_simd;  // AVX2, or NEON with the dot-product instructions
+  t.int8_subscaled = t.int8_dot && dev_->kernels().quantize_act_sx != nullptr;
   return t;
 }
 

@@ -283,8 +283,8 @@ int main() {
   test_defaults();
   ThreadPool pool(4);
   ReferenceBackend be(pool, this_isa());
-  if (!be.target().int8_dot) {
-    // Generic tier: no int8 or interleaved kernels; the flag changes nothing.
+  if (!be.target().int8_subscaled) {
+    // Generic and NEON tiers: no interleaved kernels; the flag changes nothing.
     const Weight w = q4kref::make_weight(24, 1280, 5);
     CHECK(be.prepack_weight(view2(w.blocks.data(), DType::kQ4_K, 24, 1280)).status().code() == StatusCode::kUnsupported);
     const std::vector<float> x = q4kref::make_x(8, 1280, 1280, 6), none;

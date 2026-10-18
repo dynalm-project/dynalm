@@ -1,5 +1,237 @@
 # Changelog
 
+## [Unreleased]
+
+Performance and compatibility work: CPU int8 kernels, AutoTune, GPU scheduling, model fixes.
+The numbers below were measured on one machine (Apple M4 Pro, macOS); the full end-to-end
+benchmark is still pending. Methods and tools (`tools/bench/ab.sh`, `baseline.sh`, `bench_ppl`):
+docs/benchmarking.md.
+
+### Added
+- **`bench_ppl`**: perplexity over a text file, scored as llama.cpp's `llama-perplexity` does,
+  on any device (`BENCH_DEVICE=native|ggml-cpu|metal|vulkan|cuda`), for direct accuracy comparisons
+  with llama.cpp (docs/benchmarking.md).
+- **AutoTune** (`dynalm autotune`, `--mode`):
+  - `dynalm autotune` reports the CPU features detected at run time, the built-in GPU backends,
+    the kernels of each CPU path, what each mode runs and the tuned settings.
+  - `--mode auto|performance|exact|safe` for `run`, `chat`, `serve` and `benchmark` (config key
+    `runtime.mode`). `exact` keeps DD-053 accuracy everywhere (never ggml's 8-bit CPU kernels);
+    `safe` runs the fp32 CPU reference kernels only. Contradicting `--backend` choices are errors.
+  - `dynalm autotune --run MODEL` measures CPU thread counts (bounded by `--budget`, median of 3)
+    and stores the fastest in a versioned cache (`~/.dynalm/autotune.json`). The cache is keyed by
+    the CPU, features, cores, OS, version, compiler, ggml revision and binary; any change ignores
+    it. A run on battery, under load or thermally limited is not stored (unless `--force`, then
+    marked UNRELIABLE). Used only when `--threads` is not given; `DYNALM_AUTOTUNE=0` ignores it;
+    `--clear` deletes it.
+- **ARM int8 and int16 kernels for DynaCore's CPU path** (`native-cpu`), with SDOT
+  (`vdotq_s32`) for Q8_0, Q4_0, Q4_K and Q6_K, 1-4 rows (DD-053), and int16 (DD-076, opt-in).
+  Before, ARM ran these matmuls in fp32. Tested against an exact reference by `test_int_kernels`.
+- **Runtime ARM feature detection**: dot product, i8mm, fp16, bf16, SVE, SME, read from the OS
+  (sysctl on macOS, HWCAP on Linux, `IsProcessorFeaturePresent` on Windows) instead of compiler
+  macros. `dynalm doctor` lists them. The SDOT kernels are built with `+dotprod` in their own file
+  and only selected when the CPU has it.
+- **Qwen3 runs on the GPU** (dense models). Per-head Q/K norm is one GPU op per layer. Qwen3-4B
+  Q4_K_M passes DD-053 on Metal and Vulkan, with 4/4 greedy continuations identical:
+  - Metal: decode +0.25% perplexity, prefill mean KL 0.0011;
+  - Vulkan: decode +0.07%, prefill +0.09%, mean KL 0.000014.
+
+- **Gemma 3 runs on the GPU.** Gemma 3 1B passes DD-053 on Metal and Vulkan, with 4/4 greedy
+  continuations identical.
+- **Mixture-of-experts on the GPU (Metal and Vulkan):** routing runs on the device in one op
+  (`Device::moe_ffn`): router, softmax, top-k, expert-indexed matmuls (`mul_mat_id`) with fp32
+  accumulation, the weighted sum, and the optional sigmoid-gated shared expert (Qwen2-MoE). The
+  host round trip per layer is gone.
+  - Granite 3.1 MoE 1B passes DD-053 on both. Metal: decode KL 0.000003, prefill +0.13%.
+    Vulkan: decode +0.11%, prefill +0.15%, KL 0.000056.
+  - The routed and shared-expert math matches a host reference within 1e-4 (new device test).
+    No Qwen2-MoE file was run: the smallest is ~9 GB.
+  - CUDA keeps MoE on the CPU until checked.
+  - Accuracy tool: MoE batching checks (two sequences, fork vs scratch) are gated on mean KL
+    ≤ 0.0025, with the greedy choice reported, not gated, as DD-053 reports greedy agreement.
+    The old dense-model rule (max logit diff < 0.5) does not fit MoE. Granite's top-k routing
+    has near-ties: the 8th and 9th experts are within 0.2% of the probability mass in ~12k
+    row-layer choices, so a rounding difference between row counts swaps an expert. Metal had
+    passed the old rule at 0.49; under the new report, one row's greedy choice differs at KL
+    0.00066.
+- **Sparse GPU attention (opt-in, `DYNACORE_GPU_SPARSE=1`):** each row reads only its own
+  sequence's KV (ggml's sparse flash attention) instead of the shared span. Measured:
+  - one user −10% (7.13 → 7.87 ms/token, 1.5B);
+  - 8B at 16 users no change;
+  - its bound in the graph key multiplied the prepared graphs (part of the memory problem
+    above).
+
+  So it is off by default.
+- **Faster CPU by default: ggml's CPU kernels** (8-bit activations, as in llama.cpp; about 4×
+  the native kernels in the v0.1.7 baseline). They are used for `--cpu`, and for `auto` when
+  there is no GPU.
+  - **Accuracy is llama.cpp-level, not DD-053.** Qwen2.5-1.5B: mean KL 0.023 against the fp32
+    reference; llama.cpp's own CPU is 0.007 against its Metal path.
+  - `--backend native-cpu` keeps DynaLM's exact fp32 kernels.
+  - Models the ggml kernels cannot run (MoE, Gemma 3) fall back to the native kernels.
+  - Built when CMake >= 3.28 and not MSVC on ARM64 (`-DENABLE_GGML_CPU=OFF` to opt out). On
+    x86-64 they need AVX2/FMA/F16C, else the native kernels run.
+  - `dynalm --version` shows the CPU path.
+- **Speculative decoding in the server with a draft model (`dynalm serve --spec qwen2.5:0.5b`).**
+  - A small model with the same vocabulary drafts for every stream at once (`BatchDrafter`):
+    catch-up passes, then k − 1 one-token passes, batched across streams, on the same device
+    with its own KV cache, which counts toward the memory check.
+  - Tested: identical text with the target itself as draft and with an unrelated model.
+  - Qwen2.5-1.5B + 0.5B on Metal: 4 streams, 8/8 requests complete, 227 of 346 drafts accepted
+    (66%).
+  - `/metrics` and `dynalm benchmark` (`diag`) report drafted and accepted tokens.
+- **Speculative decoding in the server (`dynalm serve --spec ngram [--spec-k K]`).**
+  - Every decoding stream drafts up to K tokens by prompt lookup. The target scores them in the
+    stream's own batch row, in the same continuous-batching step as the other streams.
+  - Output equals plain decoding, greedy or sampled (exact verification). Rejected drafts' KV is
+    rolled back.
+  - A stream whose acceptance falls below 25% stops drafting for 32 steps, then tries again.
+  - Tested: identical greedy text with 4 streams batched together (CPU); completion and
+    accepted drafts on the GPU.
+  - Speed not benchmarked yet: `dynalm benchmark --spec ngram` A/B.
+- **Fast CPU path: ggml's repacked int8 kernels and performance-core threads.** Measured on an
+  M4 Pro against llama.cpp `-t 8` on the same files, back to back:
+  - Qwen2.5 1.5B prompt 295 → 573 tok/s (llama.cpp 549), decode 81 → 144 tok/s (166);
+  - Qwen3 4B prompt 197 (185), decode 53.5 (67.7).
+  - **Repack:** matmul weights are copied into ggml's `CPU_REPACK` buffer
+    (`Device::prepack_weight`), so ggml runs its interleaved dotprod / i8mm GEMM and GEMV
+    kernels. The copy is used only by matmuls; embedding lookups of tied tables read the
+    original. Costs one extra copy of the matmul weights in RAM. `DYNACORE_GGML_REPACK=0` turns
+    it off.
+  - **Threads:** without `--threads`, ggml's CPU kernels use the performance cores only (8 of
+    8P+4E). ggml splits work evenly and syncs at barriers, so the efficiency cores held each
+    step back (decode 81 → 138 tok/s from this alone).
+  - `-DDYNALM_GGML_NATIVE=ON` builds ggml for the build machine's exact CPU. It measured no gain
+    here (the repacked dotprod kernels already run), so packages stay portable.
+- **Memory admission:** a KV cache that cannot fit is refused at startup. The limits are 90%
+  of RAM, or 95% of free GPU memory. The error names the largest `--ctx` that fits and
+  `--kv q8_0`. Before, the server started and failed or swapped mid-run.
+- **Release provenance:** release archives carry signed build attestations
+  (`gh attestation verify`), and the Docker image carries provenance and an SBOM. See
+  SECURITY.md.
+- **`tools/bench/ab.sh`:** paired A/B runs of two builds (or one build under two settings) for
+  `tools/bench_analyze.py`. Binaries are copied first, and every run waits for AC power, Energy
+  Mode Automatic and a quiet machine. **`tools/bench/baseline.sh`:** the controlled DynaLM /
+  llama.cpp / Ollama comparison behind the Phase 0 baseline.
+- `bench_gpu_accuracy`: `BENCH_GPU=ggml-cpu` and `BENCH_PREFILL_CHUNKS=...`.
+- **Model matrix with safetensors and speed** (`tools/bench/model_matrix.py`; the `.sh` wraps
+  it, since macOS ships bash 3.2):
+  - `hf:<owner>/<repo>` entries fetch `config.json`, the tokenizer and every safetensors shard
+    through the Hugging Face API, after a `model_type` pre-screen and a size limit.
+  - `--bench` adds DynaLM in-process speed (GPU, CPU; 1 and 4 users) and `llama-bench` on the
+    same GGUF with ratios.
+  - `tools/bench/models-50.txt`: 50 models in both formats, with 13 GGUF links
+    corrected (wrong file names, split files, missing repos; each noted in the list).
+  - `tools/bench/models-51-80.txt`: 30 more models (7-35B) in both formats, with the GGUF files
+    resolved from repo pages and searches.
+  - Safetensors downloads take only the indexed shards. Mistral repos' duplicate
+    `consolidated.safetensors` had doubled their size.
+- **`tools/bench/model_matrix.sh`:** a correctness sweep over a model list (default
+  `tools/bench/models-matrix.txt`: 43 models, 12 architectures, Q2_K to F16 and IQ4_XS, two MoE).
+  - Per model: support check, download, generation on `auto` / `cpu` / `native-cpu` with
+    cross-path text agreement, and the DD-053 check with `--accuracy`.
+  - Downloads are deleted after each row unless `--keep`.
+  - `--check-only` validates the whole list in ~2 min: all 43 links resolve, 42 supported,
+    OLMoE unsupported (kept as a negative test).
+- **`tools/bench/e2e.sh`:** unattended end-to-end runs. It snapshots the binaries, then runs the
+  model matrix (tier 1: 27 entries across six providers; correctness, DD-053 and speed vs
+  llama-bench on GPU and CPU), the engine comparison (`baseline.sh --quick`) and the A/B against
+  v0.1.7 (GPU and CPU gates). `tools/bench/e2e_report.py` writes one `REPORT.md`. Speed runs are
+  gated on AC power and a quiet machine (`model_matrix.py --gate`).
+- **`tools/bench/baseline.sh --quick`:** about 45 min instead of 4+ h. 2 rounds, fewer prompt
+  sizes, user counts and requests.
+- **`tools/bench/report.py`:** turns `baseline.sh` runs into the markdown tables for
+  docs/benchmarks.md: setup, run conditions, errors, medians ± spread, verdicts. Tested by
+  `tools/test_bench_report.py` in CI. Publishing steps: docs/benchmarking.md.
+
+### Changed
+- **DynaLM's ARM64 CPU kernels use int8 activations up to 64 rows** (was 4), so prompts use the
+  SDOT kernels too. M4 Pro, Qwen2.5-1.5B, 401-token prompt on `native-cpu`: 2394 → 1835 ms. The
+  per-row arithmetic is that of decode (DD-053), and prefill chunks of 32 and 64 measure perplexity
+  +0.04%, mean KL 0.0012. x86 keeps 4 (the AVX2 crossover). `--int8-decode N` overrides it.
+- **ggml-cpu keeps one worker pool** (`ggml_backend_cpu_set_threadpool`), as llama.cpp does.
+  Before, ggml started and joined its threads for every graph, so once per token. Decode ITL on
+  Qwen2.5-1.5B dropped from 6.0 to 5.9 ms (on battery, alternating runs). On AC power, back to back
+  with llama-server on the CPU: ITL p50 6.2 vs 6.0 ms, prompt (128 tokens) 212 vs 211 ms.
+  `DYNACORE_GGML_THREADPOOL=0` restores the old behaviour.
+- **The ggml device is split by role.** `ggml_device_internal.h` holds the shared types,
+  buffers and the device class; `ggml_graph.cpp` lowers recorded calls to a ggml graph (about
+  500 lines); `ggml_device.cpp` runs segments and holds the registry. Behaviour is unchanged:
+  the same 569,718 device checks pass.
+- **Device selection is one pure, tested policy** (`runtime/device_select.{h,cpp}`,
+  `plan_devices`). Every combination of request (auto / --gpu / cpu / native-cpu / named),
+  model and build is unit-tested without a GPU. `Engine::create` opens the planned devices in
+  order.
+- **GPU scheduling: the v0.1.7 profile stays the default; a predictive controller is opt-in**
+  (`DYNALM_DECODE_PREDICTIVE=1 DYNALM_DECODE_TARGET=4`). The predictive controller sizes each
+  mixed step from a learned per-row cost. Measured on an M4 Pro (2026-10-18, A/B against v0.1.7
+  and traces):
+  - ITL p99 −39% to −52% at 4-16 users;
+  - but ITL p50 3-4× worse at 16 users (1.5B: 26.6 → 83.5 ms; 8B: 80 → 310 ms) and −7%
+    throughput at 8B, because it pins every mixed step at the protected minimum.
+- **GPU graph cache:** when full, it now drops the least recently used graph instead of all
+  graphs. Prepared graphs are also capped at 1 GiB of workspace (`DYNACORE_GPU_GRAPH_MB`).
+  - Each graph holds its own activation buffers (~86 MiB for an 8B model).
+  - Without the cap, 26 graphs (2.2 GiB) plus 8.5 GB of weights and 8 GB of KV made Metal fail
+    steps with "Insufficient Memory" at 16 users (8B: 20 → 50 tok/s once fixed).
+
+### Fixed
+- **`dynalm doctor` predated GPU support:** on a Metal build it said "GPU: none detected (not used by
+  this build)" and warned "this release runs on the CPU only". It now lists the backends built in
+  (DynaLM's CPU kernels and their tier, ggml's CPU kernels, Metal / Vulkan / CUDA with the devices
+  each reports, without initializing them), the device `--backend auto` tries first, both default
+  thread counts and the AutoTune cache state (also in `--json`: `gpu_backends`, `ggml_cpu`,
+  `ggml_threads`, `autotune`).
+- **`--mode safe --gpu` switched to the CPU silently;** it is now an error, like `--mode safe
+  --backend metal`. A bad `--mode` value names the valid ones.
+- **`dynalm autotune --run` stored unverified results** where it cannot read the power and load
+  state (Windows); they now need `--force` and are marked UNRELIABLE.
+- **Notices:** NOTICE and THIRD_PARTY_LICENSES.md said ggml is in GPU builds only; CPU builds include
+  it by default too (`ENABLE_GGML_CPU`). The Unicode License V3 for the Unicode Character Database
+  (the tokenizer tables) is added.
+- **Llama 3 GGUFs without `tokenizer.ggml.add_bos_token` ran without BOS** (e.g. bartowski's
+  Llama-3.2 files), in raw text and in chat (the template's BOS is left to the tokenizer). As
+  llama.cpp does, the Llama 3 pre-tokenizer ids and Tekken now default to BOS. Wikitext-2
+  perplexity, 20 chunks of 512: Llama-3.2-1B IQ4_XS 16.567 → 16.409 (llama.cpp 16.435);
+  Llama-3.1-8B Q8_0 on Metal 8.1455 → 8.1993 (llama.cpp 8.1993).
+- **Phi-3 / Phi-3.5 on the GPU and on ggml's CPU kernels** failed with "a step reads memory
+  written through a different view (aliasing)". RoPE writes Q inside the fused Q|K|V value; the
+  graph builder now keeps the rest of that value (K, V) live instead of dropping it. A test runs a
+  fused-QKV model and compares it with separate Q, K, V weights on native CPU, ggml-cpu, Metal and Vulkan.
+- **Phi-3 / Phi-4 LongRoPE was ignored** (`rope_factors_short/long` were "not used by the
+  engine"). As llama.cpp does, DynaLM now applies the short factors, or the long ones when a
+  sequence can exceed the original context. It also applies the attention factor
+  `rope.scaling.attn_factor` inside RoPE (`RopeConfig::attn_factor`, on cos and sin), so only the
+  rotated dims are scaled; this matters for Phi-4-mini's partial RoPE (96 of 128 dims). Wikitext-2
+  perplexity, 20 chunks of 512:
+  - Phi-3.5-mini: llama.cpp 7.1421; DynaLM 7.1144 on Metal (7.7083 before);
+  - Phi-4-mini: llama.cpp 11.4255 on Metal and 11.5078 on CPU; DynaLM 11.4256 on Metal,
+    11.4217 on Vulkan, 11.4245 native and 11.5252 on ggml-cpu (12.18 with the factor on the scores).
+- **Phi-4-mini's chat template** (`'<|' + role + '|>'`, no newlines) was not recognized; it is now
+  the `phi4` format.
+- **IQ4_NL and IQ4_XS models** were refused at load. They now run on every device: ggml's kernels
+  on the GPU and ggml-cpu, dequantization on DynaLM's CPU kernels. They are checked against ggml's
+  matmul on ggml-cpu, Metal and Vulkan.
+- **Phi-4-mini (pre-tokenizer `gpt-4o`)** was refused. The GPT-4o (o200k) split is implemented as the
+  HF regex, combining marks included; `llama4` uses it too. The Unicode tables are regenerated
+  from UnicodeData.txt 15.0.0 (`tools/gen_unicode_tables.py --ucd`).
+- **Chat models without a recognized template** (TheBloke's Llama-2-chat and DeepSeek-Coder GGUFs)
+  failed in chat mode. DeepSeek-Coder's `### Instruction:` template is now rendered natively. A file
+  with no template uses the format its name implies (`*llama-2*chat*`, `*mistral*instruct*`,
+  `*deepseek-coder*instruct*`) and logs it; base models stay unsupported for chat.
+- **`tools/bench/ab.sh`** marked every CPU run "not quiet": its after-run check counted the load
+  the benchmark itself creates. It now re-checks only power and power mode.
+- **ggml without OpenMP.** An OpenMP ggml build needs libgomp (Linux) or vcomp140.dll (Windows)
+  at run time. The Docker image failed with `libgomp.so.1: cannot open shared object file`; ggml's
+  own thread pool is used now. The Docker build installs git to fetch the pinned ggml.
+- **Benchmark client:** a stream that ends with an `{"error": ...}` event now counts as a failed
+  request. Before, it counted as a success.
+- **ggml-cpu device:** an unaligned host tensor is copied, and a buffer larger than physical
+  RAM is refused. Before, ggml aborted on the first and was OOM-killed on the second.
+- **CI:** "Metal/Vulkan GPU tests ran" now requires that provider by name in the test summary.
+  The always-available ggml-cpu provider could otherwise have passed it.
+- `test_solo_prefill` expected the pre-v0.1.5 `solo_prefill_chunk` default of 0. It is now -1,
+  the device's default.
+
 ## [0.1.7] - 2026-10-17
 
 Pre-launch fixes: reliable downloads and accurate docs.

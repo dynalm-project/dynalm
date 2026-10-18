@@ -1,0 +1,108 @@
+# Models from Qwen, Meta, Google, Microsoft, Mistral AI and DeepSeek that passed the support check
+# (from models-matrix.txt, models-50.txt and models-51-80.txt; 2026-10-18). Owner's selection: other
+# providers left out. Gated entries (meta-llama, google) need HF_TOKEN.
+
+# --- GGUF ---
+qwen3:0.6b                                                                                                     # - GB
+qwen3:1.7b                                                                                                     # - GB
+qwen3:4b                                                                                                       # - GB
+qwen2.5:0.5b                                                                                                   # - GB
+qwen2.5:1.5b                                                                                                   # - GB
+llama3.2:1b                                                                                                    # - GB
+llama3.2:3b                                                                                                    # - GB
+gemma3:270m                                                                                                    # - GB
+gemma3:1b                                                                                                      # - GB
+phi3.5:3.8b                                                                                                    # - GB
+Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q2_k.gguf                                                # - GB
+Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q3_k_m.gguf                                              # - GB
+Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q4_0.gguf                                                # - GB
+Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q5_0.gguf                                                # - GB
+Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q5_k_m.gguf                                              # - GB
+Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q6_k.gguf                                                # - GB
+Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q8_0.gguf                                                # - GB
+Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-fp16.gguf                                                # - GB
+bartowski/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct-Q8_0.gguf                                           # - GB
+bartowski/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct-f16.gguf                                            # - GB
+bartowski/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct-IQ4_XS.gguf                                         # - GB
+bartowski/Llama-3.2-1B-Instruct-GGUF/Llama-3.2-1B-Instruct-Q6_K_L.gguf                                         # - GB
+bartowski/Llama-3.2-3B-Instruct-GGUF/Llama-3.2-3B-Instruct-Q5_K_M.gguf                                         # - GB
+bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf                               # - GB
+bartowski/Mistral-7B-Instruct-v0.3-GGUF/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf                                   # - GB
+bartowski/DeepSeek-R1-Distill-Llama-8B-GGUF/DeepSeek-R1-Distill-Llama-8B-Q4_K_M.gguf                           # - GB
+Qwen/Qwen2.5-1.5B-Instruct-GGUF/qwen2.5-1.5b-instruct-q8_0.gguf                                                # - GB
+Qwen/Qwen2.5-3B-Instruct-GGUF/qwen2.5-3b-instruct-q4_k_m.gguf                                                  # - GB
+Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf                                  # - GB
+bartowski/Qwen2.5-Math-1.5B-Instruct-GGUF/Qwen2.5-Math-1.5B-Instruct-Q4_K_M.gguf                               # - GB
+bartowski/DeepSeek-R1-Distill-Qwen-1.5B-GGUF/DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf                         # - GB
+Qwen/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf                                                                        # - GB
+bartowski/gemma-2-2b-it-GGUF/gemma-2-2b-it-Q4_K_M.gguf                                                         # - GB
+unsloth/gemma-3-4b-it-GGUF/gemma-3-4b-it-Q4_K_M.gguf                                                           # - GB
+bartowski/Phi-3.5-mini-instruct-GGUF/Phi-3.5-mini-instruct-Q8_0.gguf                                           # - GB
+bartowski/microsoft_Phi-4-mini-instruct-GGUF/microsoft_Phi-4-mini-instruct-Q4_K_M.gguf                         # - GB
+unsloth/Qwen3-4B-Instruct-2507-GGUF/Qwen3-4B-Instruct-2507-Q4_K_M.gguf                                         # 2.3 GB
+bartowski/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf                                             # 4.4 GB
+bartowski/gemma-2-9b-it-GGUF/gemma-2-9b-it-Q4_K_M.gguf                                                         # 5.4 GB
+bartowski/Meta-Llama-3-8B-Instruct-GGUF/Meta-Llama-3-8B-Instruct-Q4_K_M.gguf                                   # 4.6 GB
+bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf                             # 4.4 GB
+Qwen/Qwen2.5-Coder-0.5B-Instruct-GGUF/qwen2.5-coder-0.5b-instruct-q4_k_m.gguf                                  # 0.5 GB
+bartowski/Qwen2.5-Coder-3B-Instruct-GGUF/Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf                                 # 1.8 GB
+bartowski/Qwen2.5-Coder-7B-Instruct-GGUF/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf                                 # 4.4 GB
+bartowski/Qwen2.5-Coder-14B-Instruct-GGUF/Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf                               # 8.4 GB
+TheBloke/deepseek-coder-1.3b-instruct-GGUF/deepseek-coder-1.3b-instruct.Q4_K_M.gguf                            # 0.8 GB
+TheBloke/deepseek-coder-6.7b-instruct-GGUF/deepseek-coder-6.7b-instruct.Q4_K_M.gguf                            # 3.8 GB
+bartowski/codegemma-7b-it-GGUF/codegemma-7b-it-Q4_K_M.gguf                                                     # 5.0 GB
+TheBloke/Mistral-7B-v0.1-GGUF/mistral-7b-v0.1.Q4_K_M.gguf                                                      # 4.1 GB
+TheBloke/Llama-2-7B-Chat-GGUF/llama-2-7b-chat.Q4_K_M.gguf                                                      # 3.8 GB
+Qwen/Qwen3-14B-GGUF/Qwen3-14B-Q4_K_M.gguf                                                                      # 8.4 GB
+bartowski/Qwen2.5-14B-Instruct-GGUF/Qwen2.5-14B-Instruct-Q4_K_M.gguf                                           # 8.4 GB
+bartowski/Qwen2.5-Math-7B-Instruct-GGUF/Qwen2.5-Math-7B-Instruct-Q4_K_M.gguf                                   # 4.4 GB
+QuantFactory/Meta-Llama-3.1-8B-GGUF/Meta-Llama-3.1-8B.Q4_K_M.gguf                                              # 4.6 GB
+bartowski/google_gemma-3-12b-it-GGUF/google_gemma-3-12b-it-Q4_K_M.gguf                                         # 6.8 GB
+QuantFactory/gemma-2-9b-GGUF/gemma-2-9b.Q4_K_M.gguf                                                            # 5.4 GB
+bartowski/phi-4-GGUF/phi-4-Q4_K_M.gguf                                                                         # 8.4 GB
+bartowski/DeepSeek-R1-Distill-Qwen-14B-GGUF/DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf                           # 8.4 GB
+bartowski/Mistral-Nemo-Instruct-2407-GGUF/Mistral-Nemo-Instruct-2407-Q4_K_M.gguf                               # 7.0 GB
+bartowski/mistralai_Mistral-Small-3.1-24B-Instruct-2503-GGUF/mistralai_Mistral-Small-3.1-24B-Instruct-2503-Q4_K_M.gguf # 13.3 GB
+bartowski/Codestral-22B-v0.1-GGUF/Codestral-22B-v0.1-Q4_K_M.gguf                                               # 12.4 GB
+TheBloke/CodeLlama-13B-Instruct-GGUF/codellama-13b-instruct.Q4_K_M.gguf                                        # 7.3 GB
+TheBloke/CodeLlama-13B-Python-GGUF/codellama-13b-python.Q4_K_M.gguf                                            # 7.3 GB
+TheBloke/Llama-2-13B-chat-GGUF/llama-2-13b-chat.Q4_K_M.gguf                                                    # 7.3 GB
+TheBloke/Llama-2-13B-GGUF/llama-2-13b.Q4_K_M.gguf                                                              # 7.3 GB
+TheBloke/Orca-2-13B-GGUF/orca-2-13b.Q4_K_M.gguf                                                                # 7.3 GB
+
+# --- Safetensors ---
+hf:Qwen/Qwen2.5-0.5B-Instruct                                                                                  # 0.9 GB
+hf:meta-llama/Llama-3.2-1B-Instruct                                                                            # 2.3 GB (gated)
+hf:Qwen/Qwen3-0.6B                                                                                             # 1.4 GB
+hf:Qwen/Qwen2.5-1.5B-Instruct                                                                                  # 2.9 GB
+hf:Qwen/Qwen3-1.7B                                                                                             # 3.8 GB
+hf:Qwen/Qwen2.5-Coder-1.5B-Instruct                                                                            # 2.9 GB
+hf:Qwen/Qwen2.5-3B-Instruct                                                                                    # 5.8 GB
+hf:Qwen/Qwen3-4B                                                                                               # 7.5 GB
+hf:Qwen/Qwen3-4B-Instruct-2507                                                                                 # 7.5 GB
+hf:meta-llama/Llama-3.2-3B-Instruct                                                                            # 6.0 GB (gated)
+hf:microsoft/Phi-3.5-mini-instruct                                                                             # 7.1 GB
+hf:microsoft/Phi-4-mini-instruct                                                                               # 7.2 GB
+hf:google/gemma-3-1b-it                                                                                        # 1.9 GB (gated)
+hf:google/gemma-3-4b-it                                                                                        # 8.0 GB (gated)
+hf:Qwen/Qwen2.5-7B-Instruct                                                                                    # 14.2 GB
+hf:Qwen/Qwen3-8B                                                                                               # 15.3 GB
+hf:meta-llama/Llama-3.1-8B-Instruct                                                                            # 15.0 GB (gated)
+hf:google/gemma-2-9b-it                                                                                        # 17.2 GB (gated)
+hf:meta-llama/Meta-Llama-3-8B-Instruct                                                                         # 15.0 GB (gated)
+hf:deepseek-ai/DeepSeek-R1-Distill-Qwen-7B                                                                     # 14.2 GB
+hf:deepseek-ai/DeepSeek-R1-Distill-Llama-8B                                                                    # 15.0 GB
+hf:Qwen/Qwen2.5-Coder-0.5B-Instruct                                                                            # 0.9 GB
+hf:Qwen/Qwen2.5-Coder-3B-Instruct                                                                              # 5.8 GB
+hf:Qwen/Qwen2.5-Coder-7B-Instruct                                                                              # 14.2 GB
+hf:deepseek-ai/deepseek-coder-1.3b-instruct                                                                    # 2.5 GB
+hf:deepseek-ai/deepseek-coder-6.7b-instruct                                                                    # 12.6 GB
+hf:google/codegemma-7b-it                                                                                      # 15.9 GB (gated)
+hf:mistralai/Mistral-7B-v0.1                                                                                   # 13.5 GB
+hf:meta-llama/Llama-2-7b-chat-hf                                                                               # 12.6 GB (gated)
+hf:Qwen/Qwen2.5-Math-7B-Instruct                                                                               # 14.2 GB
+hf:meta-llama/Meta-Llama-3.1-8B                                                                                # 15.0 GB (gated)
+hf:google/gemma-3-12b-it                                                                                       # 22.7 GB (gated)
+hf:google/gemma-2-9b                                                                                           # 34.4 GB (gated)
+hf:meta-llama/Llama-2-13b-chat-hf                                                                              # 24.2 GB (gated)
+hf:meta-llama/Llama-2-13b-hf                                                                                   # 24.2 GB (gated)

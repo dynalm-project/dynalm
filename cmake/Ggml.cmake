@@ -30,7 +30,7 @@ if(ENABLE_METAL AND NOT APPLE)
 endif()
 if(CMAKE_VERSION VERSION_LESS 3.28)
   # FetchContent EXCLUDE_FROM_ALL keeps ggml's install rules out of the package.
-  message(FATAL_ERROR "GPU backends (ENABLE_METAL/VULKAN/CUDA) need CMake >= 3.28 (this is ${CMAKE_VERSION})")
+  message(FATAL_ERROR "GPU backends (ENABLE_METAL/VULKAN/CUDA) and ENABLE_GGML_CPU need CMake >= 3.28 (this is ${CMAKE_VERSION})")
 endif()
 enable_language(C)
 if(ENABLE_METAL)
@@ -58,7 +58,21 @@ set(GGML_METAL_EMBED_LIBRARY ${ENABLE_METAL} CACHE BOOL "" FORCE)
 set(GGML_VULKAN ${ENABLE_VULKAN} CACHE BOOL "" FORCE)
 set(GGML_CUDA ${ENABLE_CUDA} CACHE BOOL "" FORCE)
 set(GGML_BLAS OFF CACHE BOOL "" FORCE)
-set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+# ggml's own thread pool, not OpenMP: an OpenMP build needs libgomp (Linux) or
+# vcomp140.dll (Windows) at run time, which the packages and the Docker image lack.
+set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
+# ggml-cpu (the ggml-cpu device) on x86-64: the AVX2 tier, like DynaLM's own
+# kernels; the device refuses CPUs without AVX2/FMA/F16C at creation.
+if((CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$" OR CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64") AND ENABLE_AVX2)
+  foreach(_isa AVX AVX2 FMA F16C BMI2)
+    set(GGML_${_isa} ON CACHE BOOL "" FORCE)
+  endforeach()
+endif()
+# ggml-cpu for this machine's exact CPU (-mcpu=native: i8mm, SME, ... on Apple
+# M2+), as llama.cpp builds by default. OFF for release packages, which must
+# run on every CPU of their platform.
+option(DYNALM_GGML_NATIVE "Build ggml's CPU kernels for this machine's CPU (not portable)" OFF)
+set(GGML_NATIVE ${DYNALM_GGML_NATIVE} CACHE BOOL "" FORCE)
 set(GGML_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GGML_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)

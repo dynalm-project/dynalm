@@ -27,7 +27,8 @@ enum class TensorRole : uint8_t {
   kOutputNorm,
   kOutputNormBias,
   kOutput,  // lm_head (absent when embeddings are tied)
-  kRopeFreqs,  // precomputed per-dim RoPE frequency factors (Llama3 / long-rope)
+  kRopeFreqs,  // precomputed per-dim RoPE frequency factors (Llama3; LongRoPE short factors)
+  kRopeFreqsLong,  // LongRoPE factors for contexts beyond rope.original_context (Phi-3)
 
   // Per layer: attention
   kAttnNorm,
