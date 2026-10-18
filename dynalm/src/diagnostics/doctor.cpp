@@ -140,6 +140,7 @@ DoctorReport collect_doctor_report() {
   }
   for (DeviceKind k : compiled_devices()) r.compiled_devices.emplace_back(device_kind_name(k));
   r.ggml_cpu = dynacore::ggml_gpu_compiled(dynacore::DeviceType::kCpu);
+  r.ggml_cpu_usable = r.ggml_cpu && dynacore::ggml_cpu_usable_here();
   for (auto [type, name] : {std::pair{dynacore::DeviceType::kMetal, "metal"}, std::pair{dynacore::DeviceType::kVulkan, "vulkan"},
                             std::pair{dynacore::DeviceType::kCuda, "cuda"}}) {
     if (dynacore::ggml_gpu_compiled(type)) r.gpu_backends.push_back({name, dynacore::ggml_gpu_device_names(type)});
@@ -182,7 +183,7 @@ DoctorReport collect_doctor_report() {
   for (const DoctorReport::GpuBackend& g : r.gpu_backends) {
     if (!g.devices.empty() && r.device.empty()) r.device = g.provider + " GPU (" + g.devices.front() + ")";
   }
-  if (r.device.empty()) r.device = r.ggml_cpu ? "CPU (ggml kernels)" : "CPU (DynaCore kernels, " + r.kernel + ")";
+  if (r.device.empty()) r.device = r.ggml_cpu_usable ? "CPU (ggml kernels)" : "CPU (DynaCore kernels, " + r.kernel + ")";
 
   r.autotune_cache = tune_cache_path();
   const TuneCache tc = load_tune_cache(r.autotune_cache, &r.autotune_status);
@@ -254,12 +255,12 @@ std::string format_doctor_text(const DoctorReport& r) {
   for (const auto& [name, on] : r.isa) (on ? have : missing) += (on ? have : missing).empty() ? name : " " + name;
   line("CPU features:", (have.empty() ? "none" : have) + (missing.empty() ? "" : "  (not available: " + missing + ")"));
   std::string backends = "native-cpu (" + r.kernel + ")";
-  if (r.ggml_cpu) backends += ", cpu (ggml kernels)";
+  if (r.ggml_cpu) backends += r.ggml_cpu_usable ? ", cpu (ggml kernels)" : ", cpu (ggml kernels: not usable, this CPU lacks AVX2/FMA/F16C)";
   for (const DoctorReport::GpuBackend& g : r.gpu_backends) backends += ", " + g.provider;
   line("Backends:", backends + (r.isa_note.empty() ? "" : "  [" + r.isa_note + "]"));
   line("Default:", r.device + "  (--backend auto)");
   line("Threads:", std::to_string(r.threads) + " (DynaCore kernels)" +
-                       (r.ggml_cpu ? ", " + std::to_string(r.ggml_threads) + " (ggml kernels)" : ""));
+                       (r.ggml_cpu_usable ? ", " + std::to_string(r.ggml_threads) + " (ggml kernels)" : ""));
   line("Memory:", gib(r.ram_total) + " total, " + gib(r.ram_available) + " available");
   for (const DoctorReport::GpuBackend& g : r.gpu_backends) {
     std::string devs;
@@ -311,6 +312,7 @@ std::string format_doctor_json(const DoctorReport& r) {
       {"compiled_isas", strings(r.compiled_isas)},
       {"compiled_devices", strings(r.compiled_devices)},
       {"ggml_cpu", r.ggml_cpu},
+      {"ggml_cpu_usable", r.ggml_cpu_usable},
       {"gpu_backends", gpu_backends},
       {"os", json::Object{{"name", r.os}, {"version", r.os_version}, {"arch", r.arch}}},
       {"cpu", json::Object{{"name", r.cpu},

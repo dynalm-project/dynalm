@@ -202,8 +202,17 @@ void test_matmul(Env& e) {
       expect_close("matmul", host_rows(yc), e.download(yg), 1e-2);
     }
   }
-  // ggml-cpu repacks the K-quant weights it has interleaved kernels for.
-  if (e.gpu->device().type == DeviceType::kCpu) CHECK(e.gpu->prepack_stats().tensors > 0);
+  // ggml-cpu repacks the weights it has interleaved kernels for. ggml builds
+  // those for x86-64 (AVX2) and for ARM64 only with the dot-product extension
+  // at compile time (ggml_cpu_has_dotprod is a compile-time check): Apple
+  // Silicon targets have it, the portable Linux / Windows ARM64 target
+  // (armv8.0) does not, and there nothing is repacked.
+#if defined(__x86_64__) || defined(_M_X64) || defined(__ARM_FEATURE_DOTPROD)
+  constexpr bool kRepackBuilt = true;
+#else
+  constexpr bool kRepackBuilt = false;
+#endif
+  if (e.gpu->device().type == DeviceType::kCpu) CHECK((e.gpu->prepack_stats().tensors > 0) == kRepackBuilt);
   std::printf("  matmul: f32 f16 q8_0 q4_K q6_K iq4_nl iq4_xs, M 1/5/33, strided x, bias; again prepacked (%lld repacked)\n",
               static_cast<long long>(e.gpu->prepack_stats().tensors));
 }

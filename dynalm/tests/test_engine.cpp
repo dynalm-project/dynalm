@@ -55,6 +55,13 @@ int g_checks = 0;
   } while (0)
 
 std::string g_model;
+// ggml's CPU kernels are built in AND this CPU runs them (x86-64: AVX2, FMA,
+// F16C); a build without them, or e.g. Rosetta without AVX, uses the native CPU.
+bool ggml_cpu_usable() {
+  static const bool usable = dynacore::ggml_gpu_compiled(dynacore::DeviceType::kCpu) &&
+                             dynacore::create_ggml_gpu_device(dynacore::DeviceType::kCpu).ok();
+  return usable;
+}
 
 std::unique_ptr<Engine> make_engine(DeviceKind dev, bool prefix_cache = true, int32_t solo = -1, bool trace = false) {
   EngineOptions o;
@@ -455,7 +462,7 @@ void test_device_selection(const std::string& dir, bool gpu_usable, DeviceKind g
       auto e = Engine::create(c);
       CHECK(e.ok());
       const bool ggml = (*e)->backend_name().find("ggml-CPU") != std::string::npos;
-      CHECK(ggml == (std::string_view(choice) == "cpu" && dynacore::ggml_gpu_compiled(dynacore::DeviceType::kCpu)));
+      CHECK(ggml == (std::string_view(choice) == "cpu" && ggml_cpu_usable()));
       const Out a = gen(**e, kPrompts[0], 8), b = gen(**e, kPrompts[0], 8);
       CHECK(a.finish == StreamFinish::kLength && a.tokens == 8 && a.text == b.text);
     }
@@ -706,6 +713,7 @@ void test_doctor(const std::filesystem::path& dir) {
   CHECK(!r.device.empty() && r.autotune_entries == 0 && r.autotune_enabled);
   CHECK(r.autotune_status.find("no tuning cache") != std::string::npos);
   CHECK(r.ggml_cpu == dynacore::ggml_gpu_compiled(dynacore::DeviceType::kCpu));
+  CHECK(r.ggml_cpu_usable == ggml_cpu_usable());
   // A GPU backend with a device is what --backend auto names first.
   for (const DoctorReport::GpuBackend& g : r.gpu_backends) {
     if (!g.devices.empty()) CHECK(r.device.find(g.provider + " GPU") == 0);
@@ -775,8 +783,12 @@ int main() {
     test_speculative_batch(DeviceKind::kCpu, /*exact=*/true, other_path);
     std::printf("  speculative decoding with a draft model (BatchDrafter): same text, matching and unrelated drafts\n");
     test_fused_qkv(dir, DeviceKind::kCpu);
-    if (dynacore::ggml_gpu_compiled(dynacore::DeviceType::kCpu)) test_fused_qkv(dir, DeviceKind::kGgmlCpu);
-    std::printf("  fused Q|K|V weights (Phi-3) == separate ones, native and ggml-cpu\n");
+    if (ggml_cpu_usable()) {
+      test_fused_qkv(dir, DeviceKind::kGgmlCpu);
+      std::printf("  fused Q|K|V weights (Phi-3) == separate ones, native and ggml-cpu\n");
+    } else {
+      std::printf("  fused Q|K|V weights (Phi-3) == separate ones, native (ggml-cpu: SKIP, not usable here)\n");
+    }
   }
   bool gpu_usable = false;
   // The GPU under test: the first one built in, or DYNACORE_TEST_GPU.

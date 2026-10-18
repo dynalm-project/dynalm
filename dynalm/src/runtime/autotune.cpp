@@ -289,7 +289,8 @@ std::string autotune_report() {
 
   const dynacore::CpuIsa best = dynacore::select_isa(c.features);
   const dynacore::CpuKernels k = dynacore::make_cpu_kernels(best);
-  const bool ggml_cpu = dynacore::ggml_gpu_compiled(dynacore::DeviceType::kCpu);
+  const bool ggml_built = dynacore::ggml_gpu_compiled(dynacore::DeviceType::kCpu);
+  const bool ggml_cpu = ggml_built && dynacore::ggml_cpu_usable_here();
   r << "CPU kernels\n";
   r << "  DynaCore (native-cpu): " << dynacore::isa_name(best) << " tier; int8 activations (DD-053): "
     << (k.int8_simd ? "SIMD" : "not accelerated (fp32 kernels)");
@@ -298,8 +299,9 @@ std::string autotune_report() {
   }
   r << "; int16 (FFN down, opt-in): " << (k.quantize_act16 != nullptr ? "available" : "not available") << "\n";
   r << "  ggml (cpu, fast path): "
-    << (ggml_cpu ? "built in; repacked int8 GEMM/GEMV, performance cores only by default"
-                 : "not built in (ENABLE_GGML_CPU=OFF)")
+    << (ggml_cpu     ? "built in; int8 activations, performance cores only by default"
+        : ggml_built ? "built in, not usable on this CPU (needs AVX2, FMA, F16C)"
+                     : "not built in (ENABLE_GGML_CPU=OFF)")
     << "\n\n";
 
   r << "Execution modes (--mode)\n";

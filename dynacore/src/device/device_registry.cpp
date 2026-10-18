@@ -77,11 +77,8 @@ Result<std::unique_ptr<Device>> create_device(DeviceKind kind, ThreadPool& pool)
       return Unsupported("the ggml-cpu backend is not built in this version (configure with -DENABLE_GGML_CPU=ON, "
                          "or any GPU backend); use --backend cpu");
     }
-#if defined(__x86_64__) || defined(_M_X64)
     // ggml-cpu is compiled for the AVX2 tier on x86-64 (cmake/Ggml.cmake).
-    const CpuFeatures& f = cpu_info().features;
-    if (!f.avx2 || !f.fma || !f.f16c) return Unsupported("the ggml-cpu backend needs a CPU with AVX2, FMA and F16C");
-#endif
+    if (!ggml_cpu_usable_here()) return Unsupported("the ggml-cpu backend needs a CPU with AVX2, FMA and F16C");
     GgmlDeviceOptions o;
     o.threads = static_cast<int32_t>(pool.size());
     return create_ggml_gpu_device(DeviceType::kCpu, o);

@@ -51,6 +51,9 @@ struct GgmlDeviceOptions {
 // ENABLE_VULKAN, ENABLE_CUDA), or with the one named by `type`.
 bool ggml_gpu_compiled();
 bool ggml_gpu_compiled(DeviceType type);
+// ggml's CPU kernels are built in and this CPU can run them (x86-64: AVX2,
+// FMA and F16C, the tier they are compiled for; any ARM64 CPU).
+bool ggml_cpu_usable_here();
 
 // A GPU of the given provider (kMetal, kVulkan or kCuda) as a DynaCore Device:
 // its first device, or device DYNACORE_GPU_INDEX (0-based) when set.

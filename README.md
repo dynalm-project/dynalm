@@ -350,6 +350,12 @@ plain fp32 CPU kernels, for debugging. `dynalm autotune` shows what each mode ru
   changes are not measured yet.
 - **Windows on ARM:** MSVC builds have neither ggml's CPU kernels nor the ARM dot-product
   kernels, so the CPU runs DynaLM's portable fp32 kernels (correct, slower).
+- **Linux ARM64 packages:** ggml's CPU kernels are built for the baseline ARMv8.0 so they run on
+  every ARM64 CPU, which leaves out their dot-product and repacked kernels (ggml selects those at
+  compile time). DynaLM's own kernels pick dot product at run time. A source build with
+  `-DDYNALM_GGML_NATIVE=ON` gets ggml's fast kernels for that machine.
+- **x86-64 without AVX2** (old CPUs, some emulators): ggml's CPU kernels are not used; DynaLM's
+  portable kernels run instead.
 - **CUDA:** built and unit-tested in CI without a GPU; not measured on NVIDIA hardware by us.
 - **AutoTune tunes the CPU thread count only.** On Windows it cannot read the power and load state,
   so `dynalm autotune --run` stores a result only with `--force`.

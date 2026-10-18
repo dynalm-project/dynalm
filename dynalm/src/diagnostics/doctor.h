@@ -21,7 +21,8 @@ struct DoctorReport {
   std::string dynalm_version, dynacore_version, build_type, compiler;
   std::vector<std::string> compiled_isas;     // "generic", "avx2", ...
   std::vector<std::string> compiled_devices;  // "cpu", "metal", ...
-  bool ggml_cpu = false;                      // ggml's CPU kernels built in (`--backend cpu` uses them)
+  bool ggml_cpu = false;                      // ggml's CPU kernels built in
+  bool ggml_cpu_usable = false;               // ... and this CPU runs them (`--backend cpu` uses them)
   struct GpuBackend {
     std::string provider;              // "metal", "vulkan", "cuda"
     std::vector<std::string> devices;  // as the provider reports them (none: not usable here)

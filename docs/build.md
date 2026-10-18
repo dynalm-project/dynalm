@@ -38,7 +38,7 @@ in this repository.
 | `ENABLE_VULKAN` | OFF | Vulkan GPU backend (AMD, Intel, NVIDIA, Qualcomm; macOS through MoltenVK). Needs the Vulkan headers, loader, `glslc` and SPIRV-Headers. Presets `linux-vulkan`, `msvc-vulkan`, `macos-vulkan` |
 | `ENABLE_CUDA` | OFF | CUDA GPU backend (NVIDIA). Needs the CUDA toolkit; `CMAKE_CUDA_ARCHITECTURES` picks GPU generations. Presets `linux-cuda`, `msvc-cuda` |
 | `ENABLE_GGML_CPU` | ON (OFF with CMake < 3.28 or MSVC on ARM64) | ggml's CPU kernels as the default CPU path (`--cpu`): about 4× faster, llama.cpp-level accuracy. GPU builds always include them. OFF: the CPU uses DynaLM's native kernels only, and no ggml is fetched. On x86-64 they need AVX2, FMA and F16C (otherwise the native kernels run) |
-| `DYNALM_GGML_NATIVE` | OFF | build ggml's CPU kernels for this machine's CPU only (as llama.cpp does by default): faster locally, not portable. Keep OFF for packages |
+| `DYNALM_GGML_NATIVE` | OFF | build ggml's CPU kernels for this machine's CPU only (as llama.cpp does by default): faster locally, not portable. Keep OFF for packages. On Linux / Windows ARM64 the portable build targets ARMv8.0, without ggml's dot-product and repacked kernels (they are chosen at compile time); ON adds them for the build machine |
 | `ENABLE_HIP` | OFF | not implemented (configure error); use `ENABLE_VULKAN` for AMD GPUs |
 
 GPU backends can be combined, and all of them need CMake 3.28 or newer. `--backend auto`

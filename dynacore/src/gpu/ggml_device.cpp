@@ -1,5 +1,7 @@
 #include "ggml_device_internal.h"
 
+#include "dynacore/hardware/cpu_info.h"
+
 #if DYNACORE_HAS_GGML
 
 namespace dynacore {
@@ -338,7 +340,22 @@ std::vector<std::string> ggml_gpu_device_names(DeviceType type) {
   return out;
 }
 
+bool ggml_cpu_usable_here() {
+#if defined(__x86_64__) || defined(_M_X64)
+  const CpuFeatures& f = cpu_info().features;
+  return f.avx2 && f.fma && f.f16c;
+#else
+  return true;
+#endif
+}
+
 Result<std::unique_ptr<Device>> create_ggml_gpu_device(DeviceType type, const GgmlDeviceOptions& opts) {
+  // ggml-cpu is compiled for the AVX2 tier on x86-64 (cmake/Ggml.cmake): on a
+  // CPU without it the first graph would die of SIGILL. Every caller (the
+  // device registry, tests, benchmarks) gets a clean refusal instead.
+  if (type == DeviceType::kCpu && !ggml_cpu_usable_here()) {
+    return Unsupported("the ggml-cpu backend needs a CPU with AVX2, FMA and F16C");
+  }
   ggml_backend_reg_t reg = provider_reg(type);
   if (reg == nullptr) return Unsupported("this GPU provider is not built in (ENABLE_METAL / ENABLE_VULKAN / ENABLE_CUDA)");
   const size_t count = ggml_backend_reg_dev_count(reg);
@@ -391,6 +408,8 @@ bool ggml_gpu_compiled(DeviceType) { return false; }
 std::string ggml_revision() { return {}; }
 
 std::vector<std::string> ggml_gpu_device_names(DeviceType) { return {}; }
+
+bool ggml_cpu_usable_here() { return false; }
 
 Result<std::unique_ptr<Device>> create_ggml_gpu_device(DeviceType, const GgmlDeviceOptions&) {
   return Unsupported("this build has no GPU backend (configure with -DENABLE_METAL, -DENABLE_VULKAN or -DENABLE_CUDA)");
