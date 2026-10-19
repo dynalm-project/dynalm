@@ -185,17 +185,17 @@ Result<ExecutionMode> parse_execution_mode(std::string_view s) {
 }
 
 Status apply_backend_choice(std::string_view choice, EngineOptions& o) {
+  if (choice == "native-cpu") return InvalidArgument(std::string(kNativeCpuRetired));  // `o` unchanged
   o.backend_auto = choice == "auto" || choice == "gpu";
   o.backend_require_gpu = choice == "gpu";
   o.cpu_ggml = choice == "auto" || choice == "cpu";
-  if (o.backend_auto || choice == "native-cpu") {
+  if (o.backend_auto) {
     o.backend = DeviceKind::kCpu;
     return Status::Ok();
   }
   auto k = parse_device_kind(choice);
   if (!k.ok()) {
-    return InvalidArgument("unknown backend '" + std::string(choice) +
-                           "' (auto, gpu, cpu, native-cpu, ggml-cpu, metal, vulkan, cuda)");
+    return InvalidArgument("unknown backend '" + std::string(choice) + "' (auto, gpu, cpu, ggml-cpu, metal, vulkan, cuda)");
   }
   o.backend = *k;
   return Status::Ok();

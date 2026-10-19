@@ -95,7 +95,7 @@ int cmd_version() {
   std::printf("devices:  %s%s\n", devices.c_str(),
               devices == "cpu" ? " (GPU: build with -DENABLE_METAL, -DENABLE_VULKAN or -DENABLE_CUDA)" : "");
   std::printf("cpu path: %s\n", dynacore::ggml_gpu_compiled(dynacore::DeviceType::kCpu)
-                                     ? "ggml kernels (fast, llama.cpp-level accuracy); --backend native-cpu: DD-053"
+                                     ? "ggml kernels (fast, llama.cpp-level accuracy); --mode exact: DD-053"
                                      : "native kernels (built without ENABLE_GGML_CPU)");
   return 0;
 }

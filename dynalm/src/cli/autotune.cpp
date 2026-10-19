@@ -37,7 +37,8 @@ void usage() {
                "  (no option)        show the hardware, kernels, modes and tuned settings\n"
                "  --run MODEL        measure decode speed at a few CPU thread counts and store the\n"
                "                     fastest for this model, device, machine and build\n"
-               "  --backend B        device to tune with --run: cpu (default) | native-cpu | ggml-cpu\n"
+               "  --backend B        device to tune with --run: cpu (default) | ggml-cpu\n"
+               "  --mode exact       tune exact mode's CPU kernels (DD-053) instead\n"
                "  --budget S         stop trying thread counts after about S seconds (default 120)\n"
                "  --tokens N         tokens generated per measurement (default 64)\n"
                "  --force            store the result even when the machine was not quiet\n"
@@ -130,7 +131,7 @@ double measure_decode(Engine& e, int tokens) {
   return ms > 0 ? (ev.completion_tokens - 1) * 1e3 / ms : -1;
 }
 
-int cmd_autotune_run(std::string path, const std::string& backend, int budget_s, int tokens, bool force) {
+int cmd_autotune_run(std::string path, const std::string& backend, TuneMode mode, int budget_s, int tokens, bool force) {
   if (auto resolved = ensure_model(path, true); resolved.ok()) {
     path = *resolved;
   } else {
@@ -138,9 +139,11 @@ int cmd_autotune_run(std::string path, const std::string& backend, int budget_s,
     return 1;
   }
   EngineOptions base;
-  if (Status st = apply_backend_choice(backend, base); !st.ok()) {
-    std::fprintf(stderr, "autotune: %s\n", st.message().c_str());
-    return 1;
+  for (Status st : {apply_backend_choice(backend, base), apply_tune_mode(mode, base)}) {
+    if (!st.ok()) {
+      std::fprintf(stderr, "autotune: %s\n", st.message().c_str());
+      return 1;
+    }
   }
   base.model_path = path;
   base.kv_tokens = 1024;
@@ -245,6 +248,7 @@ int cmd_autotune_run(std::string path, const std::string& backend, int budget_s,
 
 int cmd_autotune(std::span<const std::string_view> args) {
   std::string model, backend = "cpu";
+  TuneMode mode = TuneMode::kAuto;
   int budget_s = 120, tokens = 64;
   bool run = false, clear = false, force = false;
   for (size_t i = 0; i < args.size(); ++i) {
@@ -253,6 +257,11 @@ int cmd_autotune(std::span<const std::string_view> args) {
     bool ok = true;
     if (a == "--run") ok = !(model = std::string(value())).empty(), run = true;
     else if (a == "--backend") ok = !(backend = std::string(value())).empty();
+    else if (a == "--mode") {
+      auto m = parse_tune_mode(value());
+      ok = m.ok() && (*m == TuneMode::kAuto || *m == TuneMode::kExact);
+      if (ok) mode = *m;
+    }
     else if (a == "--budget") ok = parse_int(value(), budget_s) && budget_s > 0;
     else if (a == "--tokens") ok = parse_int(value(), tokens) && tokens >= 8;
     else if (a == "--force") force = true;
@@ -282,7 +291,7 @@ int cmd_autotune(std::span<const std::string_view> args) {
     std::printf("%s %s\n", removed ? "Removed" : "No tuning cache at", p.c_str());
     return 0;
   }
-  if (run) return cmd_autotune_run(model, backend, budget_s, tokens, force);
+  if (run) return cmd_autotune_run(model, backend, mode, budget_s, tokens, force);
   std::printf("%s", autotune_report().c_str());
   return 0;
 }

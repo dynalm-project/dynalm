@@ -68,7 +68,7 @@ struct EngineOptions {
   // (DeviceKind::kGgmlCpu: 8-bit activations, llama.cpp-level accuracy, ~4x
   // faster) when this build has them and the model runs there; else, or if
   // that device fails to start, DynaCore's native kernels (DD-053). The
-  // CLI sets it for `cpu` and `auto`; `native-cpu` clears it.
+  // CLI sets it for `cpu` and `auto`; --mode exact and safe clear it.
   bool cpu_ggml = false;
   // Speculative decoding with a draft model (SchedulerConfig::spec_k > 0): a
   // small GGUF sharing the target's vocabulary, run on the same device with
@@ -91,9 +91,18 @@ struct EngineOptions {
 // Applies a device choice from --backend / --cpu / --gpu, `runtime.device` or
 // DYNALM_BACKEND to `o`: "auto" (a GPU when one runs the model, else the
 // CPU), "gpu" (any built-in GPU, never the CPU), "cpu" (ggml's CPU kernels
-// when available, see cpu_ggml), "native-cpu" (DynaCore's CPU kernels, DD-053),
-// "ggml-cpu" (ggml's, no fallback), or a named GPU ("metal", "vulkan", "cuda").
+// when available, see cpu_ggml), "ggml-cpu" (ggml's, no fallback), or a named
+// GPU ("metal", "vulkan", "cuda"). "native-cpu" is not a public backend in
+// this release (kNativeCpuRetired): DynaCore's CPU kernels run only through
+// --mode exact / safe and as the CPU fallback (cpu_ggml).
 Status apply_backend_choice(std::string_view choice, EngineOptions& o);
+
+// The error for `--backend native-cpu` (and `runtime.device: native-cpu` in a
+// config file written for an earlier version). Never a silent redirect.
+inline constexpr std::string_view kNativeCpuRetired =
+    "backend 'native-cpu' is not included in this release; use --backend cpu (fast CPU kernels) or "
+    "--mode exact (DD-053 accuracy, DynaCore's CPU kernels). In a config file, set runtime.device: cpu "
+    "and runtime.mode: exact";
 
 // Solo-prefill chunk on GPU devices when none is configured
 // (SchedulerConfig::solo_prefill_chunk == -1). Chosen by measurement on the

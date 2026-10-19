@@ -25,7 +25,7 @@ model:
   path: qwen3:4b             # model for `dynalm serve` / `dynalm run` when none is given
 
 runtime:
-  device: auto               # auto (a built-in GPU that runs the model, else CPU) | cpu | native-cpu | metal | vulkan | cuda
+  device: auto               # auto (a built-in GPU that runs the model, else CPU) | cpu | ggml-cpu | metal | vulkan | cuda
   threads: auto              # auto = physical cores
   context_length: 8192       # KV cache tokens; auto = sized from free RAM
   batch_tokens: 256          # max tokens per forward pass
@@ -50,6 +50,10 @@ server:
   shutdown_timeout: 30       # seconds of draining on stop
   admin: true                # POST /admin/shutdown (used by `dynalm stop`)
 ```
+
+`runtime.device: native-cpu`, from a configuration written for an earlier version, stops with
+an error: it is not a backend in this release. For DD-053 accuracy on the CPU, set
+`runtime.device: cpu` and `runtime.mode: exact` (the same kernels).
 
 The file is a **strict YAML subset**, parsed by about 150 lines of code with no YAML
 library (DD-070):

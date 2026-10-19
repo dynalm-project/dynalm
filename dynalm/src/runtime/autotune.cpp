@@ -292,7 +292,7 @@ std::string autotune_report() {
   const bool ggml_built = dynacore::ggml_gpu_compiled(dynacore::DeviceType::kCpu);
   const bool ggml_cpu = ggml_built && dynacore::ggml_cpu_usable_here();
   r << "CPU kernels\n";
-  r << "  DynaCore (native-cpu): " << dynacore::isa_name(best) << " tier; int8 activations (DD-053): "
+  r << "  DynaCore (--mode exact): " << dynacore::isa_name(best) << " tier; int8 activations (DD-053): "
     << (k.int8_simd ? "SIMD" : "not accelerated (fp32 kernels)");
   if (best == dynacore::CpuIsa::kNeon) {
     r << (c.features.arm_dotprod ? " [SDOT]" : " [this CPU has no dot-product instructions]");

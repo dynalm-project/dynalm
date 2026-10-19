@@ -64,7 +64,7 @@ void usage() {
                "  --policy P            balanced | latency | throughput (in-process, DD-061)\n"
                "  --execution MODE      reference (default) | compiled (in-process; DD-072)\n"
                "  --gpu / --cpu         in-process device (default auto: GPU first, else CPU)\n"
-               "  --backend B           auto | gpu | cpu | native-cpu | metal | vulkan | cuda (in-process)\n"
+               "  --backend B           auto | gpu | cpu | ggml-cpu | metal | vulkan | cuda (in-process)\n"
                "  --mode M              auto | performance | exact | safe (in-process; see dynalm autotune)\n"
                "  --out FILE            append JSON lines (one per point)\n"
                "  --no-diag             skip the bandwidth probe and per-point diagnostics\n");
@@ -156,7 +156,10 @@ int cmd_benchmark(std::span<const std::string_view> args) {
       ok = x.ok();
       if (ok) execution = *x;
     } else if (a == "--backend") {
-      ok = apply_backend_choice(value(), device).ok();
+      if (Status st = apply_backend_choice(value(), device); !st.ok()) {
+        std::fprintf(stderr, "benchmark: %s\n", st.message().c_str());
+        ok = false;
+      }
     } else if (a == "--cpu" || a == "--gpu") {
       (void)apply_backend_choice(a.substr(2), device);
     } else if (a == "--mode") {

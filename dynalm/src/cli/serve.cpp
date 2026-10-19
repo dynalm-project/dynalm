@@ -63,8 +63,7 @@ void usage() {
                "  --spec-k K              most drafted tokens per stream and step (default 4)\n"
                "  --gpu                   use the GPU (the default when it can run the model)\n"
                "  --cpu                   use the CPU\n"
-               "  --backend B             auto (default: GPU first, else CPU) | gpu | cpu | metal | vulkan | cuda\n"
-               "                          | native-cpu (DynaCore CPU kernels, DD-053; cpu = fast ggml kernels when built)\n"
+               "  --backend B             auto (default: GPU first, else CPU) | gpu | cpu | ggml-cpu | metal | vulkan | cuda\n"
                "  --mode M                auto (default) | performance | exact (DD-053 accuracy everywhere)\n"
                "                          | safe (fp32 CPU reference kernels); see dynalm autotune\n"
                "  --execution MODE        reference (default) | compiled: DynaCore IR + fusion (DD-072)\n"
@@ -148,7 +147,10 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
     else if (a == "--api-key-file") api_key_file = value();
     else if (a == "--allow-unauthenticated") allow_unauthenticated = true;
     else if (a == "--backend") {
-      ok = apply_backend_choice(value(), eo).ok();
+      if (Status st = apply_backend_choice(value(), eo); !st.ok()) {
+        std::fprintf(stderr, "serve: %s\n", st.message().c_str());
+        ok = false;
+      }
     } else if (a == "--cpu" || a == "--gpu") {
       (void)apply_backend_choice(a.substr(2), eo);  // shorthands for --backend cpu / gpu
     } else if (a == "--mode") {

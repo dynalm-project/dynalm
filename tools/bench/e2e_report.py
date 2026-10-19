@@ -114,7 +114,7 @@ def matrix_section(out: Path) -> tuple[list[str], list[str]]:
     L += ["", "### Every model", "",
           "Tokens/s from `dynalm benchmark` in-process (one user: prompt = 512 / TTFT, decode = 1000 / ITL p50) and "
           "`llama-bench` (pp512, tg128), on the same file; ratio = DynaLM ÷ llama.cpp. \"= exact\": the 32-token greedy "
-          "answer equals the native (DD-053) CPU path's (reported, not gated).", "",
+          "answer equals the exact-mode (DD-053) CPU path's (reported, not gated).", "",
           "| Provider | Model | Format / quant | GB | GPU | = exact | DD-053 | GPU prompt (llama, ratio) | GPU decode (llama, ratio) | "
           "CPU prompt (llama, ratio) | CPU decode (llama, ratio) | Exact CPU prompt (llama, ratio) | "
           "Exact CPU decode (llama, ratio) | 4 users GPU / CPU / exact | Conditions |",

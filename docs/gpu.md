@@ -59,7 +59,7 @@ The same flags work with `dynalm serve` and `dynalm benchmark`. The log shows th
 ```
 Device: compiled/Metal/<your GPU>     <- GPU
 Device: compiled/ggml-CPU/<your CPU>  <- CPU (fast kernels)
-Device: CPU/neon                      <- CPU (exact kernels, --backend native-cpu)
+Device: CPU/neon                      <- CPU (exact kernels, --mode exact)
 ```
 
 **Check what your copy supports:** `dynalm --version` lists `devices: cpu metal` (or
@@ -129,9 +129,9 @@ You can switch on more than one GPU type in the same build.
 | (nothing) or `--backend auto` | GPU first; the CPU when the GPU can't run the model (the log says why) |
 | `--gpu` or `--backend gpu` | Always a GPU; stops with a clear message if none can run the model |
 | `--cpu` or `--backend cpu` | Always the CPU, with the fast kernels (llama.cpp-level accuracy) |
-| `--backend native-cpu` | The CPU with DynaLM's own kernels (slower, strict DD-053 accuracy) |
 | `--backend metal` / `vulkan` / `cuda` | That GPU only |
-| `--backend ggml-cpu` | The fast CPU kernels, with no fallback (`cpu` falls back to `native-cpu` for models they cannot run) |
+| `--backend ggml-cpu` | The fast CPU kernels, with no fallback (`cpu` falls back to DynaLM's own CPU kernels for models they cannot run) |
+| `--mode exact` | Strict DD-053 accuracy: on the CPU, DynaLM's own kernels (slower). `--backend native-cpu` is not part of this release |
 
 **Other ways to set it:**
 - **Config file** (`~/.dynalm/config.yaml`):

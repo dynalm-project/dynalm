@@ -44,11 +44,10 @@ void usage() {
                "  -c, --ctx N           KV cache capacity in tokens (default 4096)\n"
                "  --batch N             max tokens per forward pass (default 256)\n"
                "  --kv f16|f32|q8_0     KV cache dtype (default f16; q8_0 halves its memory)\n"
-               "  --int8-decode N       native CPU: int8 activations for matmuls of <= N rows (default 4, 64 on ARM; 0 = off)\n"
+               "  --int8-decode N       --mode exact on the CPU: int8 activations for matmuls of <= N rows (default 4, 64 on ARM; 0 = off)\n"
                "  --gpu                 use the GPU (the default when it can run the model)\n"
                "  --cpu                 use the CPU\n"
-               "  --backend B           auto (default: GPU first, else CPU) | gpu | cpu | metal | vulkan | cuda\n"
-               "                        | native-cpu (DynaCore CPU kernels, DD-053; cpu = fast ggml kernels when built)\n"
+               "  --backend B           auto (default: GPU first, else CPU) | gpu | cpu | ggml-cpu | metal | vulkan | cuda\n"
                "  --mode M              auto (default) | performance | exact (DD-053 accuracy everywhere)\n"
                "                        | safe (fp32 CPU reference kernels); see dynalm autotune\n"
                "  --execution MODE      reference (default) | compiled: DynaCore IR + fusion (DD-072)\n"
@@ -251,7 +250,10 @@ int cmd_run(std::span<const std::string_view> raw_args) {
       params.sampling.has_seed = true;
     }
     else if (a == "--backend") {
-      ok = apply_backend_choice(value(), opts).ok();
+      if (Status st = apply_backend_choice(value(), opts); !st.ok()) {
+        std::fprintf(stderr, "run: %s\n", st.message().c_str());
+        ok = false;
+      }
     } else if (a == "--cpu" || a == "--gpu") {
       (void)apply_backend_choice(a.substr(2), opts);  // shorthands for --backend cpu / gpu
     } else if (a == "--mode") {

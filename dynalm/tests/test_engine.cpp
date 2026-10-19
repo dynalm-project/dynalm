@@ -304,7 +304,7 @@ void test_device_plan() {
   CHECK((p.candidates == std::vector<K>{K::kMetal}) && !p.native_cpu_last);
   CHECK(plan_devices(dense, gpu, none, true).error.code() == StatusCode::kUnsupported);
   CHECK(plan_devices(moe, gpu, std::vector<K>{K::kCpu, K::kCuda}, true).error.code() == StatusCode::kUnsupported);
-  // cpu: ggml kernels when built and able; native-cpu: native only; a named device: exactly it.
+  // cpu: ggml kernels when built and able; exact (cpu_ggml off): native only; a named device: exactly it.
   DeviceRequest cpu;
   cpu.cpu_ggml = true;
   CHECK((plan_devices(dense, cpu, metal, true).candidates == std::vector<K>{K::kGgmlCpu}));
@@ -494,21 +494,30 @@ void test_device_selection(const std::string& dir, bool gpu_usable, DeviceKind g
     CHECK(apply_backend_choice("auto", o).ok() && o.backend_auto && !o.backend_require_gpu);
     CHECK(apply_backend_choice("metal", o).ok() && !o.backend_auto && o.backend == DeviceKind::kMetal);
     CHECK(!apply_backend_choice("tpu", o).ok());
-    // cpu: ggml's CPU kernels when built in; native-cpu: DynaCore's fp32 kernels.
+    // cpu: ggml's CPU kernels when built in. native-cpu is not a public backend in this
+    // release: a clear error (the same for a config file's runtime.device), never a redirect.
     CHECK(apply_backend_choice("cpu", o).ok() && o.cpu_ggml && o.backend == DeviceKind::kCpu);
-    CHECK(apply_backend_choice("native-cpu", o).ok() && !o.cpu_ggml && o.backend == DeviceKind::kCpu);
+    {
+      EngineOptions before = o;
+      const Status st = apply_backend_choice("native-cpu", o);
+      CHECK(!st.ok() && st.message().find("not included in this release") != std::string::npos &&
+            st.message().find("--mode exact") != std::string::npos);
+      CHECK(o.backend == before.backend && o.backend_auto == before.backend_auto && o.cpu_ggml == before.cpu_ggml);
+    }
     CHECK(apply_backend_choice("auto", o).ok() && o.cpu_ggml);
     CHECK(apply_backend_choice("ggml-cpu", o).ok() && o.backend == DeviceKind::kGgmlCpu);
-    for (const char* choice : {"cpu", "native-cpu"}) {
+    // cpu, and cpu with --mode exact (DynaCore's kernels, DD-053).
+    for (const bool exact : {false, true}) {
       EngineOptions c;
       c.model_path = qwen3;
       c.threads = 2;
       c.kv_tokens = 512;
-      CHECK(apply_backend_choice(choice, c).ok());
+      CHECK(apply_backend_choice("cpu", c).ok());
+      CHECK(apply_tune_mode(exact ? TuneMode::kExact : TuneMode::kAuto, c).ok());
       auto e = Engine::create(c);
       CHECK(e.ok());
       const bool ggml = (*e)->backend_name().find("ggml-CPU") != std::string::npos;
-      CHECK(ggml == (std::string_view(choice) == "cpu" && ggml_cpu_usable()));
+      CHECK(ggml == (!exact && ggml_cpu_usable()));
       const Out a = gen(**e, kPrompts[0], 8), b = gen(**e, kPrompts[0], 8);
       CHECK(a.finish == StreamFinish::kLength && a.tokens == 8 && a.text == b.text);
     }
@@ -567,8 +576,8 @@ void test_autotune(const std::filesystem::path& dir) {
     CHECK(apply_backend_choice("gpu", gpu).ok());
     CHECK(!apply_tune_mode(TuneMode::kSafe, gpu).ok());  // --gpu is never silently replaced by the CPU
     CHECK(apply_tune_mode(TuneMode::kExact, gpu).ok() && gpu.backend_require_gpu);
-    EngineOptions n;
-    CHECK(apply_backend_choice("native-cpu", n).ok());
+    EngineOptions n;  // exact on the CPU: DynaCore's kernels, never ggml's
+    CHECK(apply_backend_choice("cpu", n).ok());
     CHECK(apply_tune_mode(TuneMode::kExact, n).ok() && n.backend == DeviceKind::kCpu && !n.cpu_ggml);
   }
 
@@ -872,7 +881,7 @@ int main() {
   CHECK(test::write_file(g_model, test::tiny_model_gguf()));
   int rc = 0;
   test_device_plan();
-  std::printf("device plan: auto / --gpu / cpu / native-cpu / named, per model and build\n");
+  std::printf("device plan: auto / --gpu / cpu / exact / named, per model and build\n");
   test_predictive_mixed_budget();
   test_memory_admission();
   // Isolated from the user's tuning cache (~/.dynalm/autotune.json).

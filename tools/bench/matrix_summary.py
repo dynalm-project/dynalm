@@ -43,8 +43,8 @@ def main() -> int:
           f"{sum(r['format'] == 'safetensors' for r in rows)} safetensors)",
           "- **Check:** " + ", ".join(f"{k} {v}" for k, v in by_status.most_common()),
           f"- **Generated:** {len(ran)}. auto ok {sum(ok(r, 'auto') for r in ran)} (on a GPU {len(gpu)}), "
-          f"cpu ok {sum(ok(r, 'cpu') for r in ran)}, native-cpu ok {sum(ok(r, 'native') for r in ran)}",
-          f"- **Same text as native-cpu** (greedy; reported, not gated): auto "
+          f"cpu ok {sum(ok(r, 'cpu') for r in ran)}, exact ok {sum(ok(r, 'native') for r in ran)}",
+          f"- **Same text as exact mode** (greedy; reported, not gated): auto "
           f"{sum(r['auto_matches_native'] == 'yes' for r in ran)}, cpu {sum(r['cpu_matches_native'] == 'yes' for r in ran)}"]
     acc = [r for r in rows if r["accuracy"] != "-"]
     if acc:
@@ -53,14 +53,14 @@ def main() -> int:
     fails = [r for r in rows if r["supported"] != "yes" or "fail" in (r["auto"], r["cpu"], r["native"])
              or "timeout" in (r["auto"], r["cpu"], r["native"])]
     if fails:
-        L += ["## Needs attention", "", "| # | Model | Format | Check | auto | cpu | native-cpu |", "|---|---|---|---|---|---|---|"]
+        L += ["## Needs attention", "", "| # | Model | Format | Check | auto | cpu | exact |", "|---|---|---|---|---|---|---|"]
         for r in fails:
             L.append(f"| {r['n']} | `{r['model']}` | {r['format']} | {r['supported']} | {r['auto']} | {r['cpu']} | {r['native']} |")
-        L += ["", "Reasons: `logs/<n>-check.log`, `<n>-auto.log`, `<n>-cpu.log`, `<n>-native-cpu.log`. "
+        L += ["", "Reasons: `logs/<n>-check.log`, `<n>-auto.log`, `<n>-cpu.log`, `<n>-exact.log`. "
               "`no (<arch>)`: architecture not supported; `link-error`: missing file or wrong link; "
               "`gated`: needs HF_TOKEN with the license accepted; `too-large`: above --max-gb.", ""]
     L += ["## Support", "",
-          "| # | Model | Format | Arch | Quant | GB | auto: device, tok/s | cpu: device, tok/s | native-cpu tok/s | auto = native | cpu = native | DD-053 |",
+          "| # | Model | Format | Arch | Quant | GB | auto: device, tok/s | cpu: device, tok/s | exact tok/s | auto = exact | cpu = exact | DD-053 |",
           "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in rows:
         L.append(f"| {r['n']} | `{r['model']}` | {r['format']} | {r['arch']} | {r['quant']} | {r['size_gb']} | "

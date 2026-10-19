@@ -28,7 +28,7 @@ if(ENABLE_HIP)
 endif()
 # ggml's CPU kernels: the default CPU path (`--cpu`, and `auto` without a GPU),
 # with 8-bit activations as in llama.cpp (llama.cpp-level accuracy, ~4x the
-# speed of the native kernels). `--backend native-cpu` keeps DynaCore's own
+# speed of the native kernels). `--mode exact` keeps DynaCore's own
 # kernels (DD-053). Always part of a GPU build. Default ON where ggml's CPU
 # backend builds: CMake >= 3.28, and not MSVC on ARM64 (ggml needs clang there).
 set(_ggml_cpu_default ON)

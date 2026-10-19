@@ -25,13 +25,14 @@ Per model:
   2. fetch     `dynalm pull`, or the repo files for hf:.
   3. generate  a fixed chat prompt, greedy, N tokens, with --backend auto (the
                GPU when it runs the model), cpu (ggml's fast CPU kernels) and
-               native-cpu (DynaCore's kernels, DD-053, the reference): device,
-               success, tok/s, and whether each text equals native-cpu's
+               exact (`--backend cpu --mode exact`: DynaCore's kernels, DD-053,
+               the reference): device, success, tok/s, and whether each text
+               equals exact's (the TSV keeps the column names native*)
                (reported, not gated: GPU and 8-bit kernels may choose
                differently at a near-tie).
   4. accuracy  (--accuracy, GGUF on a GPU) bench_gpu_accuracy: DD-053 PASS/FAIL.
   5. bench     (--bench) `dynalm benchmark` in-process on the GPU (if auto used
-               one), cpu (ggml's kernels) and native-cpu (exact mode, DynaLM's
+               one), cpu (ggml's kernels) and exact (`--mode exact`, DynaLM's
                DD-053 kernels; compared with llama.cpp's CPU too): one user (512-token prompt, 64 tokens: prompt tok/s
                = 512 / TTFT p50, decode tok/s = 1000 / ITL p50) and 4 users
                (output tok/s); llama-bench pp512 / tg128 on the GPU (-ngl 99)
@@ -59,6 +60,9 @@ import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+# The runtime paths measured, as dynalm options. "exact" is DynaCore's CPU kernels (DD-053), the
+# reference the other texts are compared with; there is no public native-cpu backend in this release.
+PATHS = {"auto": ["--backend", "auto"], "cpu": ["--backend", "cpu"], "exact": ["--backend", "cpu", "--mode", "exact"]}
 PROMPT = "Write one sentence about the ocean."
 COLS = ["n", "model", "format", "supported", "size_gb", "file", "arch", "quant",
         "auto_device", "auto", "auto_tok_s", "cpu_device", "cpu", "cpu_tok_s", "native", "native_tok_s",
@@ -229,8 +233,8 @@ class Matrix:
     def generate(self, backend: str, model: str, tag: str) -> tuple[str, str, str, Path]:
         """('ok'|'fail'|'timeout', device, tok/s, text file)."""
         txt, log = self.logs / f"{tag}-{backend}.txt", self.logs / f"{tag}-{backend}.log"
-        say(tag, f"generate: --backend {backend}, {self.a.tokens} tokens ...")
-        code = run([self.dynalm, "run", model, "--backend", backend, "-p", PROMPT, "-n", str(self.a.tokens), "--temp", "0",
+        say(tag, f"generate: {' '.join(PATHS[backend])}, {self.a.tokens} tokens ...")
+        code = run([self.dynalm, "run", model, *PATHS[backend], "-p", PROMPT, "-n", str(self.a.tokens), "--temp", "0",
                     "--ctx", "2048"], log, self.timeout, stdout=txt)
         text = log.read_text(errors="replace")
         devs = re.findall(r"Device: (?:compiled/)?([A-Za-z-]+/[^,\n]*)", text)
@@ -271,8 +275,8 @@ class Matrix:
         log = self.logs / f"{tag}-bench-{backend}.log"
         j.unlink(missing_ok=True)
         for c, req in ((1, 3), (4, 8)):
-            say(tag, f"speed: DynaLM --backend {backend}, {c} user(s), 512-token prompt, 64 tokens, {req} requests ...")
-            run([self.dynalm, "benchmark", model, "--backend", backend, "--concurrency", str(c), "--prompt", "512",
+            say(tag, f"speed: DynaLM {' '.join(PATHS[backend])}, {c} user(s), 512-token prompt, 64 tokens, {req} requests ...")
+            run([self.dynalm, "benchmark", model, *PATHS[backend], "--concurrency", str(c), "--prompt", "512",
                  "--output", "64", "--requests", str(req), "--warmup-requests", "1", "--out", str(j)],
                 Path(str(log) + f".c{c}"), 1200)
         rows = [json.loads(l) for l in j.read_text().splitlines() if l.strip()] if j.exists() else []
@@ -369,7 +373,7 @@ class Matrix:
             R["size_gb"] = f"{size / 2**30:.1f}"
         R["auto"], R["auto_device"], R["auto_tok_s"], ta = self.generate("auto", m, tag)
         R["cpu"], R["cpu_device"], R["cpu_tok_s"], tc = self.generate("cpu", m, tag)
-        R["native"], _, R["native_tok_s"], tn = self.generate("native-cpu", m, tag)
+        R["native"], _, R["native_tok_s"], tn = self.generate("exact", m, tag)
         same = lambda x, y: "yes" if x.exists() and y.exists() and x.stat().st_size and x.read_bytes() == y.read_bytes() else "no"
         if R["native"] == "ok":
             R["auto_matches_native"] = same(ta, tn) if R["auto"] == "ok" else "-"
@@ -392,7 +396,7 @@ class Matrix:
             if R["cpu"] == "ok":
                 R["cpu_prompt_tok_s"], R["cpu_decode_tok_s"], R["cpu_4user_tok_s"] = self.dyn_bench("cpu", m, tag)
             if R["native"] == "ok":  # exact mode (--mode exact): DynaLM's own DD-053 CPU kernels
-                R["exact_prompt_tok_s"], R["exact_decode_tok_s"], R["exact_4user_tok_s"] = self.dyn_bench("native-cpu", m, tag)
+                R["exact_prompt_tok_s"], R["exact_decode_tok_s"], R["exact_4user_tok_s"] = self.dyn_bench("exact", m, tag)
             if R["format"] == "gguf":
                 R["llama_gpu_pp512"], R["llama_gpu_tg128"] = self.llama(99, m, tag)
                 R["llama_cpu_pp512"], R["llama_cpu_tg128"] = self.llama(0, m, tag)

@@ -143,7 +143,7 @@ ids, and llama-server's `POST /tokenize` (`"add_special": false`) gives llama.cp
 
 ## Exact-mode CPU kernel coverage (profiling plan)
 
-Exact mode (`--backend native-cpu`) is fast only for weight types with DynaLM int8 row kernels.
+Exact mode (`--mode exact` on the CPU) is fast only for weight types with DynaLM int8 row kernels.
 
 | Weight type | int8 row kernel (DD-053) | fp32 fallback |
 |---|---|---|
@@ -161,7 +161,7 @@ To confirm on one small model before writing kernels (minutes, not a benchmark c
 ```bash
 # which kernel each matmul shape takes, and the time per kernel
 DYNACORE_MATMUL_EXPLAIN=1 DYNACORE_MATMUL_TIMING=1 \
-  dynalm benchmark MODEL.gguf --backend native-cpu --concurrency 1 --prompt 128 --output 32 --requests 2 --no-diag
+  dynalm benchmark MODEL.gguf --backend cpu --mode exact --concurrency 1 --prompt 128 --output 32 --requests 2 --no-diag
 # per (weight type, shape) timings of every matmul path, on the model's real weights
 build/macos-release/dynalm/benchmarks/bench_decode_matmul MODEL.gguf 8 1,4
 ```
@@ -247,11 +247,12 @@ repos also ship a duplicate `consolidated.safetensors`, which is skipped.
    check the size against `--max-gb` (default 16).
 2. **Download.**
 3. **Generate** 32 greedy tokens with `--backend auto` (GPU), `cpu` (fast kernels) and
-   `native-cpu` (exact). Each path's text is compared with `native-cpu`'s (reported, not gated).
+   `cpu --mode exact` (exact). Each path's text is compared with exact mode's (reported, not gated;
+   the TSV keeps the column names `native*`).
 4. **`--accuracy`:** the DD-053 GPU accuracy check.
 5. **`--bench`:**
    - DynaLM in-process on the GPU, the fast CPU path (`cpu`, ggml's kernels) and exact mode
-     (`native-cpu`, DynaLM's DD-053 kernels): one user (prompt and decode tok/s) and 4 users;
+     (`--mode exact`, DynaLM's DD-053 kernels): one user (prompt and decode tok/s) and 4 users;
    - with `LLAMA_BENCH`, `llama-bench` pp512 / tg128 on the same GGUF (GPU and CPU), with
      DynaLM ÷ llama.cpp ratios;
    - AC power and load are recorded with each.

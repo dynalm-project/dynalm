@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed (compatibility)
+- **`--backend native-cpu` is not part of this release.** It, and `runtime.device: native-cpu` /
+  `DYNALM_BACKEND=native-cpu` from configurations written for earlier versions, now stop with an
+  error that names the replacement; nothing is redirected silently. DD-053 accuracy on the CPU is
+  `--mode exact` (DynaLM's own CPU kernels, unchanged), which also replaces
+  `dynalm autotune --run --backend native-cpu`. The same kernels still serve `--mode safe` and the
+  CPU fallback for models ggml's CPU kernels cannot run.
+
 Performance and compatibility work: CPU int8 kernels, AutoTune, GPU scheduling, model fixes.
 The numbers below were measured on one machine (Apple M4 Pro, macOS); the full end-to-end
 benchmark is still pending. Methods and tools (`tools/bench/ab.sh`, `baseline.sh`, `bench_ppl`):
@@ -9,7 +17,7 @@ docs/benchmarking.md.
 
 ### Added
 - **Exact-mode CPU speed in the model matrix and the end-to-end report:** with `--bench`,
-  `tools/bench/model_matrix.py` also measures `--backend native-cpu` (`--mode exact`, DynaLM's
+  `tools/bench/model_matrix.py` also measures `--backend cpu --mode exact` (DynaLM's
   DD-053 kernels) per model, one user and 4 users, against llama.cpp's CPU (columns
   `exact_prompt_tok_s`, `exact_decode_tok_s`, `exact_4user_tok_s`, appended). `matrix_summary.py`
   and `e2e_report.py` show it and still read older results. Adds about 0.5-1 h to an e2e run.
@@ -28,7 +36,7 @@ docs/benchmarking.md.
     it. A run on battery, under load or thermally limited is not stored (unless `--force`, then
     marked UNRELIABLE). Used only when `--threads` is not given; `DYNALM_AUTOTUNE=0` ignores it;
     `--clear` deletes it.
-- **ARM int8 and int16 kernels for DynaCore's CPU path** (`native-cpu`), with SDOT
+- **ARM int8 and int16 kernels for DynaCore's CPU path** (`--mode exact`), with SDOT
   (`vdotq_s32`) for Q8_0, Q4_0, Q4_K and Q6_K, 1-4 rows (DD-053), and int16 (DD-076, opt-in).
   Before, ARM ran these matmuls in fp32. Tested against an exact reference by `test_int_kernels`.
 - **Runtime ARM feature detection**: dot product, i8mm, fp16, bf16, SVE, SME, read from the OS
@@ -71,7 +79,7 @@ docs/benchmarking.md.
   there is no GPU.
   - **Accuracy is llama.cpp-level, not DD-053.** Qwen2.5-1.5B: mean KL 0.023 against the fp32
     reference; llama.cpp's own CPU is 0.007 against its Metal path.
-  - `--backend native-cpu` keeps DynaLM's exact fp32 kernels.
+  - `--mode exact` keeps DynaLM's own DD-053 kernels.
   - Models the ggml kernels cannot run (MoE, Gemma 3) fall back to the native kernels.
   - Built when CMake >= 3.28 and not MSVC on ARM64 (`-DENABLE_GGML_CPU=OFF` to opt out). On
     x86-64 they need AVX2/FMA/F16C, else the native kernels run.
@@ -132,7 +140,7 @@ docs/benchmarking.md.
     `consolidated.safetensors` had doubled their size.
 - **`tools/bench/model_matrix.sh`:** a correctness sweep over a model list (default
   `tools/bench/models-matrix.txt`: 43 models, 12 architectures, Q2_K to F16 and IQ4_XS, two MoE).
-  - Per model: support check, download, generation on `auto` / `cpu` / `native-cpu` with
+  - Per model: support check, download, generation on `auto` / `cpu` / exact mode with
     cross-path text agreement, and the DD-053 check with `--accuracy`.
   - Downloads are deleted after each row unless `--keep`.
   - `--check-only` validates the whole list in ~2 min: all 43 links resolve, 42 supported,
@@ -150,7 +158,7 @@ docs/benchmarking.md.
 
 ### Changed
 - **DynaLM's ARM64 CPU kernels use int8 activations up to 64 rows** (was 4), so prompts use the
-  SDOT kernels too. M4 Pro, Qwen2.5-1.5B, 401-token prompt on `native-cpu`: 2394 → 1835 ms. The
+  SDOT kernels too. M4 Pro, Qwen2.5-1.5B, 401-token prompt in exact mode: 2394 → 1835 ms. The
   per-row arithmetic is that of decode (DD-053), and prefill chunks of 32 and 64 measure perplexity
   +0.04%, mean KL 0.0012. x86 keeps 4 (the AVX2 crossover). `--int8-decode N` overrides it.
 - **ggml-cpu keeps one worker pool** (`ggml_backend_cpu_set_threadpool`), as llama.cpp does.
@@ -163,7 +171,7 @@ docs/benchmarking.md.
   500 lines); `ggml_device.cpp` runs segments and holds the registry. Behaviour is unchanged:
   the same 569,718 device checks pass.
 - **Device selection is one pure, tested policy** (`runtime/device_select.{h,cpp}`,
-  `plan_devices`). Every combination of request (auto / --gpu / cpu / native-cpu / named),
+  `plan_devices`). Every combination of request (auto / --gpu / cpu / exact / named),
   model and build is unit-tested without a GPU. `Engine::create` opens the planned devices in
   order.
 - **GPU scheduling: the v0.1.7 profile stays the default; a predictive controller is opt-in**
