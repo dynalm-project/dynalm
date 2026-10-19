@@ -65,14 +65,18 @@ def matrix_section(out: Path) -> tuple[list[str], list[str]]:
         rows += list(csv.DictReader(open(tsv), delimiter="\t"))
     if not rows:
         return ["## Models", "", "Not run.", ""], []
+    for r in rows:  # results from before the exact-mode speed columns
+        for k in ("exact_prompt_tok_s", "exact_decode_tok_s", "exact_4user_tok_s"):
+            r.setdefault(k, "-")
     ran = [r for r in rows if r["native"] != "-"]
     summary, L = [], ["## Models: support, accuracy and speed", ""]
     # Per provider.
     L += ["### By provider", "",
           "Speed: medians of the per-model ratios DynaLM ÷ llama.cpp (llama-bench on the same GGUF). "
           "Prompt = prompt tokens/s, decode = generated tokens/s (one user).", "",
-          "| Provider | Models | Ran | GPU ok | CPU ok | Exact CPU ok | DD-053 PASS | GPU prompt | GPU decode | CPU prompt | CPU decode |",
-          "|---|---|---|---|---|---|---|---|---|---|---|"]
+          "| Provider | Models | Ran | GPU ok | CPU ok | Exact CPU ok | DD-053 PASS | GPU prompt | GPU decode | CPU prompt | CPU decode | "
+          "Exact CPU prompt | Exact CPU decode |",
+          "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     provs = sorted({provider(r["model"]) for r in rows})
     for p in provs + ["All"]:
         rs = [r for r in rows if p == "All" or provider(r["model"]) == p]
@@ -83,15 +87,19 @@ def matrix_section(out: Path) -> tuple[list[str], list[str]]:
                  f"{fx(med([ratio(r['gpu_prompt_tok_s'], r['llama_gpu_pp512']) for r in rr]))} | "
                  f"{fx(med([ratio(r['gpu_decode_tok_s'], r['llama_gpu_tg128']) for r in rr]))} | "
                  f"{fx(med([ratio(r['cpu_prompt_tok_s'], r['llama_cpu_pp512']) for r in rr]))} | "
-                 f"{fx(med([ratio(r['cpu_decode_tok_s'], r['llama_cpu_tg128']) for r in rr]))} |")
+                 f"{fx(med([ratio(r['cpu_decode_tok_s'], r['llama_cpu_tg128']) for r in rr]))} | "
+                 f"{fx(med([ratio(r['exact_prompt_tok_s'], r['llama_cpu_pp512']) for r in rr]))} | "
+                 f"{fx(med([ratio(r['exact_decode_tok_s'], r['llama_cpu_tg128']) for r in rr]))} |")
     allr = rows
     gd = med([ratio(r["gpu_decode_tok_s"], r["llama_gpu_tg128"]) for r in ran])
     cd = med([ratio(r["cpu_decode_tok_s"], r["llama_cpu_tg128"]) for r in ran])
+    xd = med([ratio(r["exact_decode_tok_s"], r["llama_cpu_tg128"]) for r in ran])
     summary += [f"- **Models:** {len(allr)} entries; {len(ran)} downloaded and run. On the GPU: {sum(on_gpu(r) for r in ran)}. "
                 f"Fast CPU path: {sum(r['cpu'] == 'ok' for r in ran)}. Exact CPU path: {sum(r['native'] == 'ok' for r in ran)}.",
                 f"- **GPU accuracy (DD-053):** PASS {sum(r['accuracy'].startswith('PASS') for r in ran)} of "
                 f"{sum(r['accuracy'] != '-' for r in ran)} checked.",
-                f"- **Speed vs llama.cpp (median over models, one user):** GPU decode {fx(gd)}, CPU decode {fx(cd)} "
+                f"- **Speed vs llama.cpp (median over models, one user):** GPU decode {fx(gd)}, CPU decode {fx(cd)}, "
+                f"exact-mode CPU decode {fx(xd)} "
                 f"(see Models; short single runs)."]
     # Problems.
     bad = [r for r in rows if r["supported"] != "yes" or "fail" in (r["auto"], r["cpu"], r["native"])
@@ -108,8 +116,9 @@ def matrix_section(out: Path) -> tuple[list[str], list[str]]:
           "`llama-bench` (pp512, tg128), on the same file; ratio = DynaLM ÷ llama.cpp. \"= exact\": the 32-token greedy "
           "answer equals the native (DD-053) CPU path's (reported, not gated).", "",
           "| Provider | Model | Format / quant | GB | GPU | = exact | DD-053 | GPU prompt (llama, ratio) | GPU decode (llama, ratio) | "
-          "CPU prompt (llama, ratio) | CPU decode (llama, ratio) | 4 users GPU / CPU | Conditions |",
-          "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+          "CPU prompt (llama, ratio) | CPU decode (llama, ratio) | Exact CPU prompt (llama, ratio) | "
+          "Exact CPU decode (llama, ratio) | 4 users GPU / CPU / exact | Conditions |",
+          "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in sorted(rows, key=lambda r: (provider(r["model"]), r["model"])):
         if r["native"] == "-":
             continue
@@ -118,7 +127,8 @@ def matrix_section(out: Path) -> tuple[list[str], list[str]]:
                  f"{r['auto_device'] if on_gpu(r) else 'CPU'} | {r['auto_matches_native']}/{r['cpu_matches_native']} | {r['accuracy']} | "
                  f"{cell('gpu_prompt_tok_s', 'llama_gpu_pp512')} | {cell('gpu_decode_tok_s', 'llama_gpu_tg128')} | "
                  f"{cell('cpu_prompt_tok_s', 'llama_cpu_pp512')} | {cell('cpu_decode_tok_s', 'llama_cpu_tg128')} | "
-                 f"{r['gpu_4user_tok_s']} / {r['cpu_4user_tok_s']} | {r['bench_conditions']} |")
+                 f"{cell('exact_prompt_tok_s', 'llama_cpu_pp512')} | {cell('exact_decode_tok_s', 'llama_cpu_tg128')} | "
+                 f"{r['gpu_4user_tok_s']} / {r['cpu_4user_tok_s']} / {r['exact_4user_tok_s']} | {r['bench_conditions']} |")
     L += ["", "`= exact` columns: GPU / fast CPU. `DD-053`: GPU accuracy (perplexity change at decode).", ""]
     return L, summary
 

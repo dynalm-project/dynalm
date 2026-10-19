@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "cli/commands.h"
+#include "loader/gguf/gguf_tokenizer.h"
 #include "loader/gguf/gguf.h"
 #include "loader/model_source.h"
 #include "model/architecture.h"
@@ -217,6 +218,7 @@ int cmd_pull(std::span<const std::string_view> args) {
       in.read(head.data(), static_cast<std::streamsize>(head.size()));
       head.resize(static_cast<size_t>(in.gcount()));
       auto arch = peek_gguf_architecture(std::as_bytes(std::span(head)));
+      const auto peek = peek_gguf_header(std::as_bytes(std::span(head)));
       if (arch.ok()) {
         if (find_architecture(*arch) == nullptr) {
           std::fprintf(stderr, "pull: architecture '%s' is not supported by DynaLM, so this model cannot run\n",
@@ -228,6 +230,20 @@ int cmd_pull(std::span<const std::string_view> args) {
           }
         } else {
           std::printf("architecture %s: supported\n", arch->c_str());
+          // The tokenizer, by the loader's own rule, when its keys are in the header.
+          if (peek.ok() && peek->has_tokenizer_model) {
+            const Status tok = gguf::check_tokenizer_kind(peek->tokenizer_model, peek->tokenizer_pre);
+            if (!tok.ok()) {
+              std::fprintf(stderr, "pull: tokenizer not supported by DynaLM (%s), so this model cannot run\n",
+                           tok.message().c_str());
+              if (check_only || !force) return 1;
+            } else {
+              std::printf("tokenizer %s%s: supported\n", peek->tokenizer_model.c_str(),
+                          peek->has_tokenizer_pre ? (", pre-tokenizer " + peek->tokenizer_pre).c_str() : "");
+            }
+          } else {
+            std::printf("tokenizer: not in the first %zu KiB; it is checked after the download\n", head.size() >> 10);
+          }
           if (check_only) return 0;
         }
       } else if (arch.status().code() == StatusCode::kNotFound && check_only) {

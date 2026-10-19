@@ -27,6 +27,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 #include "api/json.h"
@@ -35,6 +36,9 @@
 #include "dynacore/gpu/ggml_device.h"
 #include "dynacore/hardware/process_stats.h"
 #include "loader/model_loader.h"
+#include "loader/model_source.h"
+#include "loader/gguf/gguf_tokenizer.h"
+#include "loader/gguf/gguf.h"
 #include "runtime/autotune.h"
 #include "tokenizer/pretokenizer.h"
 #include "runtime/engine.h"
@@ -345,6 +349,48 @@ void test_memory_admission() {
   CHECK(check_memory_fit(4 * G, 1 * G, 128 << 10, 24 * G, 6 * G).ok());
   CHECK(check_memory_fit(30 * G, 1 * G, 128 << 10, 24 * G, -1).message().find("does not fit") != std::string::npos);
   CHECK(check_memory_fit(8 * G, 64 * G, 128 << 10, 0, -1).ok());                   // unknown RAM: not checked
+
+  // Working-set cap (Metal): budget = cap - 10% - allocated - weights - workspace reserve.
+  constexpr int64_t M = int64_t{1} << 20;
+  CHECK(device_kv_budget(-1, 0, 4 * G, G) == -1);  // no cap known: no device limit
+  CHECK(device_kv_budget(0, 0, 4 * G, G) == -1);
+  CHECK(device_kv_budget(16 * G, 0, 4 * G, G) == 16 * G / 100 * 90 - 4 * G - G);
+  CHECK(device_kv_budget(16 * G, 2 * G, 4 * G, G) == 16 * G / 100 * 90 - 2 * G - 4 * G - G);  // already allocated
+  CHECK(device_kv_budget(16 * G, 0, 4 * G, 0) == 16 * G / 100 * 90 - 4 * G - kDefaultWorkspaceReserve);  // unknown reserve
+  CHECK(device_kv_budget(8 * G, 0, 7 * G, G) == 0);  // weights alone exceed it: never negative
+  // Llama-2-7B (e2e-20261019-0022, logs/10-bench-auto.log.c1): 3.8 GiB of weights and auto KV
+  // from free RAM to 20,275 MiB in all; Metal's working set on a 24 GB M4 Pro is ~16 GiB.
+  const int64_t budget = device_kv_budget(16 * G, 0, 3891 * M, G);
+  const int64_t per_token = 512 << 10;  // MHA: 32 layers x 4096 x (K + V) x f16
+  const Status oom = check_memory_fit(3891 * M, 20275 * M - 3891 * M, per_token, 24 * G, -1, budget);
+  CHECK(oom.code() == StatusCode::kResourceExhausted);
+  CHECK(oom.message().find("GPU working set") != std::string::npos);
+  CHECK(oom.message().find("--ctx " + std::to_string(budget / per_token / 16 * 16)) != std::string::npos);
+  CHECK(check_memory_fit(3891 * M, budget, per_token, 24 * G, -1, budget).ok());       // exactly at the budget
+  CHECK(!check_memory_fit(3891 * M, budget + 1, per_token, 24 * G, -1, budget).ok());  // one byte over
+  CHECK(check_memory_fit(3891 * M, 64 * G, per_token, 0, -1, -1).ok());                // no cap, unknown RAM
+  CHECK(device_kv_budget(16 * G, 0, 4 * G, G, 512 * M) == 16 * G / 100 * 90 - 4 * G - G - 512 * M);  // scratch, once
+  // Automatic sizing uses the pool's own arithmetic, so admission never refuses it: for every KV
+  // dtype and a few shapes, kv_tokens_within(budget) fits and one more 16-token block does not.
+  for (const auto& [layers, heads, hd] : {std::tuple{32, 32, 128}, std::tuple{28, 2, 128}, std::tuple{26, 1, 256},
+                                          std::tuple{24, 8, 96}}) {
+    ModelConfig mc;
+    mc.num_layers = layers;
+    mc.num_kv_heads = heads;
+    mc.head_dim = mc.head_dim_v = hd;
+    for (DType dt : {DType::kF16, DType::kF32, DType::kQ8_0}) {
+      for (int64_t b : {11 * G + 123457, 3 * G, 777 * M + 5}) {
+        const int64_t t = kv_tokens_within(mc, dt, b);
+        const int64_t bytes = static_cast<int64_t>(kv_geometry_for(mc, dt, 16, t).total_bytes());
+        const int64_t more = static_cast<int64_t>(kv_geometry_for(mc, dt, 16, t + 16).total_bytes());
+        CHECK(t % 16 == 0 && bytes <= b && more > b);
+        CHECK(check_memory_fit(4 * G, bytes, mc.kv_bytes_per_token(dt), 64 * G, -1, b).ok());
+      }
+    }
+    CHECK(kv_tokens_within(mc, DType::kF16, 0) == 0 && kv_tokens_within(mc, DType::kF16, -1) == 0);
+  }
+  // Nothing left for even one 16-token block: says so instead of a --ctx.
+  CHECK(check_memory_fit(7 * G, G, per_token, 24 * G, -1, 0).message().find("does not fit on the GPU") != std::string::npos);
 }
 
 void test_memory_bounded(Engine& e) {
@@ -734,6 +780,91 @@ void test_doctor(const std::filesystem::path& dir) {
   set_env("DYNALM_AUTOTUNE", "");
 }
 
+// Tokenizer-aware support (e2e-20261019-0022: DeepSeek-Coder safetensors was
+// reported supported from its architecture, then failed at its tokenizer):
+// the checks use the loader's own code and say which part fails.
+void test_tokenizer_support(const std::filesystem::path& dir) {
+  // The shared GGUF rule (load and `pull --check`).
+  CHECK(gguf::check_tokenizer_kind("gpt2", "qwen2").ok());
+  CHECK(gguf::check_tokenizer_kind("gpt2", "").ok());  // no pre key: the GPT-2 split
+  CHECK(gguf::check_tokenizer_kind("llama", "").ok());
+  CHECK(!gguf::check_tokenizer_kind("gpt2", "deepseek-coder").ok());
+  CHECK(!gguf::check_tokenizer_kind("rwkv", "").ok());
+
+  // GGUF header peek: architecture and tokenizer keys, and what a short read misses.
+  const std::vector<uint8_t> tiny = test::tiny_model_gguf();
+  auto pk = peek_gguf_header(std::as_bytes(std::span(tiny)));
+  CHECK(pk.ok() && pk->architecture == "qwen2" && pk->tokenizer_model == "gpt2" && pk->tokenizer_pre == "qwen2");
+  auto short_pk = peek_gguf_header(std::as_bytes(std::span(tiny).first(64)));
+  CHECK(short_pk.ok() && !short_pk->has_tokenizer_model);
+  CHECK(peek_gguf_architecture(std::as_bytes(std::span(tiny))).value() == "qwen2");
+
+  // A GGUF with an unknown pre-tokenizer: supported architecture, unsupported tokenizer.
+  test::TinyModelSpec bad;
+  bad.pre = "deepseek-coder";
+  const std::string bad_path = (dir / "tiny-badpre.gguf").string();
+  CHECK(test::write_file(bad_path, test::tiny_model_gguf(bad)));
+  auto bf = gguf::GgufFile::open(bad_path);
+  CHECK(bf.ok());
+  CHECK(gguf_support_status(**bf).find("unsupported tokenizer") == 0);
+  CHECK(!gguf_tokenizer_support(**bf).ok());
+  CHECK(!load_model(bad_path).ok());  // the load agrees with the check
+  auto good = gguf::GgufFile::open(g_model);
+  CHECK(good.ok() && gguf_support_status(**good) == "ok");
+  CHECK(gguf_tokenizer_support(**good).value() == "byte-level BPE, pre-tokenizer qwen2");
+
+  // Hugging Face tokenizer.json variants (config.json + tokenizer.json, no weights).
+  json::Object vocab;
+  const std::vector<std::string> toks = test::byte_tokens();
+  for (size_t i = 0; i < toks.size(); ++i) vocab[toks[i]] = static_cast<double>(i);
+  auto split = [](const std::string& re) {
+    return json::Value(json::Object{{"type", "Split"}, {"pattern", json::Object{{"Regex", re}}}, {"behavior", "Isolated"},
+                                    {"invert", false}});
+  };
+  const json::Value byte_level(json::Object{{"type", "ByteLevel"}, {"add_prefix_space", false}, {"use_regex", false}});
+  auto hf_dir = [&](const std::string& name, const json::Value* pre, const std::string& model_type,
+                    const char* raw = nullptr) {
+    const std::filesystem::path d = dir / name;
+    std::filesystem::create_directories(d);
+    CHECK(write_text((d / "config.json").string(), "{\"model_type\": \"llama\"}"));
+    if (raw != nullptr) {
+      CHECK(write_text((d / "tokenizer.json").string(), raw));
+    } else {
+      json::Object tj{{"model", json::Object{{"type", model_type}, {"vocab", vocab}, {"merges", json::Array{}}}}};
+      if (pre != nullptr) tj["pre_tokenizer"] = *pre;
+      CHECK(write_text((d / "tokenizer.json").string(), json::dump(json::Value(std::move(tj)))));
+    }
+    return d.string();
+  };
+  const std::string qwen2_re =
+      R"((?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+)";
+  const json::Value qwen2(json::Object{{"type", "Sequence"}, {"pretokenizers", json::Array{split(qwen2_re), byte_level}}});
+  auto ok = hf_tokenizer_support(hf_dir("hf-qwen2", &qwen2, "BPE"));
+  CHECK(ok.ok() && ok->find("pre-tokenizer qwen2") != std::string::npos);
+  // DeepSeek-Coder-1.3B's exact pre-tokenizer (huggingface.co/deepseek-ai/deepseek-coder-1.3b-instruct).
+  const json::Value deepseek(json::Object{
+      {"type", "Sequence"},
+      {"pretokenizers", json::Array{split("[\r\n]"), split(R"(\s?\p{L}+)"), split(R"(\s?\p{P}+)"),
+                                    split("[一-龥ࠀ-一가-퟿]+"),
+                                    json::Value(json::Object{{"type", "Digits"}, {"individual_digits", true}}),
+                                    byte_level}}});
+  auto ds = hf_tokenizer_support(hf_dir("hf-deepseek", &deepseek, "BPE"));
+  CHECK(!ds.ok() && ds.status().message().find("Split+Split+Split+Split+Digits+ByteLevel") != std::string::npos);
+  CHECK(!hf_tokenizer_support(hf_dir("hf-malformed", nullptr, "BPE", "{not json")).ok());
+  auto wp = hf_tokenizer_support(hf_dir("hf-wordpiece", &qwen2, "WordPiece"));
+  CHECK(!wp.ok() && wp.status().message().find("BPE only") != std::string::npos);
+  const std::filesystem::path none = dir / "hf-no-tokenizer";
+  std::filesystem::create_directories(none);
+  CHECK(write_text((none / "config.json").string(), "{}"));
+  CHECK(!hf_tokenizer_support(none.string()).ok());
+
+  // The overall verdict: YES only with all three checked and supported.
+  CHECK(support_verdict(true, true, WeightsCheck::kSupported) == "YES");
+  CHECK(support_verdict(true, false, WeightsCheck::kAbsent) == "NO (tokenizer)");
+  CHECK(support_verdict(false, false, WeightsCheck::kUnsupported) == "NO (architecture, tokenizer, weights)");
+  CHECK(support_verdict(true, true, WeightsCheck::kAbsent).find("PARTIAL") == 0);
+}
+
 int main() {
   const auto dir = std::filesystem::temp_directory_path() / ("dynalm-test-" + test::unique_suffix());
   std::filesystem::create_directories(dir);
@@ -751,6 +882,8 @@ int main() {
   test_gpt4o_pretokenizer();
   test_bos_default(dir);
   test_doctor(dir);
+  test_tokenizer_support(dir);
+  std::printf("tokenizer support: shared GGUF rule, header peek, GGUF and HF checks by the load path, verdict\n");
   std::printf("doctor: backends, default device, AutoTune state; text and JSON, no model loaded\n");
   std::printf("BOS default without add_bos_token: Llama 3 pre-tokenizers add it, Qwen2 does not\n");
   std::printf("GPT-4o pre-tokenizer (Phi-4-mini, Llama 4): regex cases\n");

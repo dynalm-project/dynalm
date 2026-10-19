@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "chat_template/chat_template.h"
+#include "loader/gguf/gguf.h"
 #include "dynacore/base/status.h"
 #include "model/architecture.h"
 #include "model_ir/model_config.h"
@@ -36,5 +37,12 @@ struct LoadedModel {
 };
 
 Result<std::unique_ptr<LoadedModel>> load_model(const std::string& path);
+
+// Whether the engine can tokenize for a model, by the load path's own code
+// (the file's tokenizer data, then Tokenizer::create), without its weights.
+// On success, what it is ("byte-level BPE, pre-tokenizer qwen2"); otherwise
+// the load error, e.g. an unsupported pre-tokenizer.
+Result<std::string> gguf_tokenizer_support(const gguf::GgufFile& file);
+Result<std::string> hf_tokenizer_support(const std::string& dir);  // config.json + tokenizer.json (+ optional files)
 
 }  // namespace dynalm

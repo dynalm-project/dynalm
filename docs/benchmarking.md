@@ -59,6 +59,25 @@ kernels ran).
      - it failed, or had errors;
      - any request produced a different number of tokens than requested.
 
+**Sample size and warm-up.** `tools/bench/ab.sh` runs both arms through a discarded warm-up
+round first (`--warmup-rounds 1`, into `DIR/warmup/`, never analyzed), then
+`--sessions 2 --rounds 4` by default: 8 pairs per point, arm order alternated every round. A plan
+with `"require_ci": true` in `reliability` (all plans in `tools/bench/plans/`) also needs the 95%
+bootstrap interval of the median change to clear each gate's threshold, and calls fewer than 4
+pairs INCONCLUSIVE ("too few for a 95% confidence interval"). That only makes PASS stricter.
+
+In `test/results/e2e-20261019-0022` both arms ran ~10% faster in round 1 than in rounds 2–3 (one
+session, 3 rounds, no warm-up), so every GPU reference arm exceeded its 5% spread limit and every
+gate was INCONCLUSIVE. The plan also tested an optimization that was not in the build.
+
+**Plans:**
+- `gpu-regression.json`: the previous release vs the candidate on the GPU. There is no GPU
+  scheduling change between v0.1.7 and this build, so it checks for no regression and single-user
+  equivalence, and claims no improvement.
+- `phase1-gpu.json`: the opt-in predictive GPU scheduler, within one build
+  (`A=B=<build> B_ENV="DYNALM_DECODE_PREDICTIVE=1 DYNALM_DECODE_TARGET=4"`).
+- `phase2-cpu.json`: v0.1.7's native CPU kernels vs the ggml CPU default.
+
 **On a 15 W laptop, expect 2–5% run-to-run variation.** Close other applications, keep the
 power source and plan constant, and leave several minutes between sessions. A result that does
 not clear its plan's reliability limits stays INCONCLUSIVE. Rerun with a new, predeclared
@@ -121,6 +140,55 @@ Phi-4-mini Q4_K_M: llama.cpp 11.4255 on Metal and 11.5078 on CPU. DynaLM: 11.425
 Tokenizers compare the same way: `BENCH_TOKENS=1 bench_ppl MODEL.gguf FILE` prints DynaLM's token
 ids, and llama-server's `POST /tokenize` (`"add_special": false`) gives llama.cpp's.
 
+## Exact-mode CPU kernel coverage (profiling plan)
+
+Exact mode (`--backend native-cpu`) is fast only for weight types with DynaLM int8 row kernels.
+
+| Weight type | int8 row kernel (DD-053) | fp32 fallback |
+|---|---|---|
+| Q8_0, Q4_0, Q4_K, Q6_K | SDOT on ARM (`kernels_neon_dot.cpp`), AVX2 on x86 | NEON / AVX2 `vec_dot` |
+| Q5_0 | generic scalar only (`kernels_generic.cpp`) | NEON `vec_dot` |
+| Q5_K, IQ4_XS, IQ4_NL, Q2_K, Q3_K, Q4_1, Q5_1 | none | generic `vec_dot_chunked`: scalar dequantization of each 256-value chunk, then an fp32 dot |
+
+`test/results/e2e-20261019-0022` matches this table. Exact-mode decode vs llama.cpp's CPU was
+0.43–0.52× on every Q4_K + Q6_K model, but:
+- 0.24× and 0.31× on the two Phi models, the only ones with Q5_K (14–26% of their weight bytes);
+- 0.09× on Llama-3.2-1B IQ4_XS (69% IQ4_XS).
+
+To confirm on one small model before writing kernels (minutes, not a benchmark campaign):
+
+```bash
+# which kernel each matmul shape takes, and the time per kernel
+DYNACORE_MATMUL_EXPLAIN=1 DYNACORE_MATMUL_TIMING=1 \
+  dynalm benchmark MODEL.gguf --backend native-cpu --concurrency 1 --prompt 128 --output 32 --requests 2 --no-diag
+# per (weight type, shape) timings of every matmul path, on the model's real weights
+build/macos-release/dynalm/benchmarks/bench_decode_matmul MODEL.gguf 8 1,4
+```
+
+The `f32_row_dot` lines for `q5_K` / `iq4_xs` give the share of decode time spent in the
+fallback.
+
+**Evidence needed before writing those kernels:**
+1. **The share of decode time:** `DYNACORE_MATMUL_TIMING=1` on Phi-4-mini (Q5_K) and Llama-3.2-1B
+   IQ4_XS shows how much decode time `f32_row_dot` takes on `q5_K` / `iq4_xs` shapes, which bounds
+   the possible gain. The e2e ratios (0.24–0.31× and 0.09× against 0.43–0.52×) suggest it is large.
+   They are single runs, and the timing hasn't been measured yet.
+2. **Per-shape baselines:** `bench_decode_matmul` on those models, M = 1 and 4, kept to compare
+   the new kernel against.
+3. **Correctness:** the new types added to `test_int_kernels.cpp`, which checks against an exact
+   double-precision reference. Q5_0's generic int8 kernel is covered there already (15 cases with
+   Q8_0, Q4_0, Q4_K and Q6_K).
+4. **Accuracy (DD-053):** int8 activations change the arithmetic, so run
+   `bench_int8_accuracy` (perplexity +1% / mean KL 0.0025) on a Phi model (Q5_K) and an IQ4_XS
+   model before enabling them by default.
+5. **End to end:** an `ab.sh` A/B of the same build with and without the new kernel
+   (`B_ENV="DYNACORE_MATMUL_DISABLE=int8_per32"` disables the int8 row kernels; a new kernel gets its
+   own id in `matmul_registry.cpp` and so its own switch), under a predeclared plan with `require_ci`.
+
+**Next step:** SDOT int8 row kernels for Q5_K and IQ4_XS (IQ4: a 16-entry codebook lookup with
+`vqtbl1q_s8` before SDOT, as ggml does), validated by `dynacore/tests/test_int_kernels.cpp`. Add
+the types to its lists; it checks every kernel against an exact reference.
+
 ## Tests of the tools
 
 | command | checks |
@@ -181,7 +249,8 @@ repos also ship a duplicate `consolidated.safetensors`, which is skipped.
    `native-cpu` (exact). Each path's text is compared with `native-cpu`'s (reported, not gated).
 4. **`--accuracy`:** the DD-053 GPU accuracy check.
 5. **`--bench`:**
-   - DynaLM in-process on the GPU and the CPU: one user (prompt and decode tok/s) and 4 users;
+   - DynaLM in-process on the GPU, the fast CPU path (`cpu`, ggml's kernels) and exact mode
+     (`native-cpu`, DynaLM's DD-053 kernels): one user (prompt and decode tok/s) and 4 users;
    - with `LLAMA_BENCH`, `llama-bench` pp512 / tg128 on the same GGUF (GPU and CPU), with
      DynaLM ÷ llama.cpp ratios;
    - AC power and load are recorded with each.
@@ -238,7 +307,8 @@ Phases, run one at a time:
 2. **Model matrix:** `models-e2e-tier1.txt` (27 entries across Qwen, Meta, Google, Microsoft,
    Mistral AI and DeepSeek, quantization types and safetensors), plus `models-providers.txt`
    with `--tier2`. For each model: correctness on GPU / fast CPU / exact CPU, DD-053 GPU
-   accuracy, and speed against llama-bench (GPU and CPU).
+   accuracy, and speed against llama-bench: GPU, fast CPU and exact-mode CPU (both CPU paths
+   against llama.cpp's CPU).
 3. **Engine comparison:** `baseline.sh --quick`, DynaLM / llama.cpp / Ollama servers, 1-16 users,
    GPU and CPU.
 4. **A/B against v0.1.7:** GPU (`plans/phase1-gpu.json`) and CPU (`plans/phase2-cpu.json`).

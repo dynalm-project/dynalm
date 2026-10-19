@@ -5,12 +5,18 @@
 #
 #   A=<baseline dynalm> B=<candidate dynalm> tools/bench/ab.sh --out DIR --model FILE \
 #     [--backend metal] [--conc 1,4,8,16] [--prompt 512] [--output 128] \
-#     [--sessions 2] [--rounds 3] [--workload gpu512]
+#     [--sessions 2] [--rounds 4] [--warmup-rounds 1] [--workload gpu512]
 #   python3 tools/bench_analyze.py tools/bench/plans/phase1-gpu.json DIR/raw --out DIR/report
 #
 # Optional per-arm settings: A_ENV / B_ENV, space-separated NAME=VALUE pairs
 # (e.g. B_ENV="DYNALM_DECODE_TARGET=12 DYNALM_DECODE_PREDICTIVE=0" runs the
 # candidate binary with the earlier GPU scheduling profile).
+#
+# Warm-up: --warmup-rounds N (default 1) runs both arms N times before the
+# measured rounds, into DIR/warmup/ (never DIR/raw/, so bench_analyze.py never
+# sees them). In e2e-20261019-0022 the first round of a session ran ~10%
+# faster for both arms (GPU and CPU), which made every reference arm
+# "unreliable"; the warm-up absorbs that settling.
 #
 # Contamination controls (as tools/bench/baseline.sh): the binaries are copied
 # into DIR/bin and only the copies run; each run waits for AC power, Energy
@@ -25,7 +31,7 @@ B=${B:?B=path to the candidate dynalm binary}
 A_ENV=${A_ENV:-}
 B_ENV=${B_ENV:-}
 MAX_LOAD=${MAX_LOAD:-3}
-OUT=""; MODEL=""; BACKEND=metal; CONC=1,4,8,16; PROMPT=512; OUTPUT=128; SESSIONS=2; ROUNDS=3; WORKLOAD=""
+OUT=""; MODEL=""; BACKEND=metal; CONC=1,4,8,16; PROMPT=512; OUTPUT=128; SESSIONS=2; ROUNDS=4; WARMUP=1; WORKLOAD=""
 die() { echo "error: $*" >&2; exit 1; }
 while (($#)); do
   case $1 in
@@ -37,6 +43,7 @@ while (($#)); do
     --output) OUTPUT=$2; shift ;;
     --sessions) SESSIONS=$2; shift ;;
     --rounds) ROUNDS=$2; shift ;;
+    --warmup-rounds) WARMUP=$2; shift ;;
     --workload) WORKLOAD=$2; shift ;;
     *) die "unknown option $1" ;;
   esac
@@ -48,7 +55,8 @@ done
 WORKLOAD=${WORKLOAD:-$BACKEND$PROMPT}
 [[ $WORKLOAD =~ ^[A-Za-z0-9_.]+$ ]] || die "--workload: letters, digits, '_' and '.' only"
 
-mkdir -p "$OUT/bin" "$OUT/raw"
+[[ $SESSIONS =~ ^[0-9]+$ && $ROUNDS =~ ^[0-9]+$ && $WARMUP =~ ^[0-9]+$ ]] || die "--sessions/--rounds/--warmup-rounds: numbers"
+mkdir -p "$OUT/bin" "$OUT/raw" "$OUT/warmup"
 cp "$A" "$OUT/bin/dynalm-a" && cp "$B" "$OUT/bin/dynalm-b" || die "cannot copy binaries"
 sha() { shasum -a 256 "$1" | cut -c1-64; }
 SHA_A=$(sha "$OUT/bin/dynalm-a"); SHA_B=$(sha "$OUT/bin/dynalm-b")
@@ -61,7 +69,7 @@ SHA_A=$(sha "$OUT/bin/dynalm-a"); SHA_B=$(sha "$OUT/bin/dynalm-b")
     echo "machine: $(uname -m), $(nproc) CPUs"; echo "os: $(uname -sr)"
   fi
   echo "model: $(basename "$MODEL") $(sha "$MODEL" | cut -c1-16)"
-  echo "workload: $WORKLOAD backend $BACKEND conc $CONC prompt $PROMPT output $OUTPUT sessions $SESSIONS rounds $ROUNDS"
+  echo "workload: $WORKLOAD backend $BACKEND conc $CONC prompt $PROMPT output $OUTPUT sessions $SESSIONS rounds $ROUNDS warmup rounds $WARMUP (not analyzed)"
   echo "arm a: $SHA_A env [$A_ENV] $("$OUT/bin/dynalm-a" --version | head -1)"
   echo "arm b: $SHA_B env [$B_ENV] $("$OUT/bin/dynalm-b" --version | head -1)"
 } | tee "$OUT/manifest.txt"
@@ -94,8 +102,8 @@ gate() {
   echo "$(date +%T) $1 start: $state (waited ${waited}s)" >> "$OUT/conditions.log"
 }
 
-run_arm() {  # arm id
-  local arm=$1 id=$2 exe envs sha quiet=true code=0 c
+run_arm() {  # arm id [dir: raw (measured, default) | warmup]
+  local arm=$1 id=$2 dir=${3:-raw} exe envs sha quiet=true code=0 c
   exe=$OUT/bin/dynalm-$arm
   if [[ $arm == a ]]; then envs=$A_ENV; sha=$SHA_A; else envs=$B_ENV; sha=$SHA_B; fi
   gate "$id"
@@ -103,7 +111,7 @@ run_arm() {  # arm id
     # shellcheck disable=SC2086  # envs is a list of NAME=VALUE words
     env $envs "$exe" benchmark "$MODEL" --backend "$BACKEND" --concurrency "$c" --prompt "$PROMPT" --output "$OUTPUT" \
       --requests $((c * 4 < 16 ? 16 : c * 4)) --warmup-requests 1 \
-      --out "$OUT/raw/$id.jsonl" --request-log "$OUT/raw/$id.requests.jsonl" >>"$OUT/raw/$id.log" 2>&1 || code=$?
+      --out "$OUT/$dir/$id.jsonl" --request-log "$OUT/$dir/$id.requests.jsonl" >>"$OUT/$dir/$id.log" 2>&1 || code=$?
   done
   # Conditions changed during the run: power or power mode (not the load,
   # which the benchmark itself raises; it is checked before the start).
@@ -111,9 +119,15 @@ run_arm() {  # arm id
     pmset -g batt | head -1 | grep -q 'AC Power' && [[ $(pmset -g | awk '/ powermode /{print $2}') == 0 ]] || quiet=false
   fi
   printf '{"id": "%s", "exit_code": %d, "quiet": %s, "exe_sha256": "%s", "env": "%s"}\n' \
-    "$id" "$code" "$quiet" "$sha" "$envs" >> "$OUT/raw/runs.jsonl"
+    "$id" "$code" "$quiet" "$sha" "$envs" >> "$OUT/$dir/runs.jsonl"
 }
 
+for ((w = 1; w <= WARMUP; w++)); do
+  for arm in a b; do
+    echo "== $(date +%T) warm-up $w: arm $arm (not analyzed)"
+    run_arm "$arm" "$WORKLOAD-w${w}-$arm" warmup
+  done
+done
 for s in $(seq 1 "$SESSIONS"); do
   for r in $(seq 1 "$ROUNDS"); do
     if (((s + r) % 2 == 0)); then order="a b"; else order="b a"; fi

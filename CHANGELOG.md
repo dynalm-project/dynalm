@@ -8,6 +8,11 @@ benchmark is still pending. Methods and tools (`tools/bench/ab.sh`, `baseline.sh
 docs/benchmarking.md.
 
 ### Added
+- **Exact-mode CPU speed in the model matrix and the end-to-end report:** with `--bench`,
+  `tools/bench/model_matrix.py` also measures `--backend native-cpu` (`--mode exact`, DynaLM's
+  DD-053 kernels) per model, one user and 4 users, against llama.cpp's CPU (columns
+  `exact_prompt_tok_s`, `exact_decode_tok_s`, `exact_4user_tok_s`, appended). `matrix_summary.py`
+  and `e2e_report.py` show it and still read older results. Adds about 0.5-1 h to an e2e run.
 - **`bench_ppl`**: perplexity over a text file, scored as llama.cpp's `llama-perplexity` does,
   on any device (`BENCH_DEVICE=native|ggml-cpu|metal|vulkan|cuda`), for direct accuracy comparisons
   with llama.cpp (docs/benchmarking.md).
@@ -175,6 +180,39 @@ docs/benchmarking.md.
     steps with "Insufficient Memory" at 16 users (8B: 20 → 50 tok/s once fixed).
 
 ### Fixed
+- **Metal ran out of GPU memory with large KV caches** (e2e-20261019-0022: Llama-2-7B,
+  `kIOGPUCommandBufferCallbackErrorOutOfMemory`, model + KV 20,275 MiB). Automatic KV sizing used
+  host free RAM only; Metal reported no limit. The Metal device now reports its working set
+  (`recommendedMaxWorkingSetSize`, 18,186 MiB on a 24 GB M4 Pro) and current allocation. Automatic
+  KV sizing caps the cache at what that leaves after a 10% margin, the weights, the 1 GiB graph
+  workspace and the activation scratch (`device_kv_budget`), each counted once. The cap uses the
+  KV pool's own block arithmetic (`kv_tokens_within`), so the admission check never refuses an
+  automatically sized cache. Below 1,024 tokens it does not shrink further: the GPU is refused at
+  load, `--backend auto` starts on the CPU and `--gpu` names the largest `--ctx` that fits. An
+  explicit `--ctx` that cannot fit fails the same way, instead of failing on the GPU mid-run.
+- **Support checks ignored the tokenizer** (e2e: DeepSeek-Coder-1.3B safetensors was reported
+  supported from its architecture, 2.5 GB downloaded, then refused at its pre-tokenizer):
+  - `dynalm inspect` reports architecture, tokenizer and weights separately, the tokenizer by the
+    load path's own code, and says `Supported: YES` only when all three pass;
+  - `gguf_support_status` (`dynalm models`, `pull`) includes the tokenizer, and `dynalm models`
+    checks the tokenizer of safetensors folders too;
+  - `dynalm pull --check` checks the tokenizer when its keys are within the 256 KiB it reads;
+  - the model matrix fetches only the small config and tokenizer files first and skips the weights
+    of an unsupported tokenizer.
+
+  DeepSeek-Coder's `Split+Split+Split+Split+Digits+ByteLevel` pre-tokenizer
+  (`[\r\n]`, `\s?\p{L}+`, `\s?\p{P}+`, `[一-龥ࠀ-一가-퟿]+`, individual digits) is still unsupported;
+  it needs a Unicode punctuation class and sequential HF split semantics.
+- **GPU A/B plans could not reach a verdict:**
+  - the plan tested a predictive scheduler absent from both builds;
+  - 1 session × 3 rounds without warm-up, where round 1 ran ~10% faster for both arms.
+
+  Fixes:
+  - `plans/gpu-regression.json` checks what changed (no regression, single-user equivalence);
+  - `phase1-gpu.json` is for the opt-in predictive profile within one build;
+  - `ab.sh` adds `--warmup-rounds` (default 1, not analyzed) and defaults to 2 sessions × 4 rounds;
+  - with `"require_ci": true`, `bench_analyze.py` needs the 95% CI to clear the threshold for a
+    PASS and calls fewer than 4 pairs INCONCLUSIVE (only stricter).
 - **`dynalm doctor` predated GPU support:** on a Metal build it said "GPU: none detected (not used by
   this build)" and warned "this release runs on the CPU only". It now lists the backends built in
   (DynaLM's CPU kernels and their tier, ggml's CPU kernels, Metal / Vulkan / CUDA with the devices

@@ -185,11 +185,7 @@ Status GgmlDevice::run_segment(std::span<const DeviceCall* const> calls, std::sp
     // 86 MiB per graph for an 8B model). 26 of them (2.2 GiB) on top of 8.5 GB of
     // weights and 8 GB of KV made Metal fail steps (out of memory) at 16 users.
     // Drop least recently used graphs (never the one about to run) past the cap.
-    static const int64_t cap = [] {
-      const char* v = std::getenv("DYNACORE_GPU_GRAPH_MB");
-      const long mb = v != nullptr ? std::strtol(v, nullptr, 10) : 0;
-      return (mb > 0 ? static_cast<int64_t>(mb) : 1024) << 20;
-    }();
+    const int64_t cap = graph_workspace_cap();
     for (int64_t ws = memory_stats().workspace_bytes; ws > cap && graphs_.size() > 1;) {
       auto lru = graphs_.end();
       for (auto gi = graphs_.begin(); gi != graphs_.end(); ++gi) {

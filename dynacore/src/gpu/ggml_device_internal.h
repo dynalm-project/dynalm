@@ -74,6 +74,17 @@ inline bool to_ggml_type(DType t, ggml_type& out) {
   }
 }
 
+// The prepared-graph workspace cap (LRU eviction beyond it): 1 GiB, or
+// DYNACORE_GPU_GRAPH_MB. Read once.
+inline int64_t graph_workspace_cap() {
+  static const int64_t cap = [] {
+    const char* v = std::getenv("DYNACORE_GPU_GRAPH_MB");
+    const long mb = v != nullptr ? std::strtol(v, nullptr, 10) : 0;
+    return (mb > 0 ? static_cast<int64_t>(mb) : 1024) << 20;
+  }();
+  return cap;
+}
+
 // A ggml context for tensor metadata only (no data).
 struct CtxDeleter {
   void operator()(ggml_context* c) const { ggml_free(c); }
@@ -387,10 +398,20 @@ class GgmlDevice final : public Device, public SegmentExecutor {
     m.weight_bytes = table_->weight_bytes;  // copies only; mapped weights are not device copies
     m.buffer_bytes = table_->buffer_bytes;
     for (const auto& [h, g] : graphs_) m.workspace_bytes += g->workspace_bytes;
+    m.workspace_limit_bytes = graph_workspace_cap();
     if (!real_addresses_) {  // Vulkan / CUDA: KV and copied weights live in device memory
       size_t free = 0, total = 0;
       ggml_backend_dev_memory(dev_, &free, &total);
       if (total > 0) m.free_bytes = static_cast<int64_t>(free);
+    } else if (type_ == DeviceType::kMetal) {
+      // Unified memory, but capped: ggml-metal reports total =
+      // recommendedMaxWorkingSetSize and free = total - currentAllocatedSize.
+      size_t free = 0, total = 0;
+      ggml_backend_dev_memory(dev_, &free, &total);
+      if (total > 0) {
+        m.working_set_bytes = static_cast<int64_t>(total);
+        m.allocated_bytes = static_cast<int64_t>(total - std::min(free, total));
+      }
     }
     return m;
   }

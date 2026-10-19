@@ -1,5 +1,7 @@
 #include "loader/gguf/gguf_tokenizer.h"
 
+#include "tokenizer/pretokenizer.h"
+
 #include <algorithm>
 #include <iterator>
 #include "common/core.h"
@@ -19,17 +21,19 @@ bool optional_bool(const GgufFile& f, std::string_view key, bool fallback) {
 
 }  // namespace
 
+Status check_tokenizer_kind(std::string_view model, std::string_view pre) {
+  if (model == "llama") return Status::Ok();  // SentencePiece: no pre-tokenizer
+  if (model != "gpt2") return Unsupported("tokenizer model '" + std::string(model) + "' is not supported yet");
+  return pretokenizer_from_name(pre.empty() ? "default" : pre).status();
+}
+
 Result<TokenizerData> read_tokenizer_data(const GgufFile& f) {
   TokenizerData d;
   ENGINE_ASSIGN_OR_RETURN(std::string_view model, f.get_string("tokenizer.ggml.model"));
-  if (model == "gpt2") {
-    d.model = TokenizerData::Model::kBpe;
-  } else if (model == "llama") {
-    d.model = TokenizerData::Model::kSpm;
-  } else {
-    return Unsupported("tokenizer model '" + std::string(model) + "' is not supported yet");
-  }
-  if (auto pre = f.get_string("tokenizer.ggml.pre"); pre.ok()) d.pre = std::string(*pre);
+  auto pre = f.get_string("tokenizer.ggml.pre");
+  ENGINE_RETURN_IF_ERROR(check_tokenizer_kind(model, pre.ok() ? *pre : std::string_view()));
+  d.model = model == "gpt2" ? TokenizerData::Model::kBpe : TokenizerData::Model::kSpm;
+  if (pre.ok()) d.pre = std::string(*pre);
 
   ENGINE_ASSIGN_OR_RETURN(Array tok_arr, f.get_array("tokenizer.ggml.tokens"));
   ENGINE_ASSIGN_OR_RETURN(auto toks, GgufFile::array_strings(tok_arr));

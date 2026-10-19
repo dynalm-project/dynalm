@@ -23,6 +23,7 @@
 #include "loader/gguf/gguf.h"
 #include "loader/gguf/gguf_model.h"
 #include "loader/hf/hf_model.h"
+#include "loader/model_loader.h"
 #include "loader/model_source.h"
 #include "model/architecture.h"
 #include "registry/model_registry.h"
@@ -121,7 +122,15 @@ void scan_dir(const std::string& dir, std::vector<ModelRow>& rows) {
     if (!cfg.ok()) {
       r.status = cfg.status().message();
     } else {
-      r.status = find_architecture(cfg->architecture) ? "ready" : "unsupported architecture " + cfg->architecture;
+      // The architecture, then the tokenizer by the load path's own code
+      // (an architecture alone said "ready" for models whose tokenizer fails).
+      if (!find_architecture(cfg->architecture)) {
+        r.status = "unsupported architecture " + cfg->architecture;
+      } else if (auto tok = hf_tokenizer_support(p.string()); !tok.ok()) {
+        r.status = "unsupported tokenizer: " + tok.status().message();
+      } else {
+        r.status = "ready";
+      }
     }
     rows.push_back(std::move(r));
   }

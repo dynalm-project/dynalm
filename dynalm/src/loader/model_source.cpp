@@ -1,5 +1,7 @@
 #include "loader/model_source.h"
 
+#include "loader/model_loader.h"
+
 #include <cstdint>
 #include <cstring>
 #include <vector>
@@ -110,7 +112,7 @@ std::string url_file_name(std::string_view url) {
   return std::string(slash == std::string_view::npos ? url : url.substr(slash + 1));
 }
 
-Result<std::string> peek_gguf_architecture(std::span<const std::byte> head) {
+Result<GgufPeek> peek_gguf_header(std::span<const std::byte> head) {
   Peek r{head};
   char magic[4];
   uint32_t version = 0;
@@ -122,18 +124,48 @@ Result<std::string> peek_gguf_architecture(std::span<const std::byte> head) {
     return Unsupported("GGUF version " + std::to_string(version) + " (supported: 2, 3)");
   }
   if (!r.take(&n_tensors, 8) || !r.take(&n_kv, 8)) return NotFound("GGUF header is truncated");
+  GgufPeek p;
   for (uint64_t i = 0; i < n_kv; ++i) {
     std::string_view key;
     uint32_t type = 0;
     if (!r.string(&key) || !r.take(&type, 4)) break;
-    if (key == "general.architecture" && type == 8) {
-      std::string_view arch;
-      if (!r.string(&arch)) break;
-      return std::string(arch);
+    std::string* out = nullptr;
+    bool* has = nullptr;
+    if (type == 8 && key == "general.architecture") out = &p.architecture, has = &p.has_architecture;
+    if (type == 8 && key == "tokenizer.ggml.model") out = &p.tokenizer_model, has = &p.has_tokenizer_model;
+    if (type == 8 && key == "tokenizer.ggml.pre") out = &p.tokenizer_pre, has = &p.has_tokenizer_pre;
+    if (out != nullptr) {
+      std::string_view v;
+      if (!r.string(&v)) break;
+      *out = std::string(v);
+      *has = true;
+      if (p.has_architecture && p.has_tokenizer_model && p.has_tokenizer_pre) break;
+      continue;
     }
-    if (!r.skip_value(type)) break;
+    if (!r.skip_value(type)) break;  // e.g. the token list runs past `head`
   }
-  return NotFound("general.architecture not found in the first " + std::to_string(head.size()) + " bytes");
+  return p;
+}
+
+Result<std::string> peek_gguf_architecture(std::span<const std::byte> head) {
+  ENGINE_ASSIGN_OR_RETURN(GgufPeek p, peek_gguf_header(head));
+  if (!p.has_architecture) {
+    return NotFound("general.architecture not found in the first " + std::to_string(head.size()) + " bytes");
+  }
+  return p.architecture;
+}
+
+std::string support_verdict(bool architecture_ok, bool tokenizer_ok, WeightsCheck weights) {
+  std::string bad;
+  auto add = [&](bool ok, const char* what) {
+    if (!ok) bad += (bad.empty() ? "" : ", ") + std::string(what);
+  };
+  add(architecture_ok, "architecture");
+  add(tokenizer_ok, "tokenizer");
+  add(weights != WeightsCheck::kUnsupported, "weights");
+  if (!bad.empty()) return "NO (" + bad + ")";
+  if (weights == WeightsCheck::kAbsent) return "PARTIAL (architecture and tokenizer supported; weights not present, not checked)";
+  return "YES";
 }
 
 std::string gguf_support_status(const gguf::GgufFile& f) {
@@ -148,10 +180,13 @@ std::string gguf_support_status(const gguf::GgufFile& f) {
     for (std::string_view b : bad) seen = seen || b == name;
     if (!seen) bad.push_back(name);
   }
-  if (bad.empty()) return "ok";
-  std::string s = "unsupported tensor types:";
-  for (size_t i = 0; i < bad.size(); ++i) s += (i ? ", " : " ") + std::string(bad[i]);
-  return s;
+  if (!bad.empty()) {
+    std::string s = "unsupported tensor types:";
+    for (size_t i = 0; i < bad.size(); ++i) s += (i ? ", " : " ") + std::string(bad[i]);
+    return s;
+  }
+  if (auto tok = gguf_tokenizer_support(f); !tok.ok()) return "unsupported tokenizer: " + tok.status().message();
+  return "ok";
 }
 
 }  // namespace dynalm

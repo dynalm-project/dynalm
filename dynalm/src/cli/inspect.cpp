@@ -2,6 +2,7 @@
 // Face model directory / .safetensors file.
 
 #include <cstdio>
+#include <filesystem>
 #include <map>
 #include <string>
 #include <string_view>
@@ -11,6 +12,8 @@
 #include "loader/gguf/gguf.h"
 #include "loader/gguf/gguf_model.h"
 #include "loader/hf/hf_model.h"
+#include "loader/model_loader.h"
+#include "loader/model_source.h"
 #include "loader/safetensors/safetensors.h"
 #include "model/architecture.h"
 #include "model_ir/model_config.h"
@@ -50,6 +53,8 @@ std::string format_value(const gguf::Value& v) {
 }  // namespace
 
 void print_model(const ModelConfig& c, int64_t weight_bytes);
+void print_support(const ModelConfig* c, const Result<std::string>& tokenizer, const std::string& weights_problem,
+                   WeightsCheck weights);
 int inspect_hf(const std::string& path, bool show_metadata, bool show_tensors);
 
 int cmd_inspect(std::span<const std::string_view> args) {
@@ -115,9 +120,11 @@ int cmd_inspect(std::span<const std::string_view> args) {
     s.bytes += t.nbytes;
     s.executable = t.dtype.has_value();
   }
+  std::string bad_types;
   for (const auto& [name, s] : by_type) {
     std::printf("  %-8.*s %5d tensors %10.1f MiB%s\n", static_cast<int>(name.size()), name.data(),
                 s.count, s.bytes / kMiB, s.executable ? "" : "  (unsupported type)");
+    if (!s.executable) bad_types += (bad_types.empty() ? "" : ", ") + std::string(name);
   }
 
   if (auto ft = g.get_uint("general.file_type"); ft.ok()) {
@@ -130,6 +137,8 @@ int cmd_inspect(std::span<const std::string_view> args) {
   } else {
     print_model(*cfg, static_cast<int64_t>(g.total_tensor_bytes()));
   }
+  print_support(cfg.ok() ? &*cfg : nullptr, gguf_tokenizer_support(g), "unsupported tensor types: " + bad_types,
+                bad_types.empty() ? WeightsCheck::kSupported : WeightsCheck::kUnsupported);
 
   if (show_metadata) {
     std::printf("\nMetadata:\n");
@@ -178,15 +187,39 @@ void print_model(const ModelConfig& c, int64_t weight_bytes) {
                 static_cast<long long>(c.kv_bytes_per_token(DType::kF16)));
     std::printf("  Scratch:       %8.1f MiB\n", est.activation_bytes / kMiB);
     std::printf("  Total:         %8.1f MiB\n", est.total() / kMiB);
-    std::printf("\nSupported:     %s\n",
-                find_architecture(c.architecture) ? "YES" : "NO (no adapter for this architecture)");
-    std::printf("Device:       CPU/%s\n", std::string(isa_name(select_best_isa(cpu_info().features))).c_str());
   }
+}
+
+// Architecture, tokenizer and weights checked separately (the tokenizer by the
+// load path's own code), then the overall verdict (support_verdict).
+void print_support(const ModelConfig* c, const Result<std::string>& tokenizer, const std::string& weights_problem,
+                   WeightsCheck weights) {
+  const bool arch_ok = c != nullptr && find_architecture(c->architecture) != nullptr;
+  std::printf("\nSupport:\n");
+  std::printf("  Architecture:  %s\n", c == nullptr          ? "NO (model config unreadable)"
+                                       : arch_ok              ? ("yes (" + c->architecture + ")").c_str()
+                                                              : ("NO (no adapter for '" + c->architecture + "')").c_str());
+  std::printf("  Tokenizer:     %s\n", tokenizer.ok() ? ("yes (" + *tokenizer + ")").c_str()
+                                                     : ("NO (" + tokenizer.status().message() + ")").c_str());
+  std::printf("  Weights:       %s\n", weights == WeightsCheck::kSupported   ? "yes"
+                                     : weights == WeightsCheck::kAbsent ? "not present (only config and tokenizer files)"
+                                                                        : ("NO (" + weights_problem + ")").c_str());
+  std::printf("Supported:     %s\n", support_verdict(arch_ok, tokenizer.ok(), weights).c_str());
+  std::printf("Device:       CPU/%s\n", std::string(isa_name(select_best_isa(cpu_info().features))).c_str());
 }
 
 int inspect_hf(const std::string& path, bool show_metadata, bool show_tensors) {
   auto files = hf::locate(path);
-  if (!files.ok()) {
+  // A directory with config and tokenizer files but no weights yet (fetched
+  // first by tools/bench/model_matrix.py): architecture and tokenizer are
+  // still checked, and the verdict says the weights were not.
+  bool weights_present = files.ok();
+  if (files.ok()) {
+    std::error_code ec;
+    for (const std::string& w : files->weights) weights_present = weights_present && std::filesystem::exists(w, ec);
+  } else if (std::filesystem::is_directory(path) && std::filesystem::exists(std::filesystem::path(path) / "config.json")) {
+    files = hf::ModelFiles{path, {}};
+  } else {
     std::fprintf(stderr, "inspect: %s\n", files.status().to_string().c_str());
     return 1;
   }
@@ -199,7 +232,7 @@ int inspect_hf(const std::string& path, bool show_metadata, bool show_tensors) {
   size_t count = 0;
   std::map<std::string, double> by_dtype;
   std::vector<std::unique_ptr<safetensors::SafeTensorsFile>> shards;
-  for (const std::string& w : files->weights) {
+  for (const std::string& w : weights_present ? files->weights : std::vector<std::string>{}) {
     auto st = safetensors::SafeTensorsFile::open(w);
     if (!st.ok()) {
       std::fprintf(stderr, "inspect: %s: %s\n", w.c_str(), st.status().to_string().c_str());
@@ -213,8 +246,8 @@ int inspect_hf(const std::string& path, bool show_metadata, bool show_tensors) {
     shards.push_back(std::move(*st));
   }
   std::printf("Directory:     %s\n", files->dir.c_str());
-  std::printf("Format:        SafeTensors (%zu shard%s)\n", files->weights.size(),
-              files->weights.size() == 1 ? "" : "s");
+  std::printf("Format:        SafeTensors (%zu shard%s%s)\n", files->weights.size(),
+              files->weights.size() == 1 ? "" : "s", weights_present ? "" : ", not present");
   if (const json::Value* mt = cfg_json->find("model_type"); mt && mt->is_string()) {
     std::printf("model_type:    %s\n", mt->as_string().c_str());
   }
@@ -231,6 +264,10 @@ int inspect_hf(const std::string& path, bool show_metadata, bool show_tensors) {
   } else {
     print_model(*cfg, bytes);
   }
+  auto quant = hf::read_quantization(*cfg_json);
+  print_support(cfg.ok() ? &*cfg : nullptr, hf_tokenizer_support(files->dir),
+                quant.ok() ? std::string() : "quantization: " + quant.status().message(),
+                !weights_present ? WeightsCheck::kAbsent : quant.ok() ? WeightsCheck::kSupported : WeightsCheck::kUnsupported);
   if (show_metadata) std::printf("\nconfig.json:\n%s\n", json::dump(*cfg_json).c_str());
   if (show_tensors) {
     std::printf("\nTensors:\n");

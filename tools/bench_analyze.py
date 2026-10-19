@@ -37,6 +37,13 @@ A gate evaluation is INCONCLUSIVE whenever the reference arm is unreliable at
 that point: fewer than min_pairs valid pairs, or a spread (max - min) /
 median above its limit across pairs or across session medians.
 
+With "require_ci": true in the plan's "reliability" (opt-in; older plans are
+analyzed as before), a PASS also needs the 95% bootstrap interval of the
+median change to clear the same threshold (improve: lower bound >= +threshold;
+no_regress: lower bound >= -threshold; equivalent: both bounds within
++-threshold), and fewer than 4 pairs (no interval) is INCONCLUSIVE. This
+only makes PASS stricter; FAIL is decided by the median as before.
+
 Units (the report counts each separately):
 - run: one benchmark process (one runs.jsonl record);
 - point: one (run, concurrency, prompt, output) result line;
@@ -217,6 +224,19 @@ def analyze(plan: dict, raw: Path) -> dict:
             else:
                 raise ValueError(f"unknown rule {g['rule']}")
             ci = bootstrap_ci(changes)
+            if rel.get("require_ci") and verdict == "PASS":
+                if ci is None:
+                    verdict, why = "INCONCLUSIVE", f"{len(changes)} pairs: too few for a 95% confidence interval (need >= 4)"
+                else:
+                    lo, hi = sorted((good(ci[0]), good(ci[1])))  # in the metric's good direction
+                    if g["rule"] == "improve" and lo < thr:
+                        verdict, why = "INCONCLUSIVE", f"95% CI of the median reaches {lo:+.2f}% < {thr:+.1f}%"
+                    elif g["rule"] == "no_regress" and lo < -thr:
+                        verdict, why = "INCONCLUSIVE", f"95% CI of the median reaches {lo:+.2f}% < -{thr}%"
+                    elif g["rule"] == "equivalent" and (lo < -thr or hi > thr):
+                        verdict, why = "INCONCLUSIVE", f"95% CI of the median [{lo:+.2f}, {hi:+.2f}]% exceeds +-{thr}%"
+                    else:
+                        why += f"; 95% CI [{lo:+.2f}, {hi:+.2f}]%"
             evaluations.append({"gate": g["id"], "workload": workload, "concurrency": conc, "prompt": prompt, "output": output,
                                 "baseline": b, "candidate": c, "metric": g["metric"], "rule": g["rule"], "pairs": len(changes),
                                 "changes_pct": [round(x, 2) for x in changes], "median_pct": None if med is None else round(med, 2),
