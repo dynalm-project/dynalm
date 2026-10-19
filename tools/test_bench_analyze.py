@@ -128,4 +128,49 @@ check(ba.bootstrap_ci([1.0, 2.0, 3.0]) is None, "no interval below 4 pairs")
 lo, hi = ba.bootstrap_ci([10.0, 11.0, 12.0, 13.0, 14.0, 15.0])
 check(10.0 <= lo <= hi <= 15.0, "interval within the data range")
 
+# 7. require_ci (opt-in): sample sufficiency and the interval, PASS only gets stricter.
+CI_PLAN = {"reference": "a", "expected_exe": {"a": "AAAA", "b": "AAAA"},
+           "reliability": {"primary": {"output_tok_s": 5.0}, "tails": {"itl_p99": 20.0}, "min_pairs": 3, "require_ci": True},
+           "gates": [{"id": "T", "baseline": "a", "candidate": "b", "metric": "output_tok_s", "rule": "no_regress",
+                      "threshold": 5.0, "pair_threshold": 10.0}]}
+
+
+def pairs_run(raw, changes, base=100.0):
+    for i, c in enumerate(changes):
+        s, r = i // 4 + 1, i % 4 + 1
+        write(raw, f"G-s{s}r{r}-a", [point(base)])
+        write(raw, f"G-s{s}r{r}-b", [point(base * (1 + c / 100.0))])
+
+
+with tempfile.TemporaryDirectory() as t:  # 3 clean pairs: PASS without an interval -> INCONCLUSIVE
+    raw = Path(t)
+    pairs_run(raw, [0.5, -0.5, 0.2])
+    e = ba.analyze(CI_PLAN, raw)["evaluations"][0]
+    check(e["verdict"] == "INCONCLUSIVE" and "too few for a 95% confidence interval" in e["reason"], "3 pairs: no CI")
+    old = dict(CI_PLAN, reliability={k: v for k, v in CI_PLAN["reliability"].items() if k != "require_ci"})
+    check(ba.analyze(old, raw)["evaluations"][0]["verdict"] == "PASS", "without require_ci: unchanged (PASS)")
+with tempfile.TemporaryDirectory() as t:  # 8 clean pairs within +-1%: PASS, interval reported
+    raw = Path(t)
+    pairs_run(raw, [0.5, -0.5, 0.2, -0.2, 0.8, -0.8, 0.1, 0.0])
+    e = ba.analyze(CI_PLAN, raw)["evaluations"][0]
+    check(e["verdict"] == "PASS" and "95% CI" in e["reason"] and e["ci95_median_pct"] is not None, "8 pairs: PASS with CI")
+with tempfile.TemporaryDirectory() as t:  # median -3% passes -5%, but the interval reaches below -5%
+    raw = Path(t)
+    pairs_run(raw, [-9.0, -8.0, -7.0, -6.0, 0.0, 0.0, 0.0, 0.0])
+    e = ba.analyze(CI_PLAN, raw)["evaluations"][0]
+    check(e["verdict"] == "INCONCLUSIVE" and "95% CI of the median reaches" in e["reason"], "CI crosses the threshold")
+    old = dict(CI_PLAN, reliability={k: v for k, v in CI_PLAN["reliability"].items() if k != "require_ci"})
+    check(ba.analyze(old, raw)["evaluations"][0]["verdict"] == "PASS", "the same data passes the median-only rule")
+with tempfile.TemporaryDirectory() as t:  # a real regression still FAILs with require_ci
+    raw = Path(t)
+    pairs_run(raw, [-8.0, -9.0, -7.5, -8.5, -8.0, -9.5, -7.0, -8.2])
+    check(ba.analyze(CI_PLAN, raw)["evaluations"][0]["verdict"] == "FAIL", "regression -> FAIL")
+with tempfile.TemporaryDirectory() as t:  # round-1 drift in both arms (e2e-20261019-0022): reference unreliable
+    raw = Path(t)
+    for r, base in enumerate([100.0, 91.0, 91.5, 91.2], start=1):
+        write(raw, f"G-s1r{r}-a", [point(base)])
+        write(raw, f"G-s1r{r}-b", [point(base)])
+    e = ba.analyze(CI_PLAN, raw)["evaluations"][0]
+    check(e["verdict"] == "INCONCLUSIVE" and "reference arm unreliable" in e["reason"], "common drift -> unreliable reference")
+
 print(f"all bench_analyze tests passed ({checks} checks)")

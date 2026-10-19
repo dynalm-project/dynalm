@@ -98,9 +98,34 @@ int64_t auto_kv_tokens(const ModelConfig& c, DType kv_dtype, int64_t weight_byte
   return std::max(kBlock, tokens / kBlock * kBlock);
 }
 
+int64_t device_kv_budget(int64_t working_set, int64_t allocated, int64_t weight_bytes, int64_t workspace_reserve,
+                         int64_t scratch_bytes) {
+  if (working_set <= 0) return -1;
+  const int64_t usable = working_set / 100 * (100 - kWorkingSetMarginPct);
+  const int64_t reserve = workspace_reserve > 0 ? workspace_reserve : kDefaultWorkspaceReserve;
+  return std::max<int64_t>(0, usable - std::max<int64_t>(0, allocated) - std::max<int64_t>(0, weight_bytes) - reserve -
+                                  std::max<int64_t>(0, scratch_bytes));
+}
+
+int64_t kv_tokens_within(const ModelConfig& c, DType kv_dtype, int64_t budget) {
+  const int64_t block = kv_geometry_for(c, kv_dtype, 16, 16).total_bytes();
+  return block > 0 && budget > 0 ? budget / block * 16 : 0;
+}
+
 Status check_memory_fit(int64_t weight_bytes, int64_t kv_bytes, int64_t kv_per_token, int64_t total_ram,
-                        int64_t device_free) {
+                        int64_t device_free, int64_t kv_budget) {
   auto gb = [](int64_t b) { return std::to_string(b / (1 << 20) / 1024) + "." + std::to_string(b / (1 << 20) % 1024 * 10 / 1024) + " GiB"; };
+  if (kv_budget >= 0 && kv_bytes > kv_budget) {
+    // A capped device (Metal working set): the error must come here, at load,
+    // not as a GPU out-of-memory failure in the first large step.
+    const int64_t fit = kv_per_token > 0 ? kv_budget / kv_per_token / 16 * 16 : 0;
+    std::string m = "not enough GPU working set: the KV cache needs " + gb(kv_bytes) + " and " + gb(kv_budget) +
+                    " is left for it after the model (" + gb(weight_bytes) + "), the graph workspace and a " +
+                    std::to_string(kWorkingSetMarginPct) + "% margin";
+    m += fit >= 16 ? "; use --ctx " + std::to_string(fit) + " or less, or --kv q8_0 (half the KV memory)"
+                   : "; this model does not fit on the GPU, use --cpu or a smaller or more quantized model";
+    return ResourceExhausted(m);
+  }
   auto check = [&](int64_t limit, const char* where) -> Status {
     if (limit <= 0 || weight_bytes + kv_bytes <= limit) return Status::Ok();
     const int64_t fit = kv_per_token > 0 ? std::max<int64_t>(0, limit - weight_bytes) / kv_per_token / 16 * 16 : 0;
@@ -276,11 +301,25 @@ Result<std::unique_ptr<Engine>> Engine::create_on(EngineOptions opts) {
   // Auto KV capacity from free host memory, and from free device memory on a
   // GPU with its own memory (weights are copied there too).
   int64_t available = memory_info().available_bytes;
-  if (const int64_t dev_free = device->memory_stats().free_bytes; dev_free >= 0) {
+  const Device::MemoryStats dev_mem = device->memory_stats();
+  if (const int64_t dev_free = dev_mem.free_bytes; dev_free >= 0) {
     available = available > 0 ? std::min(available, dev_free) : dev_free;
   }
-  const int64_t kv_tokens = opts.kv_tokens > 0 ? opts.kv_tokens
-                                               : auto_kv_tokens(c, opts.kv_dtype, e->model_->weight_bytes, available);
+  // A device with a working-set cap (Metal): host free RAM says nothing about
+  // it, so the KV cache also gets at most what the cap leaves.
+  const int64_t scratch = estimate_memory(c, 0, 0, opts.kv_dtype, opts.max_batch_tokens).activation_bytes;
+  const int64_t kv_budget = device_kv_budget(dev_mem.working_set_bytes, dev_mem.allocated_bytes,
+                                             e->model_->weight_bytes, dev_mem.workspace_limit_bytes, scratch);
+  int64_t kv_tokens = opts.kv_tokens > 0 ? opts.kv_tokens
+                                         : auto_kv_tokens(c, opts.kv_dtype, e->model_->weight_bytes, available);
+  if (opts.kv_tokens <= 0 && kv_budget >= 0) {
+    const int64_t fit = kv_tokens_within(c, opts.kv_dtype, kv_budget);
+    if (fit >= std::min<int64_t>(kMinAutoKvTokens, c.context_length) && fit < kv_tokens) {
+      LOG_INFO("KV cache: {} tokens (the GPU working set leaves {} MiB for it; the free RAM would allow {})", fit,
+               kv_budget >> 20, kv_tokens);
+      kv_tokens = fit;
+    }
+  }
   KvGeometry kv_geom = kv_geometry_for(c, opts.kv_dtype, 16, kv_tokens);
   // The device's KV layout (paged_kv.h): head-major on the CPU, slot-major on
   // the GPU (attention reads the paged pool in place). DYNALM_KV_LAYOUT=head
@@ -301,7 +340,7 @@ Result<std::unique_ptr<Engine>> Engine::create_on(EngineOptions opts) {
     const int64_t kv_need = static_cast<int64_t>(kv_geom.total_bytes());
     const int64_t dev_free = device->memory_stats().free_bytes;
     ENGINE_RETURN_IF_ERROR(check_memory_fit(e->model_->weight_bytes, kv_need, c.kv_bytes_per_token(opts.kv_dtype),
-                                            memory_info().total_bytes, dev_free));
+                                            memory_info().total_bytes, dev_free, kv_budget));
     if (const int64_t avail = memory_info().available_bytes; avail > 0 && e->model_->weight_bytes + kv_need > avail) {
       LOG_WARN("Memory: the model and KV cache need {} MiB; {} MiB is available now (other apps may be swapped out)",
                (e->model_->weight_bytes + kv_need) >> 20, avail >> 20);
@@ -323,10 +362,16 @@ Result<std::unique_ptr<Engine>> Engine::create_on(EngineOptions opts) {
     if (opts.backend != DeviceKind::kCpu) ENGINE_RETURN_IF_ERROR(gpu_model_support(dc, opts.kv_dtype, opts.backend));
     KvGeometry dg = kv_geometry_for(dc, opts.kv_dtype, 16, kv_tokens);
     dg.layout = device->preferred_kv_layout();
-    ENGINE_RETURN_IF_ERROR(check_memory_fit(e->model_->weight_bytes + e->draft_model_->weight_bytes,
-                                            static_cast<int64_t>(kv_geom.total_bytes() + dg.total_bytes()),
-                                            c.kv_bytes_per_token(opts.kv_dtype) + dc.kv_bytes_per_token(opts.kv_dtype),
-                                            memory_info().total_bytes, device->memory_stats().free_bytes));
+    // Both models and both KV caches against the working set as measured
+    // before the target's KV pool existed (dev_mem): nothing counted twice.
+    ENGINE_RETURN_IF_ERROR(check_memory_fit(
+        e->model_->weight_bytes + e->draft_model_->weight_bytes,
+        static_cast<int64_t>(kv_geom.total_bytes() + dg.total_bytes()),
+        c.kv_bytes_per_token(opts.kv_dtype) + dc.kv_bytes_per_token(opts.kv_dtype), memory_info().total_bytes,
+        device->memory_stats().free_bytes,
+        device_kv_budget(dev_mem.working_set_bytes, dev_mem.allocated_bytes,
+                         e->model_->weight_bytes + e->draft_model_->weight_bytes, dev_mem.workspace_limit_bytes,
+                         scratch + estimate_memory(dc, 0, 0, opts.kv_dtype, opts.max_batch_tokens).activation_bytes)));
     ENGINE_ASSIGN_OR_RETURN(e->draft_kv_, KvBlockPool::create(dg, *device));
     ENGINE_ASSIGN_OR_RETURN(e->draft_transformer_,
                             Transformer::create(dc, e->draft_model_->weights, *device, opts.max_batch_tokens));

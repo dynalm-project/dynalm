@@ -32,8 +32,26 @@ std::string url_file_name(std::string_view url);
 // is not within `head` (the caller fetched too little).
 Result<std::string> peek_gguf_architecture(std::span<const std::byte> head);
 
+// The header keys a support check needs, as far as `head` reaches. The
+// tokenizer keys usually precede the (large) token list, so 256 KiB holds
+// them; has_* tells whether each was seen.
+// The overall verdict `dynalm inspect` prints from its three separate checks:
+// "YES" only when the architecture, the tokenizer and the weights are all
+// supported; otherwise "NO (<the failing parts>)", or, when the weights are
+// not present (a directory with only config and tokenizer files), "PARTIAL
+// (...)": never YES without having checked everything.
+enum class WeightsCheck { kSupported, kUnsupported, kAbsent };
+std::string support_verdict(bool architecture_ok, bool tokenizer_ok, WeightsCheck weights);
+
+struct GgufPeek {
+  std::string architecture, tokenizer_model, tokenizer_pre;
+  bool has_architecture = false, has_tokenizer_model = false, has_tokenizer_pre = false;
+};
+Result<GgufPeek> peek_gguf_header(std::span<const std::byte> head);
+
 // "ok" when the engine can load and run the file, otherwise the reason, e.g.
-// "unsupported architecture 'qwen35'" or "unsupported tensor types: iq3_s, iq1_s".
+// "unsupported architecture 'qwen35'", "unsupported tensor types: iq3_s, iq1_s"
+// or "unsupported tokenizer: pre-tokenizer 'x' is not supported yet".
 std::string gguf_support_status(const gguf::GgufFile& f);
 
 }  // namespace dynalm

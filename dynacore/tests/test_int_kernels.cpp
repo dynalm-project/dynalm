@@ -51,7 +51,7 @@ std::vector<uint8_t> random_row(DType t, int64_t k) {
   for (int64_t b = 0; b < k / be; ++b) {
     const size_t o = static_cast<size_t>(b * bb);
     switch (t) {
-      case DType::kQ8_0: case DType::kQ4_0: put(o, h()); break;  // d first
+      case DType::kQ8_0: case DType::kQ4_0: case DType::kQ5_0: put(o, h()); break;  // d first
       case DType::kQ4_K: put(o, h()); put(o + 2, h()); break;     // d, dmin
       case DType::kQ6_K: put(o + static_cast<size_t>(bb) - 2, h()); break;  // d last
       default: break;
@@ -65,7 +65,9 @@ double rel_err(double got, double ref, double mag) { return std::fabs(got - ref)
 void check_int8(const CpuKernels& k, const char* tier) {
   if (k.quantize_act == nullptr) return;
   int tested = 0;
-  for (DType t : {DType::kQ8_0, DType::kQ4_0, DType::kQ4_K, DType::kQ6_K}) {
+  // Every type with an int8 row kernel on some tier (Q5_0: generic only; the
+  // tier's own kernel, or the generic one it inherits, is what is checked).
+  for (DType t : {DType::kQ8_0, DType::kQ4_0, DType::kQ5_0, DType::kQ4_K, DType::kQ6_K}) {
     if (k.dot_q8_rows_for(t) == nullptr) continue;
     for (int64_t kk : {256, 1024, 2816}) {
       const std::vector<uint8_t> w = random_row(t, kk);

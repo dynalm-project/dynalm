@@ -133,6 +133,14 @@ class Device {
     // Device memory still free, for devices with their own memory (discrete
     // GPUs); -1 where the device uses host memory (CPU, Metal).
     int64_t free_bytes = -1;
+    // A cap on everything the device holds, mapped weights included, where
+    // the device has one: Metal's recommendedMaxWorkingSetSize, beyond which
+    // command buffers fail with kIOGPUCommandBufferCallbackErrorOutOfMemory
+    // although host RAM is free. -1: no cap known.
+    int64_t working_set_bytes = -1;
+    int64_t allocated_bytes = 0;  // already allocated against working_set_bytes
+    // Most the device's graph workspaces may grow to (their LRU cap), 0 = unknown.
+    int64_t workspace_limit_bytes = 0;
   };
   virtual MemoryStats memory_stats() const { return {}; }
 

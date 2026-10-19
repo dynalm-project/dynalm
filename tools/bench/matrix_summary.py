@@ -31,6 +31,9 @@ def main() -> int:
     ran = [r for r in rows if r["native"] != "-"]
     ok = lambda r, k: r[k] == "ok"
     gpu = [r for r in ran if ok(r, "auto") and not r["auto_device"].startswith(("CPU", "ggml-CPU"))]
+    for r in rows:  # results from before the exact-mode speed columns
+        for k in ("exact_prompt_tok_s", "exact_decode_tok_s", "exact_4user_tok_s"):
+            r.setdefault(k, "-")
     benched = any(r["gpu_decode_tok_s"] != "-" or r["cpu_decode_tok_s"] != "-" for r in rows)
     L = ["# Model matrix", ""]
     if ver:
@@ -68,8 +71,9 @@ def main() -> int:
               "DynaLM: `dynalm benchmark` in-process. One user, 512-token prompt: prompt tok/s = 512 / TTFT p50, decode "
               "tok/s = 1000 / ITL p50. Four users: output tok/s. llama.cpp: `llama-bench` pp512 / tg128 on the same "
               "GGUF. Ratios > 1: DynaLM faster. Conditions: AC power and load at the start of each model's runs.", "",
-              "| # | Model | GPU prompt (llama) | GPU decode (llama) | GPU 4 users | CPU prompt (llama) | CPU decode (llama) | CPU 4 users | Conditions |",
-              "|---|---|---|---|---|---|---|---|---|"]
+              "| # | Model | GPU prompt (llama) | GPU decode (llama) | GPU 4 users | CPU prompt (llama) | CPU decode (llama) | CPU 4 users | "
+              "Exact CPU prompt (llama) | Exact CPU decode (llama) | Exact CPU 4 users | Conditions |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|"]
         for r in rows:
             if r["bench_conditions"] == "-":
                 continue
@@ -78,6 +82,8 @@ def main() -> int:
                 f"{r['gpu_decode_tok_s']} ({r['llama_gpu_tg128']}, {ratio(r['gpu_decode_tok_s'], r['llama_gpu_tg128'])}) | {r['gpu_4user_tok_s']} | "
                 f"{r['cpu_prompt_tok_s']} ({r['llama_cpu_pp512']}, {ratio(r['cpu_prompt_tok_s'], r['llama_cpu_pp512'])}) | "
                 f"{r['cpu_decode_tok_s']} ({r['llama_cpu_tg128']}, {ratio(r['cpu_decode_tok_s'], r['llama_cpu_tg128'])}) | {r['cpu_4user_tok_s']} | "
+                f"{r['exact_prompt_tok_s']} ({r['llama_cpu_pp512']}, {ratio(r['exact_prompt_tok_s'], r['llama_cpu_pp512'])}) | "
+                f"{r['exact_decode_tok_s']} ({r['llama_cpu_tg128']}, {ratio(r['exact_decode_tok_s'], r['llama_cpu_tg128'])}) | {r['exact_4user_tok_s']} | "
                 f"{r['bench_conditions']} |")
     L += ["", "Per-step logs: `logs/`."]
     open(sys.argv[2], "w").write("\n".join(L) + "\n")

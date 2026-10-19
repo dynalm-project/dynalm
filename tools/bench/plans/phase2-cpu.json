@@ -1,8 +1,8 @@
 {
-  "_comment": "Phase 2 CPU path: arm a = v0.1.7 --backend cpu (DynaCore native kernels), arm b = the candidate --backend cpu (ggml CPU kernels, the new default). expected_exe is filled from DIR/expected_exe.json by tools/bench/e2e.sh.",
+  "_comment": "Phase 2 CPU path: arm a = v0.1.7 --backend cpu (DynaCore native kernels), arm b = the candidate --backend cpu (ggml CPU kernels, the new default). Verdicts need a 95% CI (require_ci, >= 4 pairs): tools/bench/ab.sh --sessions 2 --rounds 4 --warmup-rounds 1. expected_exe is filled from DIR/expected_exe.json by tools/bench/e2e.sh.",
   "reference": "a",
   "expected_exe": {},
-  "reliability": {"primary": {"output_tok_s": 10.0}, "tails": {"itl_p99": 25.0}, "min_pairs": 3},
+  "reliability": {"primary": {"output_tok_s": 10.0}, "tails": {"itl_p99": 25.0}, "min_pairs": 4, "require_ci": true},
   "gates": [
     {"id": "P2-throughput", "baseline": "a", "candidate": "b", "metric": "output_tok_s", "rule": "improve", "threshold": 50.0},
     {"id": "P2-first-token", "baseline": "a", "candidate": "b", "metric": "ttft_p50", "rule": "improve", "threshold": 50.0},

@@ -11,22 +11,25 @@
 #   2. matrix    tools/bench/model_matrix.py on models-e2e-tier1.txt (--tier2: also
 #                models-providers.txt): download, generate on auto / cpu / native-cpu,
 #                cross-path agreement, DD-053 GPU accuracy, and speed (DynaLM in-process
-#                vs llama-bench on the same GGUF, GPU and CPU). Speed runs wait for AC
+#                vs llama-bench on the same GGUF: GPU, fast CPU and exact-mode CPU,
+#                --backend native-cpu). Speed runs wait for AC
 #                power, Energy Mode Automatic and a quiet machine (--gate).
 #   3. engines   tools/bench/baseline.sh --quick: DynaLM vs llama.cpp vs Ollama servers,
 #                1 to 16 users, GPU (1.5B, 8B) and CPU (1.5B, 4B), rotated rounds, gated.
 #   4. ab        tools/bench/ab.sh: v0.1.7 vs this build on the same model, GPU
-#                (plans/phase1-gpu.json: tail latency, throughput) and CPU
-#                (plans/phase2-cpu.json: native vs ggml CPU kernels), analyzed by
-#                tools/bench_analyze.py.
+#                (plans/gpu-regression.json: no regression, single-user
+#                equivalence) and CPU (plans/phase2-cpu.json: native vs ggml CPU
+#                kernels); a discarded warm-up round, then 2 sessions x 4 rounds
+#                (8 pairs per point, 95% CI); analyzed by tools/bench_analyze.py.
 #   5. report    tools/bench/e2e_report.py -> OUT/REPORT.md.
 #
 # Inputs (defaults in parentheses):
 #   DYNALM (build/macos-metal/bin/dynalm), ACC (its bench_gpu_accuracy),
 #   OLD_DYNALM (a v0.1.7 dynalm; ab skipped if missing), LLAMA_DIR (dir with
 #   llama-server and llama-bench), LLAMA_COMMIT, HF_TOKEN (gated models).
-# Time (3 MB/s link, M4 Pro): matrix tier 1 ~6-7 h (mostly downloads), engines ~1 h,
-# ab ~1 h. A phase that fails is recorded and the next one runs.
+# Time (3 MB/s link, M4 Pro): matrix tier 1 ~7-8 h (mostly downloads; exact-mode speed
+# adds ~0.5-1 h: the native CPU kernels are ~2-3x slower than ggml's), engines ~1 h,
+# ab ~2 h (18 runs per device; was ~40 min with 1 session x 3 rounds, too few for a CI). A phase that fails is recorded and the next one runs.
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
@@ -118,10 +121,15 @@ if ! skip ab; then
   status=ok
   M=$MODELS_DIR/qwen2.5-1.5b-instruct-q4_k_m.gguf
   if [[ -x $BIN/dynalm-old && -s $M ]]; then
-    for set in "gpu metal 1,4,8,16 phase1-gpu" "cpu cpu 1,4 phase2-cpu"; do
+    # GPU: a regression guard (no GPU scheduling change exists between the two
+    # builds; plans/gpu-regression.json). CPU: v0.1.7's native kernels vs the
+    # ggml default. 2 sessions x 4 rounds after a discarded warm-up round: 8
+    # pairs per point, enough for the 95% CI the plans require (require_ci).
+    for set in "gpu metal 1,4,8,16 gpu-regression" "cpu cpu 1,4 phase2-cpu"; do
       read -r dev backend conc plan <<<"$set"
       A=$BIN/dynalm-old B=$BIN/dynalm bash "$ROOT/tools/bench/ab.sh" --out "$OUT/ab/$dev" --model "$M" \
-        --backend "$backend" --conc "$conc" --prompt 512 --output 128 --sessions 1 --rounds 3 --workload "${dev}512" \
+        --backend "$backend" --conc "$conc" --prompt 512 --output 128 --sessions 2 --rounds 4 --warmup-rounds 1 \
+        --workload "${dev}512" \
         >"$OUT/ab-$dev.log" 2>&1 || status="failed ($dev)"
       # The plan with this run's executables (sha256 prefixes) filled in.
       python3 - "$ROOT/tools/bench/plans/$plan.json" "$OUT/ab/$dev/expected_exe.json" "$OUT/ab/$dev/plan.json" <<'PY'

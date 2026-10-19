@@ -736,6 +736,20 @@ int main() {
     test_embedding_gather(e);
     test_paged_attention(e);
     test_failures(e);
+    {
+      // Metal reports its working-set cap (recommendedMaxWorkingSetSize) for
+      // KV sizing; host-memory devices and discrete GPUs report none.
+      const Device::MemoryStats ms = e.gpu->memory_stats();
+      if (type == DeviceType::kMetal) {
+        CHECK(ms.working_set_bytes > 0 && ms.allocated_bytes >= 0 && ms.allocated_bytes <= ms.working_set_bytes);
+      } else {
+        CHECK(ms.working_set_bytes == -1);
+      }
+      CHECK(ms.workspace_limit_bytes > 0);
+      std::printf("  memory: working set %lld MiB, allocated %lld MiB, workspace cap %lld MiB\n",
+                  static_cast<long long>(ms.working_set_bytes >> 20), static_cast<long long>(ms.allocated_bytes >> 20),
+                  static_cast<long long>(ms.workspace_limit_bytes >> 20));
+    }
     test_buffer_reuse(e);
     test_reshaped_view(e);
     test_moe_ffn(e);

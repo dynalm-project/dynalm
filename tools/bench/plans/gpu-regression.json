@@ -1,0 +1,13 @@
+{
+  "_comment": "GPU regression guard: arm a = the previous release (e.g. v0.1.7), arm b = the candidate, both with their default GPU profile. There is no GPU scheduling change to measure between v0.1.7 and 0.1.8-dev (kGpuDecodeLatencyTarget 12, predictive off in both; dynalm/src/runtime/engine.h); the GPU-side differences for a dense model on Metal are the graph-cache LRU and 1 GiB workspace cap (dynacore/src/gpu/ggml_device.cpp) and KV sizing within the Metal working set (dynalm/src/runtime/engine.cpp). So the gates claim no improvement: they check that nothing regresses and that single-user speed is equivalent. Verdicts need a 95% CI (require_ci) and >= 4 pairs; run tools/bench/ab.sh with --sessions 2 --rounds 4 --warmup-rounds 1 (8 pairs per point). expected_exe is filled from DIR/expected_exe.json by tools/bench/e2e.sh.",
+  "reference": "a",
+  "expected_exe": {},
+  "reliability": {"primary": {"output_tok_s": 5.0}, "tails": {"itl_p99": 20.0}, "min_pairs": 4, "require_ci": true},
+  "gates": [
+    {"id": "G-single-user", "baseline": "a", "candidate": "b", "metric": "output_tok_s", "rule": "equivalent", "threshold": 3.0, "pair_threshold": 5.0, "where": {"concurrency": [1]}},
+    {"id": "G-throughput", "baseline": "a", "candidate": "b", "metric": "output_tok_s", "rule": "no_regress", "threshold": 5.0, "pair_threshold": 10.0, "where": {"concurrency": [4, 8, 16]}},
+    {"id": "G-itl-median", "baseline": "a", "candidate": "b", "metric": "itl_p50", "rule": "no_regress", "threshold": 5.0, "pair_threshold": 10.0, "where": {"concurrency": [4, 8, 16]}},
+    {"id": "G-itl-tail", "baseline": "a", "candidate": "b", "metric": "itl_p99", "rule": "no_regress", "threshold": 15.0, "pair_threshold": 30.0, "where": {"concurrency": [4, 8, 16]}},
+    {"id": "G-first-token", "baseline": "a", "candidate": "b", "metric": "ttft_p95", "rule": "no_regress", "threshold": 15.0, "pair_threshold": 25.0, "where": {"concurrency": [4, 8, 16]}}
+  ]
+}

@@ -175,6 +175,36 @@ Result<std::string> repack_packed_layers(const quant::PackedScheme& s, const std
   return summary.empty() ? std::string("no packed layers") : summary;
 }
 
+// A Hugging Face model directory's tokenizer files -> TokenizerData: the load
+// path and hf_tokenizer_support share it, so a check cannot disagree with a load.
+struct HfTokenizer {
+  TokenizerData data;
+  std::optional<json::Value> tokenizer_config;
+};
+Result<HfTokenizer> read_hf_tokenizer(const std::filesystem::path& dir, const json::Value& cfg) {
+  ENGINE_ASSIGN_OR_RETURN(json::Value tok_json, hf::read_json_file((dir / "tokenizer.json").string()));
+  auto optional_json = [&](const char* name) -> std::optional<json::Value> {
+    auto v = hf::read_json_file((dir / name).string(), 16 << 20);
+    if (v.ok()) return std::move(*v);
+    return std::nullopt;
+  };
+  HfTokenizer out;
+  out.tokenizer_config = optional_json("tokenizer_config.json");
+  const std::optional<json::Value> gen_cfg = optional_json("generation_config.json");
+  hf::TokenizerFiles tf;
+  tf.tokenizer = &tok_json;
+  tf.tokenizer_config = out.tokenizer_config ? &*out.tokenizer_config : nullptr;
+  tf.generation_config = gen_cfg ? &*gen_cfg : nullptr;
+  tf.config = &cfg;
+  ENGINE_ASSIGN_OR_RETURN(out.data, hf::read_tokenizer(tf));
+  return out;
+}
+
+std::string describe_tokenizer(const TokenizerData& d) {
+  return d.model == TokenizerData::Model::kSpm ? std::string("SentencePiece BPE")
+                                               : "byte-level BPE, pre-tokenizer " + d.pre;
+}
+
 Result<std::unique_ptr<LoadedModel>> load_safetensors(const std::string& path) {
   namespace fs = std::filesystem;
   ENGINE_ASSIGN_OR_RETURN(hf::ModelFiles files, hf::locate(path));
@@ -267,25 +297,27 @@ Result<std::unique_ptr<LoadedModel>> load_safetensors(const std::string& path) {
   }
   ENGINE_RETURN_IF_ERROR(hf::apply_conventions(cfg, m->config, m->weights));
 
-  ENGINE_ASSIGN_OR_RETURN(json::Value tok_json, hf::read_json_file((dir / "tokenizer.json").string()));
-  auto optional_json = [&](const char* name) -> std::optional<json::Value> {
-    auto v = hf::read_json_file((dir / name).string(), 16 << 20);
-    if (v.ok()) return std::move(*v);
-    return std::nullopt;
-  };
-  const std::optional<json::Value> tok_cfg = optional_json("tokenizer_config.json");
-  const std::optional<json::Value> gen_cfg = optional_json("generation_config.json");
-  hf::TokenizerFiles tf;
-  tf.tokenizer = &tok_json;
-  tf.tokenizer_config = tok_cfg ? &*tok_cfg : nullptr;
-  tf.generation_config = gen_cfg ? &*gen_cfg : nullptr;
-  tf.config = &cfg;
-  ENGINE_ASSIGN_OR_RETURN(TokenizerData tok_data, hf::read_tokenizer(tf));
-  ENGINE_RETURN_IF_ERROR(finish(*m, std::move(tok_data), hf::read_chat_template(tf.tokenizer_config)));
+  ENGINE_ASSIGN_OR_RETURN(HfTokenizer tok, read_hf_tokenizer(dir, cfg));
+  ENGINE_RETURN_IF_ERROR(finish(*m, std::move(tok.data), hf::read_chat_template(tok.tokenizer_config ? &*tok.tokenizer_config : nullptr)));
   return m;
 }
 
 }  // namespace
+
+Result<std::string> gguf_tokenizer_support(const gguf::GgufFile& f) {
+  ENGINE_ASSIGN_OR_RETURN(TokenizerData d, gguf::read_tokenizer_data(f));
+  const std::string what = describe_tokenizer(d);
+  ENGINE_RETURN_IF_ERROR(Tokenizer::create(std::move(d)).status());
+  return what;
+}
+
+Result<std::string> hf_tokenizer_support(const std::string& dir) {
+  ENGINE_ASSIGN_OR_RETURN(json::Value cfg, hf::read_json_file((std::filesystem::path(dir) / "config.json").string(), 4 << 20));
+  ENGINE_ASSIGN_OR_RETURN(HfTokenizer tok, read_hf_tokenizer(dir, cfg));
+  const std::string what = describe_tokenizer(tok.data);
+  ENGINE_RETURN_IF_ERROR(Tokenizer::create(std::move(tok.data)).status());
+  return what;
+}
 
 Result<std::unique_ptr<LoadedModel>> load_model(const std::string& path) {
   ENGINE_ASSIGN_OR_RETURN(std::string format, detect_format(path));

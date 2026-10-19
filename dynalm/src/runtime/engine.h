@@ -181,10 +181,34 @@ int64_t auto_kv_tokens(const ModelConfig& c, DType kv_dtype, int64_t weight_byte
 // stay within 90% of physical RAM (`total_ram`), else the system swaps or the
 // process is killed mid-run. A GPU with its own memory (`device_free` >= 0, the
 // weights are copied there): weights + KV within 95% of its free memory.
-// Unknown sizes (<= 0) are not checked. The error names the largest
-// --ctx that fits and --kv q8_0.
+// A device with a working-set cap (`kv_budget` >= 0, device_kv_budget): the KV
+// cache within that budget. Unknown sizes (<= 0, kv_budget -1) are not
+// checked. The error names the largest --ctx that fits and --kv q8_0.
+// Bytes left for the KV cache on a device with a working-set cap (Metal's
+// recommendedMaxWorkingSetSize, MemoryStats::working_set_bytes): the cap less
+// a kWorkingSetMarginPct safety margin, what is already allocated against it
+// (measured before the KV pool exists, so the KV is not in it), the weights
+// (mapped weights count too), the graph workspace the device may grow to
+// (`workspace_reserve`; kDefaultWorkspaceReserve when 0) and the per-step
+// activation scratch (`scratch_bytes`). Each term once. Never negative. -1
+// when the cap is unknown (working_set <= 0): no device limit.
+inline constexpr int64_t kWorkingSetMarginPct = 10;
+// Automatic sizing shrinks the KV cache to the working set only down to this
+// many tokens (or the model's context, if smaller): below it the device is
+// refused at admission instead (--backend auto then starts on the CPU, --gpu
+// reports it with the largest --ctx that fits). An explicit --ctx is honoured.
+inline constexpr int64_t kMinAutoKvTokens = 1024;
+inline constexpr int64_t kDefaultWorkspaceReserve = int64_t{1} << 30;
+int64_t device_kv_budget(int64_t working_set, int64_t allocated, int64_t weight_bytes, int64_t workspace_reserve,
+                         int64_t scratch_bytes = 0);
+// The most KV tokens (whole 16-token blocks) whose pool, as KvBlockPool
+// allocates it (kv_geometry_for(...).total_bytes()), fits in `budget` bytes:
+// the same arithmetic the admission check compares, so an automatically
+// sized cache is never refused by it.
+int64_t kv_tokens_within(const ModelConfig& c, DType kv_dtype, int64_t budget);
+
 Status check_memory_fit(int64_t weight_bytes, int64_t kv_bytes, int64_t kv_per_token, int64_t total_ram,
-                        int64_t device_free);
+                        int64_t device_free, int64_t kv_budget = -1);
 
 // Observability snapshot, refreshed by the scheduler thread after each step.
 struct EngineStats {

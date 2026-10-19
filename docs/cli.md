@@ -76,7 +76,7 @@ dynalm pull <name|link> [-o DIR] [--force] [--check]
 | `<name>` | A registry name: `qwen3:4b`, `llama:3b`, ... (`dynalm models --available`) |
 | `<link>` | A Hugging Face file link (page or download link), the short form `<owner>/<repo>/<file>.gguf`, or any http(s) URL to a `.gguf` |
 | `-o DIR` | Where to save (default `$DYNALM_MODELS_DIR` or `~/.dynalm/models`) |
-| `--check` | Only check whether DynaLM can run it (reads 256 KiB, saves nothing) |
+| `--check` | Only check whether DynaLM can run it (reads 256 KiB, saves nothing): the architecture, and the tokenizer when its keys are in those bytes |
 | `--force` | Download even if it looks unsupported, or download again |
 
 ```sh
@@ -131,9 +131,17 @@ dynalm inspect <model> [--metadata] [--tensors]
 ```
 
 Shows architecture, parameter count, layers, attention heads and GQA grouping, MoE experts, context length,
-vocabulary, quantization by tensor type, the RAM estimate and whether it is supported. Registry names work
-for downloaded models. `--metadata` adds every GGUF key; `--tensors` lists every tensor. Works on GGUF files and
-Hugging Face folders.
+vocabulary, quantization by tensor type and the RAM estimate. Registry names work for downloaded models.
+`--metadata` adds every GGUF key; `--tensors` lists every tensor. Works on GGUF files and Hugging Face folders.
+
+**Support** is checked in three parts, each by the same code a load runs:
+- **Architecture:** an adapter exists.
+- **Tokenizer:** the tokenizer model and pre-tokenizer load.
+- **Weights:** every tensor type runs (GGUF), or the quantization is supported (safetensors).
+
+`Supported: YES` only when all three pass; otherwise `NO (...)` names the failing parts. A Hugging
+Face folder that holds only `config.json` and the tokenizer files (no weights yet) is checked too,
+and reported as `PARTIAL`.
 
 ---
 

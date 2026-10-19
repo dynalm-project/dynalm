@@ -15,8 +15,13 @@ every weight shard are fetched). Default list: tools/bench/models-matrix.txt;
 a 50-model list: tools/bench/models-50.txt.
 
 Per model:
-  1. check     GGUF: `dynalm pull --check` (256 KiB); download size (HTTP HEAD /
-               HF API) against --max-gb. --check-only stops here (~2 s each).
+  1. check     GGUF: `dynalm pull --check` (256 KiB: architecture, and the
+               tokenizer when its keys are in the header); safetensors: the HF
+               file list and model_type, then only the small files (config,
+               tokenizer.json) through `dynalm inspect` (architecture and tokenizer,
+               by the loader's code), so an unsupported tokenizer costs no weight
+               download. Download size (HTTP HEAD / HF API) against --max-gb.
+               --check-only stops here (~2 s each).
   2. fetch     `dynalm pull`, or the repo files for hf:.
   3. generate  a fixed chat prompt, greedy, N tokens, with --backend auto (the
                GPU when it runs the model), cpu (ggml's fast CPU kernels) and
@@ -26,7 +31,8 @@ Per model:
                differently at a near-tie).
   4. accuracy  (--accuracy, GGUF on a GPU) bench_gpu_accuracy: DD-053 PASS/FAIL.
   5. bench     (--bench) `dynalm benchmark` in-process on the GPU (if auto used
-               one) and cpu: one user (512-token prompt, 64 tokens: prompt tok/s
+               one), cpu (ggml's kernels) and native-cpu (exact mode, DynaLM's
+               DD-053 kernels; compared with llama.cpp's CPU too): one user (512-token prompt, 64 tokens: prompt tok/s
                = 512 / TTFT p50, decode tok/s = 1000 / ITL p50) and 4 users
                (output tok/s); llama-bench pp512 / tg128 on the GPU (-ngl 99)
                and CPU (-ngl 0) for GGUF. AC power and load are recorded with
@@ -59,7 +65,10 @@ COLS = ["n", "model", "format", "supported", "size_gb", "file", "arch", "quant",
         "auto_matches_native", "cpu_matches_native", "accuracy",
         "gpu_prompt_tok_s", "gpu_decode_tok_s", "gpu_4user_tok_s",
         "cpu_prompt_tok_s", "cpu_decode_tok_s", "cpu_4user_tok_s",
-        "llama_gpu_pp512", "llama_gpu_tg128", "llama_cpu_pp512", "llama_cpu_tg128", "bench_conditions", "seconds"]
+        "llama_gpu_pp512", "llama_gpu_tg128", "llama_cpu_pp512", "llama_cpu_tg128", "bench_conditions", "seconds",
+        # Added after the first release of this file: appended, so column numbers above stay
+        # (tools/bench/e2e_watch.sh reads them by position).
+        "exact_prompt_tok_s", "exact_decode_tok_s", "exact_4user_tok_s"]
 # Hugging Face model_type values the safetensors loader accepts (keep in sync
 # with dynalm/src/loader/hf/hf_model.cpp; the load step is the final word).
 HF_MODEL_TYPES = {"llama", "mistral", "mixtral", "qwen2", "qwen3", "qwen2_moe", "qwen3_moe", "gemma", "gemma2",
@@ -231,6 +240,32 @@ class Matrix:
             (f" (see {log.name})" if status != "ok" else ""))
         return status, (devs[-1].replace(" ", "_") if devs else "-"), (tps[-1] if tps else "-"), txt
 
+    def hf_precheck(self, repo: str, files: list[dict], tag: str) -> str:
+        """Fetch only the small files (config, tokenizer), and let `dynalm inspect` check
+        architecture and tokenizer with the loader's own code before any weights are downloaded."""
+        meta = [f for f in files if not f["path"].endswith(".safetensors")]
+        say(tag, f"check: tokenizer and config ({len(meta)} small files) ...")
+        st, d = hf_download(repo, meta, self.out / "hf-meta", self.token)
+        if d is None:
+            return st
+        log = self.logs / f"{tag}-precheck.log"
+        run([self.dynalm, "inspect", str(d)], log, 120)
+        text = log.read_text(errors="replace")
+        shutil.rmtree(d, ignore_errors=True)
+        verdicts = re.findall(r"^Supported:\s+(.+)$", text, re.M)
+        if not verdicts:  # inspect did not run or printed no verdict: unverified, so not "yes"
+            say(tag, f"check: no support verdict from dynalm inspect (see {log.name})")
+            return "check-failed"
+        verdict = verdicts[0]
+        if verdict.startswith("NO"):
+            for part in ("Architecture", "Tokenizer"):
+                why = re.findall(rf"^\s+{part}:\s+NO \((.*)\)$", text, re.M)
+                if why:
+                    say(tag, f"check: {part.lower()} not supported: {why[0]}")
+                    return f"no ({part.lower()})"
+            return "no"
+        return "yes"
+
     def dyn_bench(self, backend: str, model: str, tag: str) -> tuple[str, str, str]:
         j = self.logs / f"{tag}-bench-{backend}.jsonl"
         log = self.logs / f"{tag}-bench-{backend}.log"
@@ -281,6 +316,8 @@ class Matrix:
             R["size_gb"] = f"{size:.1f}" if files else "-"
             if st == "yes" and size > a.max_gb:
                 st = "too-large"
+            if st == "yes":
+                st = self.hf_precheck(repo, files, tag)
             R["supported"] = st
             say(tag, f"check: {st}, {R['size_gb']} GB")
             if st == "yes" and not a.check_only:
@@ -297,7 +334,9 @@ class Matrix:
                 code = run([self.dynalm, "pull", "--check", entry], self.logs / f"{tag}-check.log", 120)
                 text = (self.logs / f"{tag}-check.log").read_text(errors="replace")
                 m = re.search(r"architecture '([^']+)' is not supported", text)
-                R["supported"] = "yes" if code == 0 else f"no ({m.group(1)})" if m else "link-error"
+                tok = "tokenizer not supported" in text  # dynalm pull --check: the loader's tokenizer rule
+                R["supported"] = ("yes" if code == 0 else f"no ({m.group(1)})" if m else "no (tokenizer)" if tok
+                                  else "link-error")
                 if R["supported"] == "yes" and "/" in entry:
                     size = gguf_size_gb(entry, self.token)
                     if size is not None:
@@ -352,6 +391,8 @@ class Matrix:
                 R["gpu_prompt_tok_s"], R["gpu_decode_tok_s"], R["gpu_4user_tok_s"] = self.dyn_bench("auto", m, tag)
             if R["cpu"] == "ok":
                 R["cpu_prompt_tok_s"], R["cpu_decode_tok_s"], R["cpu_4user_tok_s"] = self.dyn_bench("cpu", m, tag)
+            if R["native"] == "ok":  # exact mode (--mode exact): DynaLM's own DD-053 CPU kernels
+                R["exact_prompt_tok_s"], R["exact_decode_tok_s"], R["exact_4user_tok_s"] = self.dyn_bench("native-cpu", m, tag)
             if R["format"] == "gguf":
                 R["llama_gpu_pp512"], R["llama_gpu_tg128"] = self.llama(99, m, tag)
                 R["llama_cpu_pp512"], R["llama_cpu_tg128"] = self.llama(0, m, tag)

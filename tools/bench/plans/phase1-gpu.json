@@ -1,18 +1,94 @@
 {
-  "_comment": "Phase 1 GPU scheduling (predictive DD-079, target 4x, LRU graph cache). Arm a = v0.1.7 (or the candidate with B_ENV restoring the old profile), arm b = candidate. Fill expected_exe from DIR/expected_exe.json written by tools/bench/ab.sh.",
+  "_comment": "Opt-in predictive GPU scheduling (DD-079 predictive controller, decode target 4x), NOT in the default build: both v0.1.7 and 0.1.8-dev default to target 12 with predictive off. Use within one build: A=B=<candidate>, B_ENV=\"DYNALM_DECODE_PREDICTIVE=1 DYNALM_DECODE_TARGET=4\" (arm a = default profile, arm b = predictive), tools/bench/ab.sh --sessions 2 --rounds 4 --warmup-rounds 1. The P1-tail gate is the hypothesis (ITL p99 30% better at 4-16 users); the others guard throughput, median ITL, first token and single-user speed. Verdicts need a 95% CI (require_ci). e2e-20261019-0022 ran this plan between v0.1.7 and the candidate without B_ENV, where the change was absent; the regression guard for that comparison is gpu-regression.json.",
   "reference": "a",
   "expected_exe": {},
-  "reliability": {"primary": {"output_tok_s": 5.0}, "tails": {"itl_p99": 20.0}, "min_pairs": 3},
+  "reliability": {
+    "primary": {
+      "output_tok_s": 5.0
+    },
+    "tails": {
+      "itl_p99": 20.0
+    },
+    "min_pairs": 4,
+    "require_ci": true
+  },
   "gates": [
-    {"id": "P1-tail", "baseline": "a", "candidate": "b", "metric": "itl_p99", "rule": "improve", "threshold": 30.0,
-     "where": {"concurrency": [4, 8, 16]}},
-    {"id": "P1-throughput", "baseline": "a", "candidate": "b", "metric": "output_tok_s", "rule": "no_regress",
-     "threshold": 5.0, "pair_threshold": 10.0, "where": {"concurrency": [4, 8, 16]}},
-    {"id": "P1-itl-median", "baseline": "a", "candidate": "b", "metric": "itl_p50", "rule": "no_regress",
-     "threshold": 5.0, "pair_threshold": 10.0, "where": {"concurrency": [4, 8, 16]}},
-    {"id": "P1-first-token", "baseline": "a", "candidate": "b", "metric": "ttft_p95", "rule": "no_regress",
-     "threshold": 15.0, "pair_threshold": 25.0, "where": {"concurrency": [4, 8, 16]}},
-    {"id": "P1-single-user", "baseline": "a", "candidate": "b", "metric": "output_tok_s", "rule": "equivalent",
-     "threshold": 3.0, "pair_threshold": 5.0, "where": {"concurrency": [1]}}
+    {
+      "id": "P1-tail",
+      "baseline": "a",
+      "candidate": "b",
+      "metric": "itl_p99",
+      "rule": "improve",
+      "threshold": 30.0,
+      "where": {
+        "concurrency": [
+          4,
+          8,
+          16
+        ]
+      }
+    },
+    {
+      "id": "P1-throughput",
+      "baseline": "a",
+      "candidate": "b",
+      "metric": "output_tok_s",
+      "rule": "no_regress",
+      "threshold": 5.0,
+      "pair_threshold": 10.0,
+      "where": {
+        "concurrency": [
+          4,
+          8,
+          16
+        ]
+      }
+    },
+    {
+      "id": "P1-itl-median",
+      "baseline": "a",
+      "candidate": "b",
+      "metric": "itl_p50",
+      "rule": "no_regress",
+      "threshold": 5.0,
+      "pair_threshold": 10.0,
+      "where": {
+        "concurrency": [
+          4,
+          8,
+          16
+        ]
+      }
+    },
+    {
+      "id": "P1-first-token",
+      "baseline": "a",
+      "candidate": "b",
+      "metric": "ttft_p95",
+      "rule": "no_regress",
+      "threshold": 15.0,
+      "pair_threshold": 25.0,
+      "where": {
+        "concurrency": [
+          4,
+          8,
+          16
+        ]
+      }
+    },
+    {
+      "id": "P1-single-user",
+      "baseline": "a",
+      "candidate": "b",
+      "metric": "output_tok_s",
+      "rule": "equivalent",
+      "threshold": 3.0,
+      "pair_threshold": 5.0,
+      "where": {
+        "concurrency": [
+          1
+        ]
+      }
+    }
   ]
 }

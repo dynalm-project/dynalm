@@ -61,7 +61,7 @@ for t in "${TESTS[@]}"; do
   fi
 done
 PY="$(command -v python3 || command -v python)"
-for t in tools/test_compare_engines.py tools/test_bench_analyze.py tools/test_bench_report.py; do
+for t in tools/test_compare_engines.py tools/test_bench_analyze.py tools/test_bench_report.py tools/test_e2e_report.py tools/test_model_matrix.py tools/test_ab.py; do
   out="$("$PY" "$t" 2>&1)"
   code=$?
   ran=$((ran + 1))
