@@ -15,6 +15,14 @@ The numbers below were measured on one machine (Apple M4 Pro, macOS); the full e
 benchmark is still pending. Methods and tools (`tools/bench/ab.sh`, `baseline.sh`, `bench_ppl`):
 docs/benchmarking.md.
 
+### Changed (benchmarks)
+- **`tools/bench/model_matrix.py` measures DynaLM and llama.cpp alike** (`bench_method`
+  `d512-r5`): decode of 64 tokens at depth 512 in both (`llama-bench -d 512`; before, llama.cpp's
+  tg128 ran at depth 0 against DynaLM's decode after a 512-token prompt), 5 repetitions after a
+  warm-up in both (was 3 and `-r 2`), means with standard deviations (new `*_sd` columns),
+  flash attention on in both, and llama.cpp's CPU run with op offload off (`-nopo 1`).
+  `--bench-paths` selects the speed runs. Older results still render, labelled with their method.
+
 ### Added
 - **Exact-mode CPU speed in the model matrix and the end-to-end report:** with `--bench`,
   `tools/bench/model_matrix.py` also measures `--backend cpu --mode exact` (DynaLM's

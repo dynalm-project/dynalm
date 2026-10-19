@@ -66,7 +66,7 @@ def matrix_section(out: Path) -> tuple[list[str], list[str]]:
     if not rows:
         return ["## Models", "", "Not run.", ""], []
     for r in rows:  # results from before the exact-mode speed columns
-        for k in ("exact_prompt_tok_s", "exact_decode_tok_s", "exact_4user_tok_s"):
+        for k in ("exact_prompt_tok_s", "exact_decode_tok_s", "exact_4user_tok_s", "bench_method"):
             r.setdefault(k, "-")
     ran = [r for r in rows if r["native"] != "-"]
     summary, L = [], ["## Models: support, accuracy and speed", ""]
@@ -112,8 +112,12 @@ def matrix_section(out: Path) -> tuple[list[str], list[str]]:
                      f"{r['native']} | {r['accuracy']} |")
     # Every model.
     L += ["", "### Every model", "",
-          "Tokens/s from `dynalm benchmark` in-process (one user: prompt = 512 / TTFT, decode = 1000 / ITL p50) and "
-          "`llama-bench` (pp512, tg128), on the same file; ratio = DynaLM ÷ llama.cpp. \"= exact\": the 32-token greedy "
+          ("Tokens/s from `dynalm benchmark` in-process and `llama-bench`, measured alike (decode of 64 tokens at depth "
+           "512 in both, mean of 5 repetitions after a warm-up, flash attention on; matrix summary.md has the spread)"
+           if any(r["bench_method"] == "d512-r5" for r in rows) else
+           "Tokens/s from `dynalm benchmark` in-process (one user: prompt = 512 / TTFT, decode = 1000 / ITL p50) and "
+           "`llama-bench` (pp512, tg128 at depth 0, -r 2)") +
+          ", on the same file; ratio = DynaLM ÷ llama.cpp. \"= exact\": the 32-token greedy "
           "answer equals the exact-mode (DD-053) CPU path's (reported, not gated).", "",
           "| Provider | Model | Format / quant | GB | GPU | = exact | DD-053 | GPU prompt (llama, ratio) | GPU decode (llama, ratio) | "
           "CPU prompt (llama, ratio) | CPU decode (llama, ratio) | Exact CPU prompt (llama, ratio) | "
