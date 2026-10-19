@@ -63,6 +63,8 @@ target_compile_definitions(dynacore PUBLIC
 # private to src/gpu; DynaLM never sees them.
 if(DYNALM_WITH_GGML)
   target_link_libraries(dynacore PRIVATE ggml ggml-base)
+  # ggml-backend-impl.h (the backend's graph_optimize, src/gpu/ggml_graph.cpp).
+  target_include_directories(dynacore SYSTEM PRIVATE $<TARGET_PROPERTY:ggml-base,SOURCE_DIR>)
   target_compile_definitions(dynacore PRIVATE DYNACORE_HAS_GGML=1 DYNACORE_GGML_REVISION="${DYNALM_GGML_COMMIT}")
   foreach(_gpu METAL VULKAN CUDA)
     string(TOLOWER ${_gpu} _lib)  # ggml-metal, ggml-vulkan, ggml-cuda

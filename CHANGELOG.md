@@ -15,6 +15,15 @@ The numbers below were measured on one machine (Apple M4 Pro, macOS); the full e
 benchmark is still pending. Methods and tools (`tools/bench/ab.sh`, `baseline.sh`, `bench_ppl`):
 docs/benchmarking.md.
 
+### Changed (performance)
+- **Metal: DynaLM's GPU graphs are reordered for concurrency**, with ggml's own pass
+  (`graph_optimize`, as llama.cpp's scheduler runs it), once per cached graph and before its memory
+  is allocated. Before, ggml-metal put a barrier before 98% of DynaLM's dispatches. Barriers per
+  decode step: Qwen2.5-0.5B 487 → 365 (llama.cpp 338), Qwen3-8B 688 → 581 (llama.cpp 506).
+  Decode at one user (paired A/B, 8 pairs, 95% CI): 0.5B +7.5% [+6.4, +8.0], 8B +1.3%
+  [+0.5, +1.8]; no regression in TTFT, ITL p99 or 4/16-user throughput; DD-053 PASS on six models
+  (including Granite MoE and Gemma 3). `DYNACORE_GPU_GRAPH_OPTIMIZE=0` turns it off.
+
 ### Changed (benchmarks)
 - **`tools/bench/model_matrix.py` measures DynaLM and llama.cpp alike** (`bench_method`
   `d512-r5`): decode of 64 tokens at depth 512 in both (`llama-bench -d 512`; before, llama.cpp's

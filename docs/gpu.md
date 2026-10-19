@@ -144,6 +144,8 @@ You can switch on more than one GPU type in the same build.
 - **Environment variable:** `DYNALM_BACKEND=cpu dynalm serve qwen2.5:1.5b`
 - **Command-line flags win:** `--gpu` overrides a saved `device: cpu` for one run.
 - **Several GPUs:** `DYNACORE_GPU_INDEX=1` picks the second one.
+- **Metal graph reordering:** on by default; `DYNACORE_GPU_GRAPH_OPTIMIZE=0` turns it off (for
+  A/B comparisons and diagnosis).
 
 With `auto`, DynaLM tries the GPUs in this order: CUDA, then Metal, then Vulkan.
 
