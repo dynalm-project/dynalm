@@ -17,6 +17,11 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if os.name == "nt":
+    # ab.sh is a macOS / Linux tool (pmset, uptime, awk; docs/benchmarking.md); on Windows
+    # runners `bash` is the WSL stub. Reported as a skip, not a pass.
+    print("skip: tools/bench/ab.sh runs on macOS and Linux only (not tested on Windows)")
+    sys.exit(0)
 spec = importlib.util.spec_from_file_location("bench_analyze", ROOT / "tools/bench_analyze.py")
 ba = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ba)
@@ -47,8 +52,17 @@ def check(cond, what):
         sys.exit(f"FAIL: {what}")
 
 
+# A quiet machine as macOS's pmset would report it (AC power, Energy Mode Automatic), so the
+# after-run power check passes, as on Linux where it does not exist: only ALLOW_NOISY may then
+# mark the runs unquiet (CI linux, PR #6: they were recorded quiet before ab.sh honoured it).
+PMSET = """#!/bin/sh
+if [ "$2" = "batt" ]; then echo "Now drawing from 'AC Power'"; else echo " powermode            0"; fi
+"""
+
+
 def ab(d: Path, *args):
-    env = dict(os.environ, A=str(d / "fa"), B=str(d / "fb"), ALLOW_NOISY="1", ORDER_LOG=str(d / "order.log"))
+    env = dict(os.environ, A=str(d / "fa"), B=str(d / "fb"), ALLOW_NOISY="1", ORDER_LOG=str(d / "order.log"),
+               PATH=f"{d / 'fakebin'}{os.pathsep}{os.environ.get('PATH', '')}")
     p = subprocess.run(["bash", str(ROOT / "tools/bench/ab.sh"), "--model", str(d / "model.gguf"), "--conc", "1,4",
                         "--prompt", "8", "--output", "4", *args], env=env, capture_output=True, text=True)
     check(p.returncode == 0, f"ab.sh failed: {p.stderr[-300:]}")
@@ -60,6 +74,9 @@ with tempfile.TemporaryDirectory() as t:
         (d / n).write_text(FAKE)
         (d / n).chmod((d / n).stat().st_mode | stat.S_IEXEC)
     (d / "model.gguf").write_text("x")
+    (d / "fakebin").mkdir()
+    (d / "fakebin/pmset").write_text(PMSET)
+    (d / "fakebin/pmset").chmod(0o755)
 
     out = d / "run"
     ab(d, "--out", str(out), "--sessions", "2", "--rounds", "4", "--warmup-rounds", "1", "--workload", "w")

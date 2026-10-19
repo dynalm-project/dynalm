@@ -105,6 +105,10 @@ gate() {
 run_arm() {  # arm id [dir: raw (measured, default) | warmup]
   local arm=$1 id=$2 dir=${3:-raw} exe envs sha quiet=true code=0 c
   exe=$OUT/bin/dynalm-$arm
+  # A run started without waiting for quiet conditions (ALLOW_NOISY=1) is not
+  # a measurement, on any OS (before, only macOS's after-run power check could
+  # mark it, so on Linux such runs counted as quiet).
+  [[ ${ALLOW_NOISY:-0} == 1 ]] && quiet=false
   if [[ $arm == a ]]; then envs=$A_ENV; sha=$SHA_A; else envs=$B_ENV; sha=$SHA_B; fi
   gate "$id"
   for c in ${CONC//,/ }; do

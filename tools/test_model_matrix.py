@@ -51,9 +51,14 @@ Supported:     PARTIAL (architecture and tokenizer supported; weights not presen
 
 with tempfile.TemporaryDirectory() as d:
     d = Path(d)
-    fake = d / "dynalm"
-    fake.write_text('#!/bin/sh\ncat "$FAKE_INSPECT"\n')
-    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    # A fake dynalm that prints $FAKE_INSPECT: a .cmd on Windows (CreateProcess runs it), sh elsewhere.
+    if os.name == "nt":
+        fake = d / "dynalm.cmd"
+        fake.write_text('@type "%FAKE_INSPECT%"\r\n')
+    else:
+        fake = d / "dynalm"
+        fake.write_text('#!/bin/sh\ncat "$FAKE_INSPECT"\n')
+        fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
     (d / "logs").mkdir()
     fetched = []
 
@@ -75,6 +80,11 @@ with tempfile.TemporaryDirectory() as d:
         check(got == want, f"{case}: {got!r} != {want!r}")
         check(not any(p.endswith(".safetensors") for p in fetched[-1]), f"{case}: weights fetched before the check")
         check(not (d / "hf-meta" / "owner__repo").exists(), f"{case}: the small files are removed after the check")
+
+    # No verdict at all (inspect did not run, crashed or printed nothing): unverified, not "yes".
+    (d / "empty.txt").write_text("")
+    os.environ["FAKE_INSPECT"] = str(d / "empty.txt")
+    check(mm.Matrix.hf_precheck(m, "owner/repo", files, "01") == "check-failed", "no verdict -> check-failed")
 
     # A failed small-file download is reported as such, without running inspect.
     mm.hf_download = lambda repo, files, root, token: ("gated", None)

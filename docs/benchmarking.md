@@ -59,7 +59,8 @@ kernels ran).
      - it failed, or had errors;
      - any request produced a different number of tokens than requested.
 
-**Sample size and warm-up.** `tools/bench/ab.sh` runs both arms through a discarded warm-up
+**Sample size and warm-up.** `tools/bench/ab.sh` (macOS and Linux; it reads `pmset` and
+`uptime`) runs both arms through a discarded warm-up
 round first (`--warmup-rounds 1`, into `DIR/warmup/`, never analyzed), then
 `--sessions 2 --rounds 4` by default: 8 pairs per point, arm order alternated every round. A plan
 with `"require_ci": true` in `reliability` (all plans in `tools/bench/plans/`) also needs the 95%

@@ -252,7 +252,11 @@ class Matrix:
         run([self.dynalm, "inspect", str(d)], log, 120)
         text = log.read_text(errors="replace")
         shutil.rmtree(d, ignore_errors=True)
-        verdict = (re.findall(r"^Supported:\s+(.+)$", text, re.M) or ["?"])[0]
+        verdicts = re.findall(r"^Supported:\s+(.+)$", text, re.M)
+        if not verdicts:  # inspect did not run or printed no verdict: unverified, so not "yes"
+            say(tag, f"check: no support verdict from dynalm inspect (see {log.name})")
+            return "check-failed"
+        verdict = verdicts[0]
         if verdict.startswith("NO"):
             for part in ("Architecture", "Tokenizer"):
                 why = re.findall(rf"^\s+{part}:\s+NO \((.*)\)$", text, re.M)
