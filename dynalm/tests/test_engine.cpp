@@ -36,6 +36,7 @@
 #include "dynacore/gpu/ggml_device.h"
 #include "dynacore/hardware/process_stats.h"
 #include "loader/model_loader.h"
+#include "model/architecture.h"
 #include "loader/model_source.h"
 #include "loader/gguf/gguf_tokenizer.h"
 #include "loader/gguf/gguf.h"
@@ -421,6 +422,41 @@ void test_memory_bounded(Engine& e) {
 }
 
 }  // namespace
+
+// Gemma 1-3 ask ggml-cpu to scale Q in its own op (llama.cpp's operation
+// order, for bit-parity); no other architecture does.
+void test_attn_prescale_q() {
+  int configured = 0;
+  for (std::string_view id : supported_architecture_ids()) {
+    ModelConfig c;
+    c.architecture = std::string(id);
+    c.num_layers = 2;
+    c.hidden_size = 128;
+    c.num_heads = 4;
+    c.num_kv_heads = 2;
+    c.head_dim = 32;
+    TensorRegistry w(c.num_layers);
+    const ModelArchitecture* a = find_architecture(id);
+    CHECK(a != nullptr);
+    if (!a->configure(c, w).ok()) continue;  // needs tensors to configure
+    ++configured;
+    const bool gemma = id == "gemma" || id == "gemma2" || id == "gemma3";
+    if (c.attn_prescale_q != gemma) std::fprintf(stderr, "attn_prescale_q wrong for %.*s\n", static_cast<int>(id.size()), id.data());
+    CHECK(c.attn_prescale_q == gemma);
+  }
+  for (std::string_view id : {"gemma3", "llama", "qwen3"}) {
+    ModelConfig c;
+    c.architecture = std::string(id);
+    c.num_layers = 2;
+    c.hidden_size = 128;
+    c.num_heads = 4;
+    c.num_kv_heads = 2;
+    c.head_dim = 32;
+    TensorRegistry w(c.num_layers);
+    CHECK(find_architecture(id)->configure(c, w).ok());
+  }
+  std::printf("  attn_prescale_q: Gemma only (%d architectures configured)\n", configured);
+}
 
 // `auto` picks the GPU only for a model it runs, and the CPU otherwise;
 // an explicit GPU request for an unsupported model fails at startup.
@@ -985,6 +1021,7 @@ int main() {
   } else {
     std::printf("GPU: NOT BUILT (ENABLE_METAL/VULKAN/CUDA=OFF)\n");
   }
+  test_attn_prescale_q();
   test_device_selection(dir.string(), gpu_usable, gpu_kind);
   std::printf("device selection: auto -> %s for Qwen2 and Qwen3 (per-head Q/K norm); cpu -> ggml kernels when built; "
               "--gpu/--cpu/--backend\n",

@@ -556,6 +556,7 @@ Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& c
     ap.kv = kv_views_;
     ap.num_heads = c.num_heads;
     ap.scale = attn_scale;
+    ap.prescale_q = c.attn_prescale_q;
     ap.softcap = c.attn_logit_softcap;
     ap.sliding_window = c.layer_uses_sliding_window(l) ? c.sliding_window : 0;
     backend_.attention(ap);

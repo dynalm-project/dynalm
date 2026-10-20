@@ -419,6 +419,92 @@ void test_paged_attention(Env& e) {
               "    scattered blocks, f16/f32/q8_0 KV, GQA, window + softcap, prefill then decode with graph reuse\n");
 }
 
+// AttentionParams::prescale_q (Gemma): on ggml-cpu the result must be
+// bit-identical to scaling Q on the host and attending with scale 1 (llama.cpp's
+// graph); elsewhere bit-identical to the scale inside attention (the flag is
+// ignored). Both close to DynaCore's CPU reference, which ignores it too.
+// Small Q (|q| < 1e-2) so the scaled values reach fp16's subnormal range,
+// where the two orders round differently. Scales 1/16 (Gemma 1B-12B) and
+// 1/12 (27B, not a power of two).
+void test_attention_prescale_q(Env& e) {
+  int differ = 0;
+  for (KvLayout layout : {KvLayout::kSlotMajor, KvLayout::kHeadMajor}) {
+    for (float scale : {1.0f / 16, 1.0f / 12}) {
+      KvGeometry g;
+      g.num_layers = 1;
+      g.num_kv_heads = 2;
+      g.head_dim = g.head_dim_v = 64;
+      g.block_size = 16;
+      g.num_blocks = 4;
+      g.dtype = DType::kF16;
+      const int32_t heads = 4;
+      const auto bytes = static_cast<size_t>(g.bytes_per_layer() / 2);
+      auto kc = Tensor::zeros(DType::kI8, {static_cast<int64_t>(bytes)}), vc = Tensor::zeros(DType::kI8, {static_cast<int64_t>(bytes)});
+      auto kg = e.rec->allocate(bytes), vg = e.rec->allocate(bytes);
+      CHECK(kc.ok() && vc.ok() && kg.ok() && vg.ok());
+      e.keep.push_back(*kc);
+      e.keep.push_back(*vc);
+      const std::vector<int32_t> table = {3, 0, 2};
+      KvGeometry gg = g;
+      gg.layout = layout;
+      const std::vector<KvLayerView> cv = {KvLayerView{kc->data(), vc->data(), &g, table}};
+      const std::vector<KvLayerView> gv = {KvLayerView{(*kg)->data(), (*vg)->data(), &gg, table}};
+      const int64_t n = 40;
+      std::vector<int32_t> pos(static_cast<size_t>(n)), seq(static_cast<size_t>(n), 0);
+      std::iota(pos.begin(), pos.end(), 0);
+      const auto kd = randv(static_cast<size_t>(n * 128)), vd = randv(static_cast<size_t>(n * 128));
+      auto [kcv, kgv] = e.act(n, 128, &kd);
+      auto [vcv, vgv] = e.act(n, 128, &vd);
+      e.cpu.kv_store(kcv, vcv, pos, seq, cv);
+      e.rec->kv_store(kgv, vgv, pos, seq, gv);
+      for (int64_t m : {1, 16, 40}) {  // decode, a ubatch of 16, >= 32 rows (tiled kernel)
+        const std::span<const int32_t> qpos(pos.data() + (n - m), static_cast<size_t>(m));
+        const std::span<const int32_t> qseq(seq.data(), static_cast<size_t>(m));
+        const auto qd = randv(static_cast<size_t>(m * heads * 64), -1e-2f, 1e-2f);
+        std::vector<float> qs(qd.size());
+        for (size_t i = 0; i < qd.size(); ++i) qs[i] = qd[i] * scale;
+        auto [qc, qg] = e.act(m, heads * 64, &qd);
+        auto [qsc, qsg] = e.act(m, heads * 64, &qs);
+        (void)qsc;
+        auto run = [&](const TensorView& q, float sc, bool pre) {
+          auto [oc, og] = e.act(m, heads * 64);
+          (void)oc;
+          AttentionParams ap;
+          ap.num_heads = heads;
+          ap.q = q;
+          ap.out = og;
+          ap.positions = qpos;
+          ap.row_seq = qseq;
+          ap.kv = gv;
+          ap.scale = sc;
+          ap.prescale_q = pre;
+          e.rec->attention(ap);
+          return e.download(og);
+        };
+        const std::vector<float> inside = run(qg, scale, false), pre = run(qg, scale, true), host = run(qsg, 1.0f, false);
+        const std::vector<float>& want = e.gpu->device().type == DeviceType::kCpu ? host : inside;
+        CHECK(std::memcmp(pre.data(), want.data(), pre.size() * 4) == 0);
+        differ += std::memcmp(pre.data(), inside.data(), pre.size() * 4) != 0;
+        auto [oc, og] = e.act(m, heads * 64);
+        (void)og;
+        AttentionParams pc;
+        pc.num_heads = heads;
+        pc.q = qc;
+        pc.out = oc;
+        pc.positions = qpos;
+        pc.row_seq = qseq;
+        pc.kv = cv;
+        pc.scale = scale;
+        pc.prescale_q = true;
+        e.cpu.attention(pc);
+        expect_close("attention prescale_q", host_rows(oc), pre, 3e-3);
+      }
+    }
+  }
+  std::printf("  attention prescale_q: = host-scaled Q on ggml-cpu, = scale inside elsewhere; 1/16 and 1/12,\n"
+              "    M 1/16/40, both KV layouts (%d of 12 differ from scale inside)\n", differ);
+}
+
 // Errors are reported, not hidden; the device stays usable afterwards.
 void test_failures(Env& e) {
   // Direct op calls (reference execution) are refused.
@@ -837,6 +923,7 @@ int main() {
     test_reshaped_view(e);
     test_moe_ffn(e);
     test_moe_ffn_repacked(e);
+    test_attention_prescale_q(e);
     test_mapped_weights(e);
     const SegmentStats st = e.stats();
     std::printf("segments %lld, graphs built %lld, reused %lld, evictions %lld\n", static_cast<long long>(st.segments),

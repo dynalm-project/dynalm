@@ -86,6 +86,7 @@ struct ModelConfig {
   float attn_logit_softcap = 0.0f;    // 0 = off (Gemma2)
   float final_logit_softcap = 0.0f;   // 0 = off (Gemma2)
   float attn_scale = 0.0f;            // 0 = 1/sqrt(head_dim)
+  bool attn_prescale_q = false;       // AttentionParams::prescale_q (Gemma)
 
   // Sliding-window attention. `sliding_window` = 0 means full attention on all
   // layers; otherwise `sliding_layers[i]` says whether layer i uses the window.

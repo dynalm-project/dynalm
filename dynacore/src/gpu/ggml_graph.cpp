@@ -452,6 +452,13 @@ class GraphBuilder {
     const int32_t hd = g.head_dim, hdv = g.head_dim_v, nkv = g.num_kv_heads, nh = p.num_heads;
     ENGINE_ASSIGN_OR_RETURN(ggml_tensor * q, read(p.q));
     if (!ggml_is_contiguous(q)) q = ggml_cont(ctx_, q);
+    // ggml-cpu: Q scaled in its own op when asked (AttentionParams::prescale_q),
+    // as llama.cpp's Gemma graphs do. Metal keeps the scale inside attention.
+    float scale = p.scale;
+    if (p.prescale_q && d_.type_ == DeviceType::kCpu) {
+      q = ggml_scale(ctx_, q, p.scale);
+      scale = 1.0f;
+    }
     ENGINE_ASSIGN_OR_RETURN(ggml_tensor * kpool, pool(p.kv[0], false));
     ENGINE_ASSIGN_OR_RETURN(ggml_tensor * vpool, pool(p.kv[0], true));
     const std::vector<SeqRows>& seqs = seqs_[static_cast<size_t>(ci_)];
@@ -467,7 +474,7 @@ class GraphBuilder {
       ggml_tensor* ks = ggml_view_3d(ctx_, kpool, hd, L, nkv, kpool->nb[1], ggml_row_size(kpool->type, hd), 0);
       ggml_tensor* vs = ggml_view_3d(ctx_, vpool, hdv, L, nkv, vpool->nb[1], ggml_row_size(vpool->type, hdv), 0);
       ggml_tensor* mask = input(InKind::kPagedMask, GGML_TYPE_F16, L, m, -1, 0, static_cast<int32_t>(m), static_cast<int32_t>(L));
-      ggml_tensor* o = ggml_flash_attn_ext(ctx_, qs, ks, vs, mask, p.scale, 0.0f, p.softcap);  // [hdv, nh, m]
+      ggml_tensor* o = ggml_flash_attn_ext(ctx_, qs, ks, vs, mask, scale, 0.0f, p.softcap);  // [hdv, nh, m]
       (void)ggml_prec_set_acc(o, GGML_PREC_F32);  // fp32 softmax/accumulation, as on Metal
       // Sparse K/V: each row visits only its finite mask entries (its own
       // sequence) instead of the whole span; the backend decides when that
@@ -484,7 +491,7 @@ class GraphBuilder {
       ggml_tensor* ks = ggml_reshape_3d(ctx_, ggml_get_rows(ctx_, kpool, gidx), hd, L, nkv);
       ggml_tensor* vs = ggml_reshape_3d(ctx_, ggml_get_rows(ctx_, vpool, gidx), hdv, L, nkv);
       ggml_tensor* mask = input(InKind::kMask, GGML_TYPE_F16, L, n, s.seq, s.r0, s.n, s.span);
-      ggml_tensor* o = ggml_flash_attn_ext(ctx_, qs, ks, vs, mask, p.scale, 0.0f, p.softcap);  // [hdv, nh, n]
+      ggml_tensor* o = ggml_flash_attn_ext(ctx_, qs, ks, vs, mask, scale, 0.0f, p.softcap);  // [hdv, nh, n]
       (void)ggml_prec_set_acc(o, GGML_PREC_F32);
       o = ggml_reshape_2d(ctx_, o, static_cast<int64_t>(hdv) * nh, n);
       out = out == nullptr ? o : ggml_concat(ctx_, out, o, 1);
