@@ -149,7 +149,10 @@ struct SchedulerConfig {
   // The halving controller overshoots the target before it reacts, and those
   // overshooting steps set the ITL p99; this one targets it from the first
   // step after one mixed sample. Off by default, also in the Engine's GPU
-  // profile (kGpuDecodePredictive: it made ITL p50 3-4x worse there);
+  // profile (kGpuDecodePredictive: target 4x made ITL p50 3-4x worse there;
+  // 8x cut the tail but cost 6% tok/s at 8B x 16 users, 2026-10-20). On the
+  // CPU (ggml-cpu, Qwen2.5-1.5B, 4 users, 2 rounds, 2026-10-20) none of the
+  // tested targets 4x/6x/8x beat the halving controller on tok/s or ITL p99.
   // DYNALM_DECODE_PREDICTIVE=0|1 overrides.
   bool decode_protect_predictive = false;
   // EXPERIMENTAL (off by default): in steps with no decode rows and exactly

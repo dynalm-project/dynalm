@@ -23,6 +23,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -335,6 +336,40 @@ void test_predictive_mixed_budget() {
   CHECK(predict_mixed_prefill_budget(12.0, 0.5, 1.0, 64, 256) == 64);    // target 1x: nothing spare
   CHECK(predict_mixed_prefill_budget(12.0, 0.5, 4.0, 512, 256) == 256);  // min above max: max wins
   CHECK(predict_mixed_prefill_budget(12.0, 1e-300, 4.0, 1, 256) == 256); // overflow-safe
+}
+
+// Scheduler profile per device (Engine::create_on): the GPU's mixed-step
+// profile (kGpuMixedPrefillBudget etc.) only on a GPU; the CPU kinds,
+// ggml-cpu included, keep the balanced CPU budgets. The solo-prefill chunk
+// follows the execution model: on for graph devices (GPU and ggml-cpu), off
+// for DynaCore's CPU kernels. Explicit budgets replace the device profile.
+void test_scheduler_profile(bool gpu_usable, DeviceKind gpu_kind) {
+  const SchedulerConfig def;
+  auto cpu_budgets = [&](const SchedulerConfig& s) {
+    return s.prefill_token_budget == def.prefill_token_budget && s.max_prefill_chunk == def.max_prefill_chunk &&
+           s.decode_latency_target == def.decode_latency_target && s.protected_prefill_min == def.protected_prefill_min &&
+           s.decode_protect_predictive == def.decode_protect_predictive;
+  };
+  CHECK(cpu_budgets(make_engine(DeviceKind::kCpu)->scheduler_config()));
+  CHECK(make_engine(DeviceKind::kCpu)->scheduler_config().solo_prefill_chunk == 0);
+  if (ggml_cpu_usable()) {
+    const SchedulerConfig s = make_engine(DeviceKind::kGgmlCpu)->scheduler_config();
+    CHECK(cpu_budgets(s));
+    CHECK(s.solo_prefill_chunk == kGpuSoloPrefillChunk);
+  }
+  if (gpu_usable) {
+    const SchedulerConfig s = make_engine(gpu_kind)->scheduler_config();
+    CHECK(s.prefill_token_budget == kGpuMixedPrefillBudget && s.max_prefill_chunk == kGpuMaxPrefillChunk);
+    CHECK(s.decode_latency_target == kGpuDecodeLatencyTarget && s.protected_prefill_min == kGpuProtectedPrefillMin);
+    CHECK(s.decode_protect_predictive == kGpuDecodePredictive && s.solo_prefill_chunk == kGpuSoloPrefillChunk);
+    EngineOptions o;
+    o.model_path = g_model;
+    o.backend = gpu_kind;
+    o.kv_tokens = 2048;
+    o.device_scheduler_defaults = false;  // the caller's budgets win
+    auto e = Engine::create(o);
+    CHECK(e.ok() && cpu_budgets((*e)->scheduler_config()));
+  }
 }
 
 // Memory admission: weights + KV within 90% of RAM (95% of free GPU memory);
@@ -910,6 +945,63 @@ void test_tokenizer_support(const std::filesystem::path& dir) {
   CHECK(support_verdict(true, true, WeightsCheck::kAbsent).find("PARTIAL") == 0);
 }
 
+// Mixed prompt/decode steps (DD-079), cost-model (DYNALM_DECODE_PREDICTIVE=1)
+// and halving controller (=0), on the scheduler trace (no timing): a decoding
+// stream gets its row in every step until it ends, while two long prompts
+// arrive; mixed steps stay within the step budget and per-sequence chunk, and
+// their prompt share within [protected minimum, prefill budget]; every prompt
+// is computed exactly once, in order (contiguous positions), and finishes; a
+// lone request afterwards has no mixed steps.
+void test_mixed_step_protection(DeviceKind dev) {
+  for (const char* predictive : {"1", "0"}) {
+    set_env("DYNALM_DECODE_PREDICTIVE", predictive);
+    auto e = make_engine(dev, /*prefix_cache=*/false, /*solo=*/-1, /*trace=*/true);
+    const SchedulerConfig cfg = e->scheduler_config();
+    CHECK(cfg.decode_protect_predictive == (predictive[0] == '1'));
+    auto a = e->generate_text(kPrompts[0], false, greedy(160));
+    CHECK(a.ok());
+    StreamEvent ev;
+    CHECK((*a)->next(ev, std::chrono::milliseconds(60000)));  // A is decoding
+    auto b = e->generate_text(std::string(900, 'z'), false, greedy(4));
+    auto c = e->generate_text(std::string(600, 'q'), false, greedy(4));
+    CHECK(b.ok() && c.ok());
+    const Out oa = drain(*a), ob = drain(*b), oc = drain(*c);
+    CHECK(oa.finish == StreamFinish::kLength && ob.finish == StreamFinish::kLength && oc.finish == StreamFinish::kLength);
+    CHECK(ob.tokens == 4 && oc.tokens == 4);
+    const uint64_t a_id = (*a)->id();
+    std::map<uint64_t, int32_t> next_pos;  // per prompt: the first position not yet computed
+    bool a_started = false, a_done = false;
+    int mixed = 0;
+    for (const StepTrace& st : e->take_step_trace()) {
+      bool has_a = false;
+      for (const StepTraceRow& r : st.rows) {
+        if (r.request_id == a_id && r.decode) has_a = true;
+        if (r.decode) continue;
+        if (!st.solo) CHECK(r.rows <= std::max(cfg.max_prefill_chunk, 1));
+        auto [it, fresh] = next_pos.try_emplace(r.request_id, 0);
+        if (r.request_id != a_id) CHECK(r.start_pos == it->second);  // in order, nothing skipped or repeated
+        it->second = r.start_pos + r.rows;
+      }
+      if (has_a) a_started = true;
+      if (a_started && !a_done && !has_a) a_done = true;  // A has finished
+      if (a_done) CHECK(!has_a);                          // never a step without A mid-stream
+      if (st.decode_rows > 0 && st.prefill_rows > 0) {
+        ++mixed;
+        CHECK(!st.solo);
+        CHECK(st.prefill_rows <= st.prefill_budget && st.prefill_budget <= cfg.prefill_token_budget);
+        CHECK(st.prefill_budget >= cfg.protected_prefill_min);
+      }
+    }
+    CHECK(mixed > 0);  // the prompts were prefilled while A decoded
+    const uint64_t b_id = (*b)->id(), c_id = (*c)->id();
+    CHECK(next_pos.count(b_id) && next_pos.count(c_id) && next_pos[b_id] > next_pos[c_id]);  // 900 > 600 chars
+    const Out alone = gen(*e, kPrompts[3], 8);
+    CHECK(alone.finish == StreamFinish::kLength);
+    for (const StepTrace& st : e->take_step_trace()) CHECK(!(st.decode_rows > 0 && st.prefill_rows > 0));
+  }
+  set_env("DYNALM_DECODE_PREDICTIVE", "");
+}
+
 int main() {
   const auto dir = std::filesystem::temp_directory_path() / ("dynalm-test-" + test::unique_suffix());
   std::filesystem::create_directories(dir);
@@ -947,6 +1039,10 @@ int main() {
     std::printf("  cancellation, deadline, invalid requests; later requests unaffected\n");
     test_solo_prefill_never_stalls_decode(DeviceKind::kCpu);
     std::printf("  solo prefill never stalls a decoding stream (scheduler trace)\n");
+    test_mixed_step_protection(DeviceKind::kCpu);
+    if (ggml_cpu_usable()) test_mixed_step_protection(DeviceKind::kGgmlCpu);
+    std::printf("  mixed steps (cost model and halving): decode never skipped, budgets and chunks held, prompts in order%s\n",
+                ggml_cpu_usable() ? ", native and ggml-cpu" : " (ggml-cpu: SKIP, not usable here)");
     test_memory_bounded(*e);
     std::printf("  memory bounded over repeated requests\n");
     test_speculative_batch(DeviceKind::kCpu, /*exact=*/true);
@@ -1009,7 +1105,8 @@ int main() {
       }
       test_cancel_deadline_errors(*g);
       test_solo_prefill_never_stalls_decode(gpu_kind);
-      std::printf("  concurrent + shared prefixes, cancellation, deadline, solo prefill trace\n");
+      test_mixed_step_protection(gpu_kind);
+      std::printf("  concurrent + shared prefixes, cancellation, deadline, solo prefill and mixed-step traces\n");
       test_memory_bounded(*g);
       std::printf("  memory bounded over repeated requests\n");
       // GPU: no batch invariance, so lengths and acceptance, not text equality.
@@ -1021,6 +1118,10 @@ int main() {
   } else {
     std::printf("GPU: NOT BUILT (ENABLE_METAL/VULKAN/CUDA=OFF)\n");
   }
+  test_scheduler_profile(gpu_usable, gpu_kind);
+  std::printf("scheduler profile: GPU mixed-step budgets on %s only; cpu and ggml-cpu keep the CPU budgets%s\n",
+              gpu_usable ? std::string(device_kind_name(gpu_kind)).c_str() : "the GPU (not tested here)",
+              ggml_cpu_usable() ? "" : " (ggml-cpu: SKIP, not usable here)");
   test_attn_prescale_q();
   test_device_selection(dir.string(), gpu_usable, gpu_kind);
   std::printf("device selection: auto -> %s for Qwen2 and Qwen3 (per-head Q/K norm); cpu -> ggml kernels when built; "

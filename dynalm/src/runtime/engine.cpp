@@ -264,9 +264,14 @@ Result<std::unique_ptr<Engine>> Engine::create_on(EngineOptions opts) {
   }
   // Device defaults (explicit settings always win). Solo-prefill steps carry
   // no decode rows, so a larger GPU chunk cannot stall running streams; mixed
-  // steps keep the DD-079 decode protection.
+  // steps keep the DD-079 decode protection. ggml-cpu also runs whole graphs
+  // (segment device) and keeps the solo chunk, but not the GPU's mixed-step
+  // profile: on the CPU every prompt row adds its full cost to the step, so
+  // its 64-row mixed steps took 11x a decode step (ITL p99 193 ms at 4 users,
+  // test/results/perf-diag-20261020).
+  const bool gpu_device = segment_device && e->backend_->device().type != dynacore::DeviceType::kCpu;
   if (opts.scheduler.solo_prefill_chunk < 0) opts.scheduler.solo_prefill_chunk = segment_device ? kGpuSoloPrefillChunk : 0;
-  if (segment_device && opts.device_scheduler_defaults && opts.scheduler.policy == SchedulerPolicy::kBalanced) {
+  if (gpu_device && opts.device_scheduler_defaults && opts.scheduler.policy == SchedulerPolicy::kBalanced) {
     opts.scheduler.prefill_token_budget = kGpuMixedPrefillBudget;
     opts.scheduler.max_prefill_chunk = kGpuMaxPrefillChunk;
     opts.scheduler.decode_latency_target = kGpuDecodeLatencyTarget;
