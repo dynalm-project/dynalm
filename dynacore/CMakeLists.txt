@@ -119,6 +119,13 @@ if(ENABLE_BENCHMARKS)
   # GPU device through pinned ggml (docs/gpu-backend.md); skips without a GPU backend.
   add_executable(test_ggml_device tests/test_ggml_device.cpp)
   target_link_libraries(test_ggml_device PRIVATE dynacore)
+  # ggml-metal's concurrency check with cmake/patches (skips without Metal).
+  add_executable(test_ggml_metal_ranges tests/test_ggml_metal_ranges.cpp)
+  target_link_libraries(test_ggml_metal_ranges PRIVATE dynacore)
+  if(ENABLE_METAL)
+    target_link_libraries(test_ggml_metal_ranges PRIVATE ggml-metal ggml-cpu ggml-base)
+    target_include_directories(test_ggml_metal_ranges SYSTEM PRIVATE $<TARGET_PROPERTY:ggml-metal,SOURCE_DIR>)
+  endif()
   # CPU matmul kernel registry (DynaLM Next): selection, execution, diagnostics.
   add_executable(test_matmul_registry tests/test_matmul_registry.cpp)
   target_link_libraries(test_matmul_registry PRIVATE dynacore)

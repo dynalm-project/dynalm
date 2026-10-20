@@ -5,10 +5,19 @@
 # exact tree, so a build can never pick up a newer revision silently. To
 # update: change DYNALM_GGML_COMMIT and DYNALM_GGML_VERSION together, rebuild,
 # run tools/ci/run_tests.sh and the GPU checks of docs/gpu-backend.md, and
-# record the change in CHANGELOG.md.
+# record the change in CHANGELOG.md. Drop a patch in cmake/patches/ that the
+# new commit already contains (the build stops on one that no longer applies),
+# and re-check src/gpu/ggml_graph.cpp's use of ggml-backend-impl.h.
 #
 # Offline builds: -DDYNALM_GGML_SOURCE_DIR=/path/to/ggml (a checkout of the
-# same commit; its version is checked).
+# same commit; its version is checked). FetchContent does not patch such a
+# checkout: apply cmake/patches/*.patch to it first (git apply), or the build
+# warns and runs without them.
+#
+# Patches (cmake/patches/, applied in name order by cmake/GgmlPatch.cmake):
+#   ggml-metal-mem-ranges-touching.patch  adjacent memory ranges no longer
+#                  count as overlapping (fewer Metal barriers; a fix, not a
+#                  feature: without it results are the same, only slower).
 #
 # GPU backends, each opt-in (any combination):
 #   ENABLE_METAL   Apple Silicon. Shaders are embedded as source and compiled by
@@ -89,11 +98,23 @@ if(DYNALM_GGML_SOURCE_DIR)
                         "(commit ${DYNALM_GGML_COMMIT})")
   endif()
   set(FETCHCONTENT_SOURCE_DIR_GGML "${DYNALM_GGML_SOURCE_DIR}")
+  find_package(Git QUIET)
+  file(GLOB _ggml_patches "${CMAKE_CURRENT_LIST_DIR}/patches/*.patch")
+  foreach(_p IN LISTS _ggml_patches)
+    execute_process(COMMAND "${GIT_EXECUTABLE}" apply --ignore-whitespace --reverse --check "${_p}" WORKING_DIRECTORY "${DYNALM_GGML_SOURCE_DIR}"
+                    RESULT_VARIABLE _applied OUTPUT_QUIET ERROR_QUIET)
+    if(NOT _applied EQUAL 0)
+      get_filename_component(_name "${_p}" NAME)
+      message(WARNING "DYNALM_GGML_SOURCE_DIR: ${_name} is not applied (git apply ${_p}); the build works, without it")
+    endif()
+  endforeach()
 endif()
 FetchContent_Declare(ggml
   GIT_REPOSITORY https://github.com/ggml-org/ggml.git
   GIT_TAG        ${DYNALM_GGML_COMMIT}
   GIT_SHALLOW    FALSE
+  # DynaLM's fixes to the pinned tree, each in cmake/patches/ with its reason.
+  PATCH_COMMAND  ${CMAKE_COMMAND} -DPATCH_DIR=${CMAKE_CURRENT_LIST_DIR}/patches -P ${CMAKE_CURRENT_LIST_DIR}/GgmlPatch.cmake
   SYSTEM            # ggml headers: their warnings are not ours
   EXCLUDE_FROM_ALL) # ggml's own install rules (headers, static libs) stay out of DynaLM packages
 FetchContent_MakeAvailable(ggml)

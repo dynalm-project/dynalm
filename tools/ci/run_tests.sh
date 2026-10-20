@@ -23,6 +23,7 @@ TESTS=(
   dynacore/test_int_kernels
   dynacore/test_thread_pool
   dynacore/test_ggml_device
+  dynacore/test_ggml_metal_ranges
   dynacore/test_dynakernel
   dynacore/test_dynakernel_lowering
   dynacore/test_dynakernel_quant

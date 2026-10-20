@@ -2,3 +2,4 @@
 *.ps1 text eol=crlf
 *.gguf binary
 *.safetensors binary
+*.patch text eol=lf

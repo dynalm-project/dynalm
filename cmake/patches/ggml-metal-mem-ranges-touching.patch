@@ -1,0 +1,21 @@
+ggml-metal: memory ranges that only touch do not overlap
+
+ggml_mem_ranges_check treats ranges as half-open, [p0, p1) (its debug
+message prints them so, and p1 = data + alloc size), but tested
+mr.p1 >= cmp.p0: a source that ends exactly where an earlier destination
+begins counted as overlapping, and the encoder put a barrier between two
+independent kernels. ggml-hexagon's copy of the same check uses '>'.
+Seen in DynaLM: ggml_gallocr placed a Q projection's output directly after
+the normed input that the K projection reads, so K waited for Q.
+
+--- a/src/ggml-metal/ggml-metal-common.cpp	2026-10-20 01:10:51
++++ b/src/ggml-metal/ggml-metal-common.cpp	2026-10-20 01:10:51
+@@ -287,7 +287,7 @@
+             continue;
+         }
+ 
+-        if (mr.p0 < cmp.p1 && mr.p1 >= cmp.p0) {
++        if (mr.p0 < cmp.p1 && mr.p1 > cmp.p0) {
+             if (mrs->debug > 2) {
+                 GGML_LOG_DEBUG("%s: the %s range buf=%lld, [%lld, %lld) overlaps with a previous %s range buf=%lld, [%lld, %lld)\n",
+                         __func__,
