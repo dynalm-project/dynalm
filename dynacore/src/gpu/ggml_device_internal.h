@@ -333,9 +333,14 @@ class GgmlDevice final : public Device, public SegmentExecutor {
   // with i8mm on ARM; 8x8 on AVX2), as llama.cpp does by default. The graph
   // then binds matmul weights to the copy (GraphBuilder::weight); everything
   // else (embedding lookups of a tied table) keeps reading the original.
+  // A 3-D expert tensor [experts, rows, cols] (contiguous experts) is repacked
+  // whole for mul_mat_id (GraphBuilder::expert_weight), as llama.cpp does.
   // Costs one copy of the matmul weights in RAM. DYNACORE_GGML_REPACK=0: off.
   void prepack_weight(const TensorView& w, bool) override {
-    if (type_ != DeviceType::kCpu || w.rank() != 2 || repacked_.count(static_cast<const std::byte*>(w.data()))) return;
+    if (type_ != DeviceType::kCpu || (w.rank() != 2 && w.rank() != 3) ||
+        repacked_.count(static_cast<const std::byte*>(w.data()))) {
+      return;
+    }
     static const bool on = [] {
       const char* v = std::getenv("DYNACORE_GGML_REPACK");
       return v == nullptr || std::string_view(v) != "0";
@@ -343,10 +348,13 @@ class GgmlDevice final : public Device, public SegmentExecutor {
     ggml_type type;
     if (!on || !to_ggml_type(w.dtype(), type)) return;
     ggml_backend_buffer_type_t repack = repack_buffer_type();
-    const int64_t cols = w.dim(1), rows = w.dim(0);
-    if (repack == nullptr || static_cast<size_t>(w.stride(0)) != ggml_row_size(type, cols)) return;
+    const int r = w.rank();
+    const int64_t cols = w.dim(r - 1), rows = w.dim(r - 2), experts = r == 3 ? w.dim(0) : 1;
+    const size_t row = ggml_row_size(type, cols);
+    if (repack == nullptr || static_cast<size_t>(w.stride(r - 2)) != row) return;
+    if (r == 3 && static_cast<size_t>(w.stride(0)) != row * static_cast<size_t>(rows)) return;
     if (!repack_ctx_) repack_ctx_ = meta_ctx(8192);
-    ggml_tensor* t = ggml_new_tensor_2d(repack_ctx_.get(), type, cols, rows);
+    ggml_tensor* t = ggml_new_tensor_3d(repack_ctx_.get(), type, cols, rows, experts);
     if (t == nullptr) return;
     ggml_backend_buffer_t buf = ggml_backend_buft_alloc_buffer(repack, ggml_backend_buft_get_alloc_size(repack, t));
     if (buf == nullptr) return;
@@ -362,10 +370,13 @@ class GgmlDevice final : public Device, public SegmentExecutor {
     prepack_.source_bytes += static_cast<int64_t>(ggml_nbytes(t));
   }
   PrepackStats prepack_stats() const override { return prepack_; }
-  // The repacked copy of a matmul weight at `p` with ggml shape [cols, rows], or null.
-  ggml_tensor* repacked(const std::byte* p, int64_t cols, int64_t rows) const {
+  // The repacked copy of a matmul weight at `p` with ggml shape [cols, rows,
+  // experts] (experts 1: a 2-D weight), or null.
+  ggml_tensor* repacked(const std::byte* p, int64_t cols, int64_t rows, int64_t experts = 1) const {
     auto it = repacked_.find(p);
-    return it != repacked_.end() && it->second->ne[0] == cols && it->second->ne[1] == rows ? it->second : nullptr;
+    if (it == repacked_.end()) return nullptr;
+    const ggml_tensor* t = it->second;
+    return t->ne[0] == cols && t->ne[1] == rows && t->ne[2] == experts ? it->second : nullptr;
   }
 
   void download(const TensorView& src, std::span<float> dst) override {

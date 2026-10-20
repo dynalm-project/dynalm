@@ -599,6 +599,89 @@ void test_moe_ffn(Env& e) {
   std::printf("  moe_ffn: top-2 of 4 experts (normalized / raw weights), shared expert with and without sigmoid gate\n");
 }
 
+// Quantized 3-D expert weights, then the same op with them prepacked: on
+// ggml-cpu, mul_mat_id on ggml's repacked copy, against the unrepacked
+// result (same 8-bit activations, other summation order). Q4_K gate / up with
+// Q6_K down as in Granite's Q4_K_M, then Q8_0 / IQ4_NL. ggml repacks each
+// type only on some CPUs (Q6_K and Q8_0: ARM dot product; Q4_K: also AVX2),
+// so each tensor's count is read back; Q4_K must repack wherever ggml builds
+// repacked kernels. Elsewhere, or with DYNACORE_GGML_REPACK=0, prepack is a
+// no-op.
+void test_moe_ffn_repacked(Env& e) {
+  const int64_t d = 256, ff = 256, ne = 4;
+  const int32_t k = 2;
+  auto upload3 = [&](DType t, int64_t a, int64_t b, int64_t c) {
+    const std::vector<std::byte> bytes = make_weight(t, a * b, c);
+    auto host = Tensor::empty(t, {a, b, c});
+    CHECK(host.ok());
+    CHECK(static_cast<size_t>(host->view().span_bytes()) == bytes.size());
+    std::memcpy(host->data(), bytes.data(), bytes.size());
+    auto dev = e.rec->upload(*host);
+    CHECK(dev.ok());
+    e.keep.push_back(*host);
+    e.keep.push_back(*dev);
+    return dev->view();
+  };
+#if defined(__x86_64__) || defined(_M_X64) || defined(__ARM_FEATURE_DOTPROD)
+  constexpr bool kRepackBuilt = true;
+#else
+  constexpr bool kRepackBuilt = false;
+#endif
+  const char* off = std::getenv("DYNACORE_GGML_REPACK");
+  const bool repacks = kRepackBuilt && e.gpu->device().type == DeviceType::kCpu &&
+                       (off == nullptr || std::string_view(off) != "0");
+  const auto wr = randv(static_cast<size_t>(ne * d), -2, 2);
+  std::vector<std::byte> wrb(wr.size() * 4);
+  std::memcpy(wrb.data(), wr.data(), wrb.size());
+  const TensorView router = e.weight(DType::kF32, wrb, ne, d).second;
+  int64_t total = 0;
+  for (const auto& [tgu, tdown] : {std::pair{DType::kQ4_K, DType::kQ6_K}, std::pair{DType::kQ8_0, DType::kIQ4_NL}}) {
+    MoeFfnParams p;
+    p.router = router;
+    p.gate = upload3(tgu, ne, ff, d);
+    p.up = upload3(tgu, ne, ff, d);
+    p.down = upload3(tdown, ne, d, ff);
+    p.experts = static_cast<int32_t>(ne);
+    p.top_k = k;
+    p.normalize_topk = true;
+    p.act = Activation::kSilu;
+    const std::vector<int64_t> ms = {1, 5, 33};  // gemv, small and large gemm
+    std::vector<std::vector<float>> xs, plain;
+    for (int64_t m : ms) xs.push_back(randv(static_cast<size_t>(m * d)));
+    for (int pass = 0; pass < 2; ++pass) {
+      if (pass == 1) {
+        for (const TensorView* w : {&p.gate, &p.up, &p.down}) {
+          const int64_t n0 = e.gpu->prepack_stats().tensors;
+          e.rec->prepack_weight(*w);
+          const int64_t got = e.gpu->prepack_stats().tensors - n0;
+          CHECK(got == 0 || (repacks && got == 1));
+          if (repacks && w->dtype() == DType::kQ4_K) CHECK(got == 1);
+          total += got;
+          // A repacked copy must be what the graph reads: zero the original
+          // (host memory on ggml-cpu); the result may not change.
+          if (got == 1) std::memset(w->data(), 0, static_cast<size_t>(w->span_bytes()));
+        }
+      }
+      for (size_t i = 0; i < ms.size(); ++i) {
+        auto [xc, xg] = e.act(ms[i], d, &xs[i]);
+        auto [oc, og] = e.act(ms[i], d);
+        (void)xc;
+        (void)oc;
+        p.x = xg;
+        p.out = og;
+        e.rec->moe_ffn(p);
+        if (pass == 0) {
+          plain.push_back(e.download(og));
+        } else {
+          expect_close("moe_ffn repacked", plain[i], e.download(og), 1e-2);
+        }
+      }
+    }
+  }
+  std::printf("  moe_ffn: q4_K / q6_K and q8_0 / iq4_nl 3-D experts, M 1/5/33, again prepacked (%lld of 6 repacked)\n",
+              static_cast<long long>(total));
+}
+
 // A value written in a step and read back under another [rows, cols] split
 // of the same bytes, then written and read again in the first one: per-head
 // Q/K norm reads Q [rows, heads x head_dim] as [rows x heads, head_dim].
@@ -753,6 +836,7 @@ int main() {
     test_buffer_reuse(e);
     test_reshaped_view(e);
     test_moe_ffn(e);
+    test_moe_ffn_repacked(e);
     test_mapped_weights(e);
     const SegmentStats st = e.stats();
     std::printf("segments %lld, graphs built %lld, reused %lld, evictions %lld\n", static_cast<long long>(st.segments),

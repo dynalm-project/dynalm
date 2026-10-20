@@ -302,6 +302,9 @@ class GraphBuilder {
     if (nb1 < ggml_row_size(type, cols) || nb2 != nb1 * static_cast<size_t>(rows)) {
       return Unsupported("expert weights with padded rows or experts");
     }
+    // ggml-cpu: the repacked copy (GgmlDevice::prepack_weight), used whole:
+    // mul_mat_id reads its kernel from the tensor's own buffer.
+    if (ggml_tensor* r = d_.repacked(static_cast<const std::byte*>(w.data()), cols, rows, ne)) return r;
     ENGINE_ASSIGN_OR_RETURN(ggml_tensor * flat, bind(static_cast<const std::byte*>(w.data()), type, cols, ne * rows, nb1));
     return ggml_view_3d(ctx_, flat, cols, rows, ne, nb1, nb2, 0);
   }
