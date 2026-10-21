@@ -62,11 +62,14 @@ jobs:
         if: matrix.gcc13
         # The PPA is an external service that sometimes returns 503: retry with
         # backoff so a short outage does not drop the Linux archives from a release.
+        # While the PPA is down apt reads "g++-13" as a pattern and installs clang-13
+        # packages instead, so success means the compiler is actually there.
         run: |
           for attempt in 1 2 3 4 5; do
             sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test &&
               sudo apt-get update &&
-              sudo apt-get install -y -o Acquire::Retries=5 g++-13 ninja-build && break
+              sudo apt-get install -y -o Acquire::Retries=5 g++-13 ninja-build &&
+              command -v g++-13 && break
             [ "$attempt" = 5 ] && { echo "GCC 13 toolchain install failed after 5 attempts"; exit 1; }
             echo "toolchain install failed (attempt $attempt); retrying in $((attempt * 30)) s"
             sleep $((attempt * 30))
@@ -83,10 +86,11 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: ${{ matrix.msvc_arch || 'x64' }}
-      - name: Tag matches the source version
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Source version (a tag must match it)
         shell: bash
-        run: python3 tools/ci/version.py --check-tag "$GITHUB_REF_NAME"
+        run: |
+          PY="$(command -v python3 || command -v python)"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then "$PY" tools/ci/version.py --check-tag "$GITHUB_REF_NAME"; else "$PY" tools/ci/version.py; fi
       - name: Build
         shell: bash
         run: |

@@ -6,7 +6,7 @@
 - tools/ci/version.py: the version is project(VERSION) + DYNALM_VERSION_SUFFIX;
   pre-release detection; a tag must equal "v" + the version.
 - .github/workflows/release.yml, by running its own shell steps on simulated
-  inputs: the "Release kind and notes" step marks a pre-release tag as
+  inputs (Linux and macOS; the publish job runs on Linux): the "Release kind and notes" step marks a pre-release tag as
   pre-release and not Latest, and requires the tag's release notes; the
   "Expected assets" step drops the Vulkan builds from a pre-release, keeps them
   for a stable release, and fails when any expected archive is missing.
@@ -59,6 +59,9 @@ check(version_py("--check-tag", ver).returncode != 0, "a tag without 'v' is refu
 check('"@DYNALM_VERSION@"' in (ROOT / "dynalm/src/common/version.h.in").read_text(), "--version reads DYNALM_VERSION")
 
 # --- workflow steps on simulated inputs ---------------------------------------------
+# The publish job runs on Linux. On Windows, `bash` from Python can resolve to WSL's
+# bash.exe, so the simulations run on Linux and macOS only.
+simulate = os.name != "nt"
 kind = step_script("Release kind and notes")
 assets = step_script("Expected assets")
 ALL = ["dynalm-macos-arm64.tar.gz", "dynalm-macos-x86_64.tar.gz", "dynalm-linux-x86_64.tar.gz",
@@ -76,14 +79,15 @@ def run_assets(prerelease, present):
         return r.returncode, sorted(os.listdir(Path(tmp) / "dist"))
 
 
-rc, left = run_assets(True, ALL)
-check(rc == 0 and not any("vulkan" in f for f in left) and len(left) == 6, "pre-release: Vulkan builds left out, 6 assets")
-rc, left = run_assets(False, ALL)
-check(rc == 0 and len(left) == 8, "stable: all 8 assets kept")
-rc, _ = run_assets(True, [f for f in ALL if f != "dynalm-linux-arm64.tar.gz"])
-check(rc != 0, "a missing archive fails the release")
-rc, _ = run_assets(False, [f for f in ALL if "vulkan" not in f])
-check(rc != 0, "stable: a missing Vulkan archive fails the release")
+if simulate:
+    rc, left = run_assets(True, ALL)
+    check(rc == 0 and not any("vulkan" in f for f in left) and len(left) == 6, "pre-release: Vulkan builds left out, 6 assets")
+    rc, left = run_assets(False, ALL)
+    check(rc == 0 and len(left) == 8, "stable: all 8 assets kept")
+    rc, _ = run_assets(True, [f for f in ALL if f != "dynalm-linux-arm64.tar.gz"])
+    check(rc != 0, "a missing archive fails the release")
+    rc, _ = run_assets(False, [f for f in ALL if "vulkan" not in f])
+    check(rc != 0, "stable: a missing Vulkan archive fails the release")
 
 
 def run_kind(tag, notes):
@@ -102,12 +106,13 @@ def run_kind(tag, notes):
         return r.returncode, dict(l.split("=", 1) for l in out.read_text().splitlines()) if out.exists() else {}
 
 
-rc, o = run_kind("v0.2.0-beta.1", True)
-check(rc == 0 and o.get("prerelease") == "true" and o.get("latest") == "false", "v0.2.0-beta.1: pre-release, not Latest")
-rc, o = run_kind("v0.2.0", True)
-check(rc == 0 and o.get("prerelease") == "false" and o.get("latest") == "true", "v0.2.0: stable, Latest")
-rc, _ = run_kind("v0.2.0-rc.2", False)
-check(rc != 0, "missing release notes fail the release")
+if simulate:
+    rc, o = run_kind("v0.2.0-beta.1", True)
+    check(rc == 0 and o.get("prerelease") == "true" and o.get("latest") == "false", "v0.2.0-beta.1: pre-release, not Latest")
+    rc, o = run_kind("v0.2.0", True)
+    check(rc == 0 and o.get("prerelease") == "false" and o.get("latest") == "true", "v0.2.0: stable, Latest")
+    rc, _ = run_kind("v0.2.0-rc.2", False)
+    check(rc != 0, "missing release notes fail the release")
 
 # --- structure ----------------------------------------------------------------------
 pub = WF[WF.index("\n  publish:"):WF.index("\n  docker:")]
@@ -131,4 +136,4 @@ check("DYNALM_EXPECT_VERSION" in pkgsh and "version mismatch" in pkgsh, "package
 if suffix:
     check((ROOT / f".github/release-notes/v{ver}.md").is_file(), f"release notes for v{ver} exist")
 
-print(f"all release workflow tests passed ({checks} checks)")
+print(f"all release workflow tests passed ({checks} checks{'' if simulate else '; workflow simulations skipped on Windows'})")
