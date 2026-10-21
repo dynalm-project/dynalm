@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -44,6 +45,7 @@
 #include "runtime/autotune.h"
 #include "tokenizer/pretokenizer.h"
 #include "runtime/engine.h"
+#include "sampling/sampler.h"
 #include "tests/tiny_gguf.h"
 
 using namespace dynalm;
@@ -370,6 +372,186 @@ void test_scheduler_profile(bool gpu_usable, DeviceKind gpu_kind) {
     auto e = Engine::create(o);
     CHECK(e.ok() && cpu_budgets((*e)->scheduler_config()));
   }
+}
+
+// Sampling (sampling/sampler.h, DD-043), on hand-made logits rows: greedy and
+// its ties; top-k, top-p and min-p never return a token they cut, and keep the
+// ones they should; temperature sharpens / flattens the distribution as
+// exp(dl / T) (frequencies of seeded draws, within statistical tolerance);
+// penalties; a fixed seed repeats the same tokens; invalid parameters are refused.
+void test_sampling() {
+  constexpr int32_t kVocab = 64;
+  // Log-probabilities of p = 0.5, 0.3, 0.15, 0.05 for ids 0..3; the rest are far below.
+  auto row = [&] {
+    std::vector<float> l(kVocab, -40.0f);
+    const float p[4] = {0.5f, 0.3f, 0.15f, 0.05f};
+    for (int i = 0; i < 4; ++i) l[static_cast<size_t>(i)] = std::log(p[i]);
+    return l;
+  };
+  const std::vector<TokenId> ctx = {7, 8, 9};
+  // Counts of `n` draws per token id.
+  auto draws = [&](SamplingParams p, int n, std::vector<float> base) {
+    p.has_seed = true;
+    Sampler s(p);
+    std::vector<int> c(kVocab, 0);
+    for (int i = 0; i < n; ++i) {
+      std::vector<float> l = base;
+      const TokenId t = s.sample(l, ctx);
+      CHECK(t >= 0 && t < kVocab);
+      ++c[static_cast<size_t>(t)];
+    }
+    return c;
+  };
+  auto only = [&](const std::vector<int>& c, int n_kept) {
+    for (int i = n_kept; i < kVocab; ++i) {
+      if (c[static_cast<size_t>(i)] != 0) return false;
+    }
+    for (int i = 0; i < n_kept; ++i) {
+      if (c[static_cast<size_t>(i)] == 0) return false;
+    }
+    return true;
+  };
+  constexpr int kN = 20000;
+
+  // Greedy: temperature 0, or top_k 1 at any temperature; ties to the lowest id.
+  {
+    std::vector<float> l = row();
+    CHECK(sample_greedy(l) == 0);
+    l[5] = l[0];
+    CHECK(sample_greedy(l) == 0);
+    SamplingParams p;
+    p.temperature = 1.5f;
+    p.top_k = 1;
+    CHECK(p.greedy());
+    const auto c = draws(p, 200, row());
+    CHECK(c[0] == 200);
+  }
+  // Temperature 1, no cut: the frequencies follow p (0.5 / 0.3 / 0.15 / 0.05).
+  {
+    SamplingParams p;
+    p.temperature = 1.0f;
+    const auto c = draws(p, kN, row());
+    CHECK(only(c, 4));
+    const double want[4] = {0.5, 0.3, 0.15, 0.05};
+    for (int i = 0; i < 4; ++i) {
+      const double f = static_cast<double>(c[static_cast<size_t>(i)]) / kN;
+      CHECK(std::abs(f - want[i]) < 0.015);  // > 4 standard deviations at n = 20000
+    }
+  }
+  // Temperature scales log-odds: p0 / p1 = (5/3)^(1/T).
+  for (const float t : {0.5f, 2.0f}) {
+    SamplingParams p;
+    p.temperature = t;
+    const auto c = draws(p, kN, row());
+    const double ratio = static_cast<double>(c[0]) / std::max(1, c[1]);
+    const double want = std::pow(0.5 / 0.3, 1.0 / t);
+    CHECK(std::abs(ratio / want - 1.0) < 0.08);
+  }
+  // top-k: only the k largest.
+  {
+    SamplingParams p;
+    p.temperature = 1.0f;
+    p.top_k = 2;
+    const auto c = draws(p, kN, row());
+    CHECK(only(c, 2));
+    const double ratio = static_cast<double>(c[0]) / c[1];
+    CHECK(std::abs(ratio / (0.5 / 0.3) - 1.0) < 0.08);  // renormalized among the kept
+  }
+  // top-p: the smallest prefix with mass >= top_p (0.5, 0.8, 0.95, 1.0).
+  for (const auto& [top_p, kept] : std::vector<std::pair<float, int>>{{0.45f, 1}, {0.7f, 2}, {0.9f, 3}, {0.99f, 4}}) {
+    SamplingParams p;
+    p.temperature = 1.0f;
+    p.top_p = top_p;
+    CHECK(only(draws(p, 4000, row()), kept));
+  }
+  // Near-equal logits (one histogram bin of the pre-cut in distribution()): the exact top-k and
+  // nucleus steps decide, not the coarse cut. p is about 0.25 for each of ids 0..3.
+  {
+    std::vector<float> flat(kVocab, -40.0f);
+    for (int i = 0; i < 4; ++i) flat[static_cast<size_t>(i)] = -0.001f * static_cast<float>(i);
+    SamplingParams p;
+    p.temperature = 1.0f;
+    p.top_k = 2;
+    CHECK(only(draws(p, 4000, flat), 2));
+    p.top_k = 3;
+    CHECK(only(draws(p, 4000, flat), 3));
+    SamplingParams q;
+    q.temperature = 1.0f;
+    q.top_p = 0.4f;  // 0.25 + 0.25 >= 0.4
+    CHECK(only(draws(q, 4000, flat), 2));
+    q.top_p = 0.6f;  // three are needed
+    CHECK(only(draws(q, 4000, flat), 3));
+  }
+  // top-k then top-p (p applies to the k kept): k = 3 keeps 0.95 of the mass; top-p 0.8 of that
+  // (0.76) is reached by ids 0 and 1 (0.8 of 0.95).
+  {
+    SamplingParams p;
+    p.temperature = 1.0f;
+    p.top_k = 3;
+    p.top_p = 0.8f;
+    CHECK(only(draws(p, 4000, row()), 2));
+  }
+  // min-p: drop p < min_p x p_max (0.2 x 0.5 = 0.1: id 3 at 0.05 goes).
+  {
+    SamplingParams p;
+    p.temperature = 1.0f;
+    p.min_p = 0.2f;
+    CHECK(only(draws(p, 4000, row()), 3));
+  }
+  // Penalties (step 1, before selection): repetition divides positive and multiplies negative
+  // logits of seen tokens; frequency and presence subtract.
+  {
+    SamplingParams p;
+    p.repetition_penalty = 2.0f;
+    Sampler s(p);
+    std::vector<float> l(kVocab, 0.0f);
+    l[7] = 4.0f;
+    l[8] = -4.0f;
+    l[1] = 4.0f;  // not in the context
+    s.apply_penalties(l, ctx);
+    CHECK(l[7] == 2.0f && l[8] == -8.0f && l[1] == 4.0f);
+    SamplingParams q;
+    q.frequency_penalty = 0.5f;
+    q.presence_penalty = 1.0f;
+    Sampler s2(q);
+    std::vector<float> m(kVocab, 0.0f);
+    const std::vector<TokenId> twice = {7, 7, 9};
+    s2.apply_penalties(m, twice);
+    CHECK(std::abs(m[7] - (-2.0f)) < 1e-6f && std::abs(m[9] - (-1.5f)) < 1e-6f && m[8] == 0.0f);
+  }
+  // A fixed seed repeats; another seed gives another sequence (64 draws at p = 0.5 / 0.3 / ...).
+  {
+    auto seq = [&](uint64_t seed) {
+      SamplingParams p;
+      p.temperature = 1.0f;
+      p.seed = seed;
+      p.has_seed = true;
+      Sampler s(p);
+      std::vector<TokenId> out;
+      for (int i = 0; i < 64; ++i) {
+        std::vector<float> l = row();
+        out.push_back(s.sample(l, ctx));
+      }
+      return out;
+    };
+    CHECK(seq(42) == seq(42));
+    CHECK(seq(42) != seq(43));
+  }
+  // Invalid parameters are refused (the server answers 400 for these).
+  auto invalid = [](auto set) {
+    SamplingParams p;
+    set(p);
+    return !p.validate().ok();
+  };
+  CHECK(SamplingParams().validate().ok());
+  CHECK(invalid([](SamplingParams& p) { p.temperature = -0.1f; }));
+  CHECK(invalid([](SamplingParams& p) { p.temperature = 101.0f; }));
+  CHECK(invalid([](SamplingParams& p) { p.top_k = -1; }));
+  CHECK(invalid([](SamplingParams& p) { p.top_p = 0.0f; }));
+  CHECK(invalid([](SamplingParams& p) { p.top_p = 1.01f; }));
+  CHECK(invalid([](SamplingParams& p) { p.min_p = 1.5f; }));
+  CHECK(invalid([](SamplingParams& p) { p.repetition_penalty = 0.0f; }));
+  CHECK(invalid([](SamplingParams& p) { p.frequency_penalty = 2.5f; }));
 }
 
 // Memory admission: weights + KV within 90% of RAM (95% of free GPU memory);
@@ -1011,6 +1193,8 @@ int main() {
   test_device_plan();
   std::printf("device plan: auto / --gpu / cpu / exact / named, per model and build\n");
   test_predictive_mixed_budget();
+  test_sampling();
+  std::printf("sampling: greedy and ties, temperature, top-k, top-p, min-p, penalties, seeds, invalid parameters\n");
   test_memory_admission();
   // Isolated from the user's tuning cache (~/.dynalm/autotune.json).
   set_env("DYNALM_AUTOTUNE_CACHE", (dir / "none.json").string());
