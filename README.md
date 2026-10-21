@@ -202,18 +202,27 @@ Measured on one machine (Apple M4 Pro, 24 GB, macOS 26.7, AC power) against llam
 (commit `9a16f1dbe`) on the same GGUF files: Qwen2.5-1.5B, Qwen3-4B and Qwen3-8B (Q4_K_M) and
 Llama-3.1-8B (Q8_0); 512-token prompts, 128 output tokens, 2,048 tokens of context per user,
 3 rounds, both engines checked to run on the intended backend. Ratios: DynaLM ÷ llama.cpp for
-throughput, llama.cpp ÷ DynaLM for latencies, so above 1 means DynaLM is better.
+throughput, llama.cpp ÷ DynaLM for latencies, so above 1 means DynaLM is better; values are medians
+over the 3 rounds, ranges across the four models.
 
-| Metal | Result |
-|---|---|
-| One user | about the same speed (throughput 0.98–1.21×, time per token 0.96–1.24×) |
-| 16 users at once | first word **2.1–3.3× sooner**, slowest token gaps (99th percentile) **7–10× shorter**; llama.cpp delivers more tokens per second in total (DynaLM 0.71–0.78×) |
-| 4 users at once | steadier typical token gaps (1.1–1.6× shorter), but slower 99th-percentile gaps (0.19–0.30×) |
+**Confidence:** a difference counts as confirmed only when all 3 rounds agree beyond ±10% and both
+engines varied by 10% or less between rounds. llama.cpp's multi-user results varied by up to about
+30% between rounds, so several differences below are **not confirmed** (the direction was
+consistent, the size is uncertain).
 
-| CPU | Result |
-|---|---|
-| One user | 0.77–0.97× llama.cpp's time per token (the gap grows with context) |
-| 4 users at once | first word 1.7–2.0× sooner; total throughput 0.83–0.93×; slower 99th-percentile gaps |
+| Metal | Result | Confirmed? |
+|---|---|---|
+| One user | about the same speed (throughput 0.98–1.21×, time per token 0.96–1.24×) | parity on the 8B models; the others inconclusive |
+| 16 users: total tokens per second | DynaLM 0.71–0.78× (llama.cpp ahead) | yes, 3 of 4 models |
+| 16 users: slowest token gaps (99th percentile) | 7–10× shorter with DynaLM | yes for the 8B models, not for 1.5B / 4B |
+| 16 users: first token | 2.1–3.3× sooner with DynaLM (median) | no, on all four models |
+| 4 users: 99th-percentile token gaps | longer with DynaLM (0.19–0.30×) | no (consistent direction) |
+
+| CPU | Result | Confirmed? |
+|---|---|---|
+| One user: time per token | 0.77–0.97× llama.cpp's (the gap grows with context) | yes, 3 of 4 models |
+| 4 users: first token | 1.7–2.0× sooner with DynaLM | yes, 2 of 4 models |
+| 4 users: total tokens per second | 0.83–0.93× | yes for one model; parity or inconclusive for the others |
 
 DynaLM is not faster than llama.cpp overall: it trades total throughput for first-token time and
 worst-case gaps at high concurrency. The two engines were built with different CPU options
@@ -351,10 +360,11 @@ plain fp32 CPU kernels, for debugging. `dynalm autotune` shows what each mode ru
   machine (M4 Pro). Linux and Windows are Preview (model-free tests in CI); Vulkan and CUDA are
   Experimental. Models that a GPU cannot run yet fall back to the CPU under `--backend auto`;
   `--gpu` reports why instead of falling back.
-- **16 users on Metal:** total throughput is 0.71–0.78× llama.cpp's (first tokens arrive sooner and
-  worst-case gaps are much shorter; see [Speed](#speed)).
-- **4 users:** the 99th-percentile gap between tokens is longer than llama.cpp's (0.19–0.30×):
-  new prompts are processed in chunks alongside the running streams.
+- **16 users on Metal:** total throughput is 0.71–0.78× llama.cpp's (worst-case token gaps are
+  much shorter, confirmed on the 8B models; see [Speed](#speed)).
+- **4 users:** the 99th-percentile gap between tokens is longer than llama.cpp's (0.19–0.30×,
+  consistent in every round but not confirmed by the verdict rule): new prompts are processed in
+  chunks alongside the running streams.
 - **CPU decode:** 0.77–0.97× llama.cpp's time per token, more at longer contexts.
 - **Memory limits are enforced at load.** A KV cache that does not fit the GPU working set is
   refused with the largest `--ctx` that fits. Example: Llama-3.1-8B Q8_0 with 16 users × 4,096

@@ -32,10 +32,12 @@
 - **Quantization:** Q2_K–Q8_0, F16, BF16, F32 (`Q4_K_M` recommended).
 
 ## Measured results
-- Apple M4 Pro, against llama.cpp's server on the same GGUF files (1.5B–8B models, 3 rounds):
-  Metal, one user: about the same speed. Metal, 16 users: first token 2.1–3.3x sooner and
-  99th-percentile token gaps 7–10x shorter, but 0.71–0.78x llama.cpp's total throughput.
-  CPU, one user: 0.77–0.97x llama.cpp's time per token. DynaLM is not faster overall.
+- Apple M4 Pro, against llama.cpp's server on the same GGUF files (1.5B–8B models, 3 rounds, medians):
+  Metal, one user: about the same speed. Metal, 16 users: 0.71–0.78x llama.cpp's total throughput
+  (confirmed on 3 of 4 models); 99th-percentile token gaps 7–10x shorter (confirmed on the 8B
+  models); first token 2.1–3.3x sooner (median; not confirmed, llama.cpp varied too much).
+  CPU, one user: 0.77–0.97x llama.cpp's time per token (confirmed on 3 of 4). DynaLM is not
+  faster overall.
 
 ## Install
 - Linux and macOS: `curl -fsSL https://raw.githubusercontent.com/dynalm-project/dynalm/main/scripts/install.sh | sh`
