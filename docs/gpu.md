@@ -15,14 +15,17 @@ to switch back.
 
 | Your GPU | Use | Systems | Status |
 |---|---|---|---|
-| Apple Silicon | **Metal** | macOS | 🧪 Preview |
-| AMD | **Vulkan** | Windows, Linux | 🧪 Preview |
-| Intel | **Vulkan** | Windows, Linux | 🧪 Preview |
-| Qualcomm | **Vulkan** | Windows on ARM, Linux | 🧪 Preview |
-| NVIDIA | **CUDA** or **Vulkan** | Windows, Linux | 🧪 Preview |
+| Apple Silicon | **Metal** | macOS | ✅ Beta-verified (Apple M4 Pro) |
+| AMD | **Vulkan** | Windows, Linux | ⚗️ Experimental |
+| Intel | **Vulkan** | Windows, Linux | ⚗️ Experimental |
+| Qualcomm | **Vulkan** | Windows on ARM, Linux | ⚗️ Experimental |
+| NVIDIA | **CUDA** or **Vulkan** | Windows, Linux | ⚗️ Experimental |
 
-🧪 **Preview** means the backend works and passes DynaLM's test suite, and it is still being
-tuned. Please report what you see on your hardware in
+✅ **Beta-verified** means checked for this release on real hardware with real models: the full
+test suite and token-by-token parity with llama.cpp on eight models.
+⚗️ **Experimental** means it builds in CI and passes the model-free tests there, on a software
+GPU (Vulkan, lavapipe) or without a GPU (CUDA: build only); it has not been checked on real GPUs
+for this release. Please report what you see on your hardware in
 [GitHub Issues](https://github.com/dynalm-project/dynalm/issues).
 
 ---
@@ -168,15 +171,9 @@ memory.
 
 ## How fast is it?
 
-**Apple Silicon Mac, Metal, Qwen2.5-1.5B Q4_K_M, compared with llama.cpp's server on the same
-file:**
-
-| What we measured | Result |
-|---|---|
-| Memory, one user | **390 MB vs 1,113 MB**: about 3× less |
-| First word (typical), 4–8 users | **1.9–2.5× faster** |
-| One user | about 7 ms per token, within about 10% of llama.cpp |
-| Compared with DynaLM on the CPU | about 4× faster replies |
+**Measured for this release:** see the README's [Speed](../README.md#speed) section (Apple M4 Pro,
+against llama.cpp's server). The earlier figures (DynaLM 0.1.5–0.1.6) are withdrawn
+([benchmarks.md](benchmarks.md), kept for reference; method: [benchmarking.md](benchmarking.md)).
 
 **Accuracy:** GPU output matches the CPU reference within DynaLM's quality rule (DD-053):
 perplexity change ≤ 1%, average KL ≤ 0.0025. The same rule is used on Metal and Vulkan.

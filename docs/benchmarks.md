@@ -1,7 +1,12 @@
 # DynaLM Benchmark Results: Speed, Memory and Accuracy
 
-Measured results behind the numbers in the README, with the setup and the limits. Every
-number here was measured; nothing is estimated. The method is in
+> **Historical results, withdrawn as current claims.** These were measured on a development build
+> that became DynaLM 0.1.5 (GPU path as 0.1.6). DynaLM has changed since, and a later end-to-end run
+> did not reproduce the multi-user time-to-first-token advantage. They no longer back any claim in
+> the README and are kept, unchanged below, for reference until the re-measurement for this
+> release replaces them.
+
+Every number here was measured; nothing is estimated. The method is in
 [benchmarking.md](benchmarking.md).
 
 ## Setup

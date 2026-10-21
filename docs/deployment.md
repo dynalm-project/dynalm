@@ -93,6 +93,10 @@ Terminate TLS in the proxy and forward to DynaLM on a private address. Requireme
     with a higher ITL p99 (up to about 175 ms). It is still below llama.cpp's server in
     multi-user throughput (0.66–0.94×).
   - Use `--policy latency` when token-to-token tail latency matters more than throughput.
+  - For total throughput at high concurrency, `DYNALM_PROTECT_MIN=128` or `256` lets steps that mix
+    new prompts with running streams keep larger prompt chunks. Measured on an M4 Pro, Qwen2.5-1.5B,
+    16 users: total tokens per second +11% / +25%, but first-token time 16% / 37% later and
+    99th-percentile token gaps 19% / 25% longer (closed loop). The default (64) is unchanged.
 - **GPU limitations:** YaRN RoPE scaling, and MoE models on CUDA, currently run on the CPU.
   See [gpu.md](gpu.md).
 

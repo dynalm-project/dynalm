@@ -23,6 +23,12 @@ docs/benchmarking.md.
   Decode at one user (paired A/B, 8 pairs, 95% CI): 0.5B +7.5% [+6.4, +8.0], 8B +1.3%
   [+0.5, +1.8]; no regression in TTFT, ITL p99 or 4/16-user throughput; DD-053 PASS on six models
   (including Granite MoE and Gemma 3). `DYNACORE_GPU_GRAPH_OPTIMIZE=0` turns it off.
+- **Metal: fewer false barriers (patched ggml).** ggml-metal treated two memory ranges that only
+  touch as overlapping and put a barrier between independent kernels. DynaLM now builds its pinned
+  ggml v0.27.0 with `cmake/patches/ggml-metal-mem-ranges-touching.patch` (a one-line fix, applied by
+  `cmake/GgmlPatch.cmake`; recorded in the SBOM and NOTICE). Barrier placement only, not
+  arithmetic. Decode at one user (paired A/B, 8 pairs, M4 Pro): Qwen2.5-0.5B ITL p50 −2.7%
+  [−4.2, −1.8]; Qwen3-8B inconclusive. DD-053 PASS on six models. Test: `test_ggml_metal_ranges`.
 
 ### Changed (benchmarks)
 - **`tools/bench/model_matrix.py` measures DynaLM and llama.cpp alike** (`bench_method`
@@ -41,6 +47,14 @@ docs/benchmarking.md.
 - **`bench_ppl`**: perplexity over a text file, scored as llama.cpp's `llama-perplexity` does,
   on any device (`BENCH_DEVICE=native|ggml-cpu|metal|vulkan|cuda`), for direct accuracy comparisons
   with llama.cpp (docs/benchmarking.md).
+- **Sampling tests:** temperature, top-k, top-p, min-p, penalties, seeds and invalid parameters
+  (`test_engine`; checked against deliberate errors in top-k, the nucleus cut and temperature).
+- **Teacher-forced parity with llama.cpp** (`tools/bench/llama_parity.py`, `bench_ppl`
+  `BENCH_KLD_REF` / `BENCH_KLD_BASE` / `BENCH_UBATCH` / `BENCH_FRESH_KV`): both engines score the
+  same token ids; reports top-1 agreement, KL, both perplexities, near-ties and the first
+  divergence per model and path, checks each run's settings and backend from its log (a run on the
+  wrong backend is a setup mismatch, exit status 2), and repeats each engine against itself. It
+  measures implementation agreement with llama.cpp, not task quality. Test: `tools/test_llama_parity.py`.
 - **AutoTune** (`dynalm autotune`, `--mode`):
   - `dynalm autotune` reports the CPU features detected at run time, the built-in GPU backends,
     the kernels of each CPU path, what each mode runs and the tuned settings.
@@ -198,6 +212,9 @@ docs/benchmarking.md.
   - ITL p99 −39% to −52% at 4-16 users;
   - but ITL p50 3-4× worse at 16 users (1.5B: 26.6 → 83.5 ms; 8B: 80 → 310 ms) and −7%
     throughput at 8B, because it pins every mixed step at the protected minimum.
+  - Re-measured 2026-10-20 at target 8×: the longest mixed step −17% to −44% and ITL p99 −5% to
+    −18% at 4-16 users, but Llama-3.1-8B Q8_0 at 16 users −6% tok/s with ITL p50 +13%, and TTFT
+    p99 +2% to +14%. It stays opt-in.
 - **GPU graph cache:** when full, it now drops the least recently used graph instead of all
   graphs. Prepared graphs are also capped at 1 GiB of workspace (`DYNACORE_GPU_GRAPH_MB`).
   - Each graph holds its own activation buffers (~86 MiB for an 8B model).
@@ -205,6 +222,37 @@ docs/benchmarking.md.
     steps with "Insufficient Memory" at 16 users (8B: 20 → 50 tok/s once fixed).
 
 ### Fixed
+- **Metal slowed down on long-running servers.** Attention over the paged KV pool covered every
+  cell up to the highest block a step used; once the prefix cache held most of the pool, new
+  requests got high block ids and every step attended over nearly the whole pool (Qwen2.5-1.5B,
+  16 users, 65,536-token pool: typical token gap 21 ms on a fresh server, 136 ms with a full
+  cache). Metal now uses ggml's sparse attention automatically for steps whose span is at least
+  32× the longest context (up to 4,096 tokens): 23 ms, +54% tok/s, fresh servers unchanged, Metal
+  parity unchanged on eight models. `DYNACORE_GPU_SPARSE=0` restores the previous dense-only
+  behaviour, `=1` forces sparse attention. Not fixed for contexts above 4,096 tokens (ggml's sparse
+  path does not cover them) or for Vulkan, CUDA and ggml-cpu. Test: `test_ggml_device`.
+- **Benchmarks reused prompts across client processes.** `dynalm benchmark` numbered prompts from
+  0 in every process, so `tools/bench/baseline.sh`'s later points repeated earlier prompts and hit
+  both engines' prompt caches (llama.cpp processed 1 token of 512). New `--prompt-base N`;
+  `baseline.sh` gives every point its own range. Multi-user results measured before this fix are
+  invalid. `baseline.sh` also runs llama.cpp on the CPU with `-dev none`, checks each server's
+  backend from its log, randomizes and balances the engine order, adds cool-downs and open-loop
+  points (`OPEN_RATES`), and records build flags.
+- **The fast CPU path (ggml-cpu) used the GPU's scheduling profile.** ggml-cpu runs whole graphs
+  like the GPUs, so it received their mixed-step budgets (prompt chunks of up to 128 rows in steps
+  that also carry other users' tokens); on the CPU those steps took about 11× a decode step. The
+  GPU profile now applies only to GPU devices. Measured (M4 Pro, ggml-cpu, 4 users, 512-token
+  prompts, 3 shuffled rounds): Qwen2.5-1.5B 74.2 → 85.5 tok/s, ITL p99 196 → 82 ms; Qwen3-4B
+  26.4 → 28.9 tok/s, ITL p99 557 → 260 ms. Single-user speed unchanged.
+- **Granite (MoE) on the fast CPU path disagreed with llama.cpp** (93.8-94.4% top-1): the expert
+  weights were not repacked for ggml's `mul_mat_id` as llama.cpp does, so other kernels ran. They
+  are now repacked; teacher-forced top-1 against llama.cpp 99.96-100%, identical perplexity.
+  Prefill +26% (898 → 1,135 tok/s, Granite-3.1-1B-A400M, M4 Pro); peak memory +696 MiB
+  (the repacked copy of the expert weights).
+- **Gemma on the fast CPU path disagreed with llama.cpp** (96.9-97.1% top-1): attention scaled
+  after the dot product, llama.cpp scales the query first, and the f16 rounding differs. The CPU
+  path now uses llama.cpp's order (Gemma 1/2/3 only); top-1 100.00%, identical perplexity. Both
+  orders are equally accurate against an f32 reference; this is a parity fix.
 - **Metal ran out of GPU memory with large KV caches** (e2e-20261019-0022: Llama-2-7B,
   `kIOGPUCommandBufferCallbackErrorOutOfMemory`, model + KV 20,275 MiB). Automatic KV sizing used
   host free RAM only; Metal reported no limit. The Metal device now reports its working set
