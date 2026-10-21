@@ -101,6 +101,7 @@ struct SegmentStats {
   int64_t download_bytes = 0;  // Device::download
   int64_t download_ns = 0;
   int64_t errors = 0;
+  int64_t sparse_attention = 0;  // attention calls run with the sparse K/V bound (sparse_kv_bound)
 };
 
 // Implemented by devices that run a recorded segment as one unit.

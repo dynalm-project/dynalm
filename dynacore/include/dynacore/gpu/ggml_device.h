@@ -47,6 +47,35 @@ struct GgmlDeviceOptions {
   int32_t threads = 0;
 };
 
+// Slot-major (in-place) attention reads the pool cells [0, span) of a step, with
+// a mask admitting each row's own cells; ggml's sparse path instead visits only a
+// row's finite mask entries (at most `kv_max` per row: the longest attended
+// context, bucketed). The span is set by the highest physical block a step
+// uses, not by how much KV it uses: once the prefix cache holds most of the
+// pool, new sequences get high block ids and dense attention runs over nearly
+// the whole pool every step (Metal, Qwen2.5-1.5B, 16 users, 65,536-cell pool:
+// ITL p50 21 ms fresh, 136 ms with a full cache, 23 ms with the sparse bound;
+// test/results/beta-phase4-20261021). The sparse kernel costs ~10% when the
+// span is close to the context (one user), and more than dense attention in
+// prompt-heavy steps at moderate spans (4 users, spans ~10x the context: -6%
+// tok/s; 16 users at ~27x: ITL p99 120 -> 200 ms), so it is chosen per step and
+// only for spans far beyond the context (the cache-filled pool was ~85x).
+// DYNACORE_GPU_SPARSE: "1" always (where kv_max < span), "0" never, unset or
+// anything else: kAuto. Read once.
+enum class GpuSparseMode : uint8_t { kAuto, kAlways, kNever };
+GpuSparseMode gpu_sparse_mode();
+// kAuto uses the sparse bound only on Metal, and only when the span is at least
+// kSparseSpanRatio x kv_max and kv_max <= kSparseMaxKv (above it ggml-metal
+// falls back to the dense kernel anyway). It applies to every step type: a
+// decode-only variant (sparse only when no sequence has more than 8 rows) left
+// the cache-filled slowdown in place (16 users, ITL p50 135 ms), because the
+// prompt rows of mixed steps are where the dense span costs most
+// (test/results/beta-final-20261021/kv).
+inline constexpr int64_t kSparseSpanRatio = 32;
+inline constexpr int64_t kSparseMaxKv = 4096;
+// The n_kv_max to set on a slot-major attention op (0 = dense).
+int32_t sparse_kv_bound(int64_t span, int64_t kv_max, GpuSparseMode mode, DeviceType type);
+
 // True when DynaCore was built with any ggml GPU backend (ENABLE_METAL,
 // ENABLE_VULKAN, ENABLE_CUDA), or with the one named by `type`.
 bool ggml_gpu_compiled();

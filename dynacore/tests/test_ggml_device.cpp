@@ -419,6 +419,115 @@ void test_paged_attention(Env& e) {
               "    scattered blocks, f16/f32/q8_0 KV, GQA, window + softcap, prefill then decode with graph reuse\n");
 }
 
+// Sparse K/V policy (sparse_kv_bound, ggml_device.h): pure cases.
+void test_sparse_policy() {
+  using M = GpuSparseMode;
+  const DeviceType mtl = DeviceType::kMetal, vk = DeviceType::kVulkan, cpu = DeviceType::kCpu;
+  CHECK(sparse_kv_bound(256, 256, M::kAuto, mtl) == 0);          // span = context: dense (one user)
+  CHECK(sparse_kv_bound(2048, 256, M::kAuto, mtl) == 0);         // 8x: dense (a few fresh users)
+  CHECK(sparse_kv_bound(7936, 256, M::kAuto, mtl) == 0);         // 31x: dense
+  CHECK(sparse_kv_bound(8192, 256, M::kAuto, mtl) == 256);       // 32x: sparse
+  CHECK(sparse_kv_bound(65536, 768, M::kAuto, mtl) == 768);      // cache-filled pool
+  CHECK(sparse_kv_bound(65536, 4352, M::kAuto, mtl) == 0);       // above ggml-metal's sparse limit
+  CHECK(sparse_kv_bound(65536, 768, M::kAuto, vk) == 0);         // auto: Metal only
+  CHECK(sparse_kv_bound(65536, 768, M::kAuto, cpu) == 0);
+  CHECK(sparse_kv_bound(65536, 768, M::kNever, mtl) == 0);
+  CHECK(sparse_kv_bound(512, 256, M::kAlways, vk) == 256);       // DYNACORE_GPU_SPARSE=1: wherever it skips cells
+  CHECK(sparse_kv_bound(256, 256, M::kAlways, mtl) == 0);        // nothing to skip
+  CHECK(sparse_kv_bound(0, 0, M::kAlways, mtl) == 0);
+  std::printf("  sparse K/V policy: auto on Metal at span >= %lldx context (context <= %lld), every step type,\n"
+              "    always / never\n",
+              static_cast<long long>(kSparseSpanRatio), static_cast<long long>(kSparseMaxKv));
+}
+
+// A cache-filled pool (the long-running server case): two short sequences whose
+// blocks sit near the top of a large slot-major pool, so the step's span (the
+// pool cells up to its highest block) is ~32x the KV it attends to. The result
+// must match the CPU reference whichever kernel runs; on Metal (auto policy) the
+// step must take the sparse bound, and the same sequences on low block ids must
+// stay dense. Active KV (blocks the rows attend to) vs physical span is printed.
+void test_dirty_pool_attention(Env& e, DeviceType type) {
+  KvGeometry g;
+  g.num_layers = 1;
+  g.num_kv_heads = 2;
+  g.head_dim = g.head_dim_v = 64;
+  g.block_size = 16;
+  g.num_blocks = 512;  // 8192 cells
+  g.dtype = DType::kF16;
+  const int32_t heads = 4;
+  const auto bytes = static_cast<size_t>(g.bytes_per_layer() / 2);
+  auto kc = Tensor::zeros(DType::kI8, {static_cast<int64_t>(bytes)}), vc = Tensor::zeros(DType::kI8, {static_cast<int64_t>(bytes)});
+  auto kg = e.rec->allocate(bytes), vg = e.rec->allocate(bytes);
+  CHECK(kc.ok() && vc.ok() && kg.ok() && vg.ok());
+  e.keep.push_back(*kc);
+  e.keep.push_back(*vc);
+  KvGeometry gg = g;
+  gg.layout = KvLayout::kSlotMajor;
+  struct Case { const char* name; std::vector<std::vector<int32_t>> tables; };
+  for (const Case& cs : {Case{"fresh (low block ids)", {{0, 1, 2}, {3, 4}}},
+                         Case{"cache-filled (high block ids)", {{509, 497, 511}, {503, 500}}}}) {
+    std::vector<KvLayerView> cv, gv;
+    for (const auto& t : cs.tables) {
+      cv.push_back(KvLayerView{kc->data(), vc->data(), &g, t});
+      gv.push_back(KvLayerView{(*kg)->data(), (*vg)->data(), &gg, t});
+    }
+    AttentionParams ap;
+    ap.num_heads = heads;
+    ap.scale = 0.125f;
+    // Prefill both (40 and 25 tokens), then decode steps.
+    auto step = [&](const std::vector<int32_t>& pos, const std::vector<int32_t>& seq) {
+      const auto m = static_cast<int64_t>(pos.size());
+      const std::vector<float> kd = randv(static_cast<size_t>(m * 128)), vd = randv(static_cast<size_t>(m * 128)),
+                               qd = randv(static_cast<size_t>(m * heads * 64));
+      auto [kh, kd_] = e.act(m, 128, &kd);
+      auto [vh, vd_] = e.act(m, 128, &vd);
+      auto [qh, qd_] = e.act(m, heads * 64, &qd);
+      auto [oh, od_] = e.act(m, heads * 64);
+      e.cpu.kv_store(kh, vh, pos, seq, cv);
+      e.rec->kv_store(kd_, vd_, pos, seq, gv);
+      AttentionParams pc = ap, pg = ap;
+      pc.q = qh;
+      pc.out = oh;
+      pg.q = qd_;
+      pg.out = od_;
+      pc.positions = pg.positions = pos;
+      pc.row_seq = pg.row_seq = seq;
+      pc.kv = cv;
+      pg.kv = gv;
+      e.cpu.attention(pc);
+      e.rec->attention(pg);
+      expect_close("dirty-pool attention", host_rows(oh), e.download(od_), 3e-3);
+    };
+    std::vector<int32_t> pos, seq;
+    for (int32_t s = 0; s < 2; ++s) {
+      for (int32_t p = 0; p < (s == 0 ? 40 : 25); ++p) {
+        pos.push_back(p);
+        seq.push_back(s);
+      }
+    }
+    const int64_t sparse0 = e.stats().sparse_attention;
+    step(pos, seq);
+    step({40, 25}, {0, 1});
+    step({41, 26}, {0, 1});
+    const int64_t used = e.stats().sparse_attention - sparse0;
+    int32_t top = 0, active = 0;
+    for (const auto& t : cs.tables) {
+      for (int32_t b : t) top = std::max(top, b + 1);
+      active += static_cast<int32_t>(t.size());
+    }
+    const int64_t span = std::min<int64_t>(int64_t{g.num_blocks} * g.block_size, (int64_t{top} * g.block_size + 255) / 256 * 256);
+    // Steps: a 40-row prompt chunk, then two decode steps; the policy applies to all three.
+    const int64_t want = 3 * (sparse_kv_bound(span, 256, gpu_sparse_mode(), type) > 0 ? 1 : 0);
+    CHECK(used == want);
+    if (gpu_sparse_mode() == GpuSparseMode::kAuto) {  // only the cache-filled case, only Metal
+      CHECK(want == (type == DeviceType::kMetal && top > 16 ? 3 : 0));
+    }
+    std::printf("  %s: %d active blocks (%d cells), physical span %lld cells: %s\n", cs.name, active,
+                active * g.block_size, static_cast<long long>(span),
+                used == 0 ? "dense" : "sparse K/V (prompt and decode steps)");
+  }
+}
+
 // AttentionParams::prescale_q (Gemma): on ggml-cpu the result must be
 // bit-identical to scaling Q on the host and attending with scale 1 (llama.cpp's
 // graph); elsewhere bit-identical to the scale inside attention (the flag is
@@ -883,6 +992,7 @@ int main() {
   }
   const char* only = std::getenv("DYNACORE_TEST_GPU");
   int ran = 0;
+  test_sparse_policy();
   std::string tested;  // provider labels, in the summary line (CI checks for "metal")
   for (auto [type, label] : {std::pair{DeviceType::kMetal, "metal"}, std::pair{DeviceType::kVulkan, "vulkan"},
                              std::pair{DeviceType::kCuda, "cuda"}, std::pair{DeviceType::kCpu, "ggml-cpu"}}) {
@@ -904,6 +1014,7 @@ int main() {
     test_rope(e);
     test_embedding_gather(e);
     test_paged_attention(e);
+    test_dirty_pool_attention(e, type);
     test_failures(e);
     {
       // Metal reports its working-set cap (recommendedMaxWorkingSetSize) for

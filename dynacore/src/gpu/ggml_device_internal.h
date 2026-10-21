@@ -259,13 +259,14 @@ class GgmlDevice final : public Device, public SegmentExecutor {
       std::fprintf(stderr,
                    "[%s] %lld segments: per segment %.1f us host inputs, %.1f us graph compute (submit+wait), "
                    "%.1f us download; %lld graph builds (%.1f ms total), %lld reuses, %lld evictions, %lld errors; "
-                   "%lld nodes in the last graph; %lld weights mapped in place; "
+                   "%lld nodes in the last graph; %lld weights mapped in place; %lld sparse attention calls; "
                    "%zu prepared graphs, %.0f MiB workspace now, %.0f MiB at most\n",
                    name_.c_str(), static_cast<long long>(stats_.segments), per(stats_.input_ns), per(stats_.compute_ns),
                    per(stats_.download_ns), static_cast<long long>(stats_.graph_builds),
                    static_cast<double>(stats_.build_ns) / 1e6, static_cast<long long>(stats_.graph_reuses),
                    static_cast<long long>(stats_.graph_evictions), static_cast<long long>(stats_.errors),
-                   static_cast<long long>(stats_.graph_nodes), static_cast<long long>(mapped_weights_), graphs_.size(),
+                   static_cast<long long>(stats_.graph_nodes), static_cast<long long>(mapped_weights_),
+                   static_cast<long long>(stats_.sparse_attention), graphs_.size(),
                    static_cast<double>(memory_stats().workspace_bytes) / 1048576.0,
                    static_cast<double>(peak_workspace_) / 1048576.0);
     }
@@ -600,7 +601,7 @@ class GgmlDevice final : public Device, public SegmentExecutor {
 // Slot-major (in-place) attention: one entry covering every row, whose span is
 // the pool cells [0, span) that hold any block the batch attends to, padded to
 // `bucket` (capped at the pool) so a decode stream reuses one graph per bucket.
-inline Result<std::vector<SeqRows>> paged_span(const DeviceCall& c, int32_t bucket) {
+inline Result<std::vector<SeqRows>> paged_span(const DeviceCall& c, int32_t bucket, DeviceType type) {
   const AttentionParams& p = c.ap;
   const KvGeometry& g = *p.kv[0].geom;
   const int32_t bs = g.block_size;
@@ -629,15 +630,10 @@ inline Result<std::vector<SeqRows>> paged_span(const DeviceCall& c, int32_t buck
   }
   const int64_t kv_max = (most + bucket - 1) / bucket * bucket;
   SeqRows all{-1, 0, static_cast<int32_t>(p.positions.size()), static_cast<int32_t>(cells), static_cast<int32_t>(span)};
-  // Opt-in (DYNACORE_GPU_SPARSE=1). Measured on Metal (M4 Pro, 2026-10-18): one
-  // user -10% (7.13 -> 7.87 ms/token, 1.5B: the sparse kernel replaces the dense
-  // one even when the span barely exceeds the context); 8B at 16 users no gain;
-  // and the bound in the graph key multiplied the prepared graphs.
-  static const bool sparse = [] {
-    const char* v = std::getenv("DYNACORE_GPU_SPARSE");
-    return v != nullptr && std::string_view(v) == "1";
-  }();
-  all.kv_max = sparse && kv_max < span ? static_cast<int32_t>(kv_max) : 0;
+  // Sparse K/V bound, per step (sparse_kv_bound, ggml_device.h): always-on cost
+  // one user 10% on Metal (7.13 -> 7.87 ms/token, 1.5B, 2026-10-18), so kAuto
+  // takes it only when the span far exceeds the context (a cache-filled pool).
+  all.kv_max = sparse_kv_bound(span, kv_max, gpu_sparse_mode(), type);
   return std::vector<SeqRows>{all};
 }
 
