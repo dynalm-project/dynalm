@@ -249,7 +249,7 @@ PointResult run_point(Target& target, const Tokenizer& tokenizer, const PointCon
   // Prompt indices never repeat within a process: a later point must not hit
   // the prefix cache (ours or the server's) warmed by an earlier point.
   static std::atomic<int32_t> next_prompt{0};
-  const int32_t base = next_prompt.fetch_add(cfg.requests + 1 + std::max(0, cfg.warmup_requests));
+  const int32_t base = cfg.prompt_base + next_prompt.fetch_add(cfg.requests + 1 + std::max(0, cfg.warmup_requests));
   std::vector<std::string> prompts;
   prompts.reserve(static_cast<size_t>(cfg.requests));
   for (int32_t i = 0; i < cfg.requests; ++i) prompts.push_back(make_prompt(tokenizer, prompt_len(i), base + i));

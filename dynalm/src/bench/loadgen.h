@@ -74,6 +74,11 @@ struct PointConfig {
   // closed loop. `concurrency` caps the requests in flight.
   double arrival_rate = 0;
   uint32_t seed = 1;  // arrival times (the same seed gives the same schedule)
+  // First prompt index of this process (make_prompt): indices never repeat
+  // within a process; separate processes against one server (tools/bench/
+  // baseline.sh) need different bases, or a later process repeats an earlier
+  // one's prompts and hits that server's prompt / prefix cache.
+  int32_t prompt_base = 0;
   // Full-size warm-up requests before the point is measured (uncounted, one at
   // a time, longest prompt length first); 0 = only the short paging warm-up.
   int32_t warmup_requests = 0;

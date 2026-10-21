@@ -37,6 +37,13 @@ OUT=""; MODELS="1.5b"; DEVICES="gpu"; ENGINES="dynalm llama ollama"; ROUNDS=3
 SINGLE_PROMPTS=128,512,2048; OUTPUT=128; MULTI_PROMPT=512
 GPU_CONC=4,8,16; CPU_CONC=4,8
 SINGLE_REQ=4; MULTI_MIN=16; MULTI_PER_USER=4
+# Engine order: random (round 1 shuffled per model/device, seeded by ORDER_SEED; then rotated, logged) or rotate (the old order).
+ORDER=${ORDER:-random}; ORDER_SEED=${ORDER_SEED:-1}
+# Seconds to idle before each model/device block (thermal recovery after the previous block).
+COOLDOWN=${COOLDOWN:-0}
+# Open-loop points (requests/s, comma-separated; empty = none): Poisson arrivals at each rate, at
+# most the point's concurrency in flight; written to <tag>.open.jsonl (kept apart from closed loop).
+OPEN_RATES=${OPEN_RATES:-}
 
 die() { echo "error: $*" >&2; exit 1; }
 while (($#)); do
@@ -59,7 +66,7 @@ model_file() {
     1.5b) echo "$MODELS_DIR/qwen2.5-1.5b-instruct-q4_k_m.gguf" ;;
     4b) echo "$MODELS_DIR/Qwen3-4B-Q4_K_M.gguf" ;;
     8b) echo "$MODELS_DIR/Meta-Llama-3.1-8B-Instruct-Q8_0.gguf" ;;
-    *) die "unknown model $1" ;;
+    *) [[ -s "$MODELS_DIR/$1.gguf" ]] && echo "$MODELS_DIR/$1.gguf" || die "unknown model $1 (a key, or a file stem in $MODELS_DIR)" ;;
   esac
 }
 
@@ -80,6 +87,17 @@ for m in $MODELS; do [[ -s $(model_file "$m") ]] || die "model $m missing: $(mod
   echo "machine: $(sysctl -n machdep.cpu.brand_string), $(($(sysctl -n hw.memsize) / 1073741824)) GiB, $(system_profiler SPDisplaysDataType 2>/dev/null | awk -F': ' '/Total Number of Cores/{print $2" GPU cores"; exit}')"
   echo "os: macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
   echo "threads: $THREADS  ctx per user: $CTX  rounds: $ROUNDS  max load: $MAX_LOAD"
+  # Build flags that decide the CPU kernels (DYNALM_BUILD / LLAMA_BUILD: build dirs with a CMakeCache.txt).
+  for b in "dynalm:${DYNALM_BUILD:-}" "llama.cpp:${LLAMA_BUILD:-}"; do
+    n=${b%%:*}; dir=${b#*:}
+    if [[ -n $dir && -f $dir/CMakeCache.txt ]]; then
+      echo "$n build flags: $(grep -E '^(GGML_NATIVE|GGML_LLAMAFILE|GGML_BLAS|GGML_BLAS_VENDOR|GGML_METAL|GGML_CPU_REPACK|DYNALM_GGML_NATIVE|CMAKE_BUILD_TYPE):' "$dir/CMakeCache.txt" | sed 's/:[A-Z]*=/=/' | tr '\n' ' ')"
+    else
+      echo "$n build flags: unknown (set DYNALM_BUILD / LLAMA_BUILD to its build directory)"
+    fi
+  done
+  echo "cache lifecycle: one server per engine and round; its points run in order (single, then each concurrency closed, then open), so the KV pool and prompt caches carry over between points"
+  echo "engine order: $ORDER (seed $ORDER_SEED)  cool-down per model/device block: ${COOLDOWN}s  open-loop rates: ${OPEN_RATES:-none}  prompts: unique per point (--prompt-base), identical across engines in a round"
   echo "single: concurrency 1, prompts $SINGLE_PROMPTS, output $OUTPUT, $SINGLE_REQ requests, 1 warm-up"
   echo "multi: gpu concurrency $GPU_CONC / cpu $CPU_CONC, prompt $MULTI_PROMPT, output $OUTPUT, max($MULTI_MIN, $MULTI_PER_USER x concurrency) requests, 1 warm-up"
   echo "dynalm server: $(shasum -a 256 "$SRV" | cut -c1-16) $("$SRV" --version | tr '\n' ' ')"
@@ -128,8 +146,10 @@ run_one() {  # engine device model round
         --threads "$THREADS" --ctx $((CTX * n)) >"$log" 2>&1 &
       pid=$!; url=http://127.0.0.1:$port; name=$(basename "$model") ;;
     llama)
-      /usr/bin/time -l "$LLAMA" -m "$model" -ngl "$([[ $dev == gpu ]] && echo 99 || echo 0)" -t "$THREADS" -c $((CTX * n)) -np "$n" \
-        -fa auto --port $port --no-webui >"$log" 2>&1 &
+      # CPU: -dev none, so llama.cpp opens no GPU device at all (with -ngl 0 alone it still opens
+      # Metal and can offload large prompt batches to it). -lv 4 logs where the weights went.
+      /usr/bin/time -l "$LLAMA" -m "$model" $([[ $dev == gpu ]] && echo "-ngl 99" || echo "-ngl 0 -dev none") -t "$THREADS" -c $((CTX * n)) -np "$n" \
+        -fa auto --port $port --no-webui -lv 4 >"$log" 2>&1 &
       pid=$!; url=http://127.0.0.1:$port; name=default ;;
     ollama)
       port=11435
@@ -142,20 +162,45 @@ run_one() {  # engine device model round
     echo "$tag: server did not start: $(grep -m1 -iE 'unsupported|error' "$log")" | tee -a "$OUT/errors.txt"
     stop_server "$pid"; return
   fi
+  # The backend this server actually uses, from its own log; a mismatch makes the run invalid.
+  local ran="?"
+  case $eng in
+    dynalm) grep -q "Device: compiled/Metal" "$log" && ran=gpu
+            grep -qE "Device: (compiled/ggml-CPU|CPU)" "$log" && ran=cpu ;;
+    llama) grep -q "MTL0_Mapped model buffer\|MTL0 model buffer" "$log" && ran=gpu
+           [[ $ran == "?" ]] && grep -q "CPU_Mapped model buffer\|CPU_REPACK model buffer" "$log" && ! grep -q "using device MTL" "$log" && ran=cpu ;;
+  esac
+  echo -e "$tag\t$eng\t$dev\t$ran" >> "$OUT/backends.tsv"
+  if [[ $eng != ollama && $ran != "$dev" ]]; then
+    echo "$tag: INVALID: wanted $dev, the server log shows $ran (not measured)" | tee -a "$OUT/errors.txt"
+    stop_server "$pid"; return
+  fi
   if [[ $eng == ollama ]]; then
     { echo "FROM $model"; echo 'TEMPLATE "{{ .Prompt }}"'; echo "PARAMETER num_ctx $CTX"; echo "PARAMETER num_thread $THREADS"
       [[ $dev == cpu ]] && echo "PARAMETER num_gpu 0"; } >"$OUT/$tag.Modelfile"
     env "${oenv[@]}" "$OLLAMA" create "$name" -f "$OUT/$tag.Modelfile" >"$OUT/$tag.create.log" 2>&1 ||
       { echo "$tag: ollama create failed" | tee -a "$OUT/errors.txt"; stop_server "$pid"; return; }
   fi
+  # Prompt indices: unique per client process (no prompt repeats between points, so no server
+  # prompt-cache hits), and the same for every engine in a round (identical prompts).
+  local pb=$((r * 10000000))
   "$CLI" benchmark "$model" --url "$url" --model-name "$name" --concurrency 1 --prompt "$SINGLE_PROMPTS" --output $OUTPUT \
-    --requests $SINGLE_REQ --warmup-requests 1 --request-log "$OUT/$tag.requests.jsonl" --out "$OUT/$tag.jsonl" >"$OUT/$tag.single.txt" 2>&1 ||
+    --prompt-base $pb --requests $SINGLE_REQ --warmup-requests 1 --request-log "$OUT/$tag.requests.jsonl" --out "$OUT/$tag.jsonl" >"$OUT/$tag.single.txt" 2>&1 ||
     echo "$tag: single-user client exit $?" | tee -a "$OUT/errors.txt"
   local c
   for c in ${conc//,/ }; do
+    pb=$((pb + 1000000))
     "$CLI" benchmark "$model" --url "$url" --model-name "$name" --concurrency "$c" --prompt $MULTI_PROMPT --output $OUTPUT \
-      --requests $((c * MULTI_PER_USER < MULTI_MIN ? MULTI_MIN : c * MULTI_PER_USER)) --warmup-requests 1 --request-log "$OUT/$tag.requests.jsonl" --out "$OUT/$tag.jsonl" \
+      --prompt-base $pb --requests $((c * MULTI_PER_USER < MULTI_MIN ? MULTI_MIN : c * MULTI_PER_USER)) --warmup-requests 1 --request-log "$OUT/$tag.requests.jsonl" --out "$OUT/$tag.jsonl" \
       >>"$OUT/$tag.multi.txt" 2>&1 || echo "$tag: c=$c client exit $?" | tee -a "$OUT/errors.txt"
+    local rate
+    for rate in ${OPEN_RATES//,/ }; do
+      pb=$((pb + 1000000))
+      "$CLI" benchmark "$model" --url "$url" --model-name "$name" --concurrency "$c" --prompt $MULTI_PROMPT --output $OUTPUT \
+        --prompt-base $pb --arrival-rate "$rate" --seed "$r" --requests $((c * MULTI_PER_USER < MULTI_MIN ? MULTI_MIN : c * MULTI_PER_USER)) \
+        --warmup-requests 1 --request-log "$OUT/$tag.open.requests.jsonl" --out "$OUT/$tag.open.jsonl" \
+        >>"$OUT/$tag.open.txt" 2>&1 || echo "$tag: c=$c open $rate/s client exit $?" | tee -a "$OUT/errors.txt"
+    done
   done
   [[ $eng == ollama ]] && env "${oenv[@]}" "$OLLAMA" rm "$name" >/dev/null 2>&1
   stop_server "$pid"
@@ -165,8 +210,17 @@ run_one() {  # engine device model round
 read -r -a arms <<<"$ENGINES"
 for m in $MODELS; do
   for d in $DEVICES; do
+    if ((COOLDOWN > 0)); then echo "$(date +%T) $m $d: cool-down ${COOLDOWN}s" | tee -a "$OUT/conditions.log"; sleep "$COOLDOWN"; fi
     for r in $(seq 1 "$ROUNDS"); do
-      k=$(((r - 1) % ${#arms[@]})); order=("${arms[@]:$k}" "${arms[@]:0:$k}")
+      if [[ $ORDER == rotate ]]; then
+        k=$(((r - 1) % ${#arms[@]})); order=("${arms[@]:$k}" "${arms[@]:0:$k}")
+      else
+        # A random order for round 1 of each model/device block (seeded by ORDER_SEED, the model and
+        # the device), then rotated each round, so every engine goes first equally often (a per-round
+        # shuffle of two engines can repeat one order every round, as on 2026-10-21).
+        read -r -a order <<<"$(python3 -c "import random,sys; a=sys.argv[3:]; random.Random(sys.argv[1]).shuffle(a); k=(int(sys.argv[2])-1)%len(a); print(' '.join(a[k:]+a[:k]))" "$ORDER_SEED-$m-$d" "$r" "${arms[@]}")"
+      fi
+      echo "$(date +%T) $m $d r$r order: ${order[*]}" >> "$OUT/conditions.log"
       for e in "${order[@]}"; do echo "== $(date +%T) $m $d r$r: $e"; run_one "$e" "$d" "$m" "$r"; done
     done
   done
