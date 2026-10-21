@@ -68,7 +68,7 @@ struct EngineOptions {
   // (DeviceKind::kGgmlCpu: 8-bit activations, llama.cpp-level accuracy, ~4x
   // faster) when this build has them and the model runs there; else, or if
   // that device fails to start, DynaCore's native kernels (DD-053). The
-  // CLI sets it for `cpu` and `auto`; `native-cpu` clears it.
+  // CLI sets it for `cpu` and `auto`; --mode exact and safe clear it.
   bool cpu_ggml = false;
   // Speculative decoding with a draft model (SchedulerConfig::spec_k > 0): a
   // small GGUF sharing the target's vocabulary, run on the same device with
@@ -91,9 +91,18 @@ struct EngineOptions {
 // Applies a device choice from --backend / --cpu / --gpu, `runtime.device` or
 // DYNALM_BACKEND to `o`: "auto" (a GPU when one runs the model, else the
 // CPU), "gpu" (any built-in GPU, never the CPU), "cpu" (ggml's CPU kernels
-// when available, see cpu_ggml), "native-cpu" (DynaCore's CPU kernels, DD-053),
-// "ggml-cpu" (ggml's, no fallback), or a named GPU ("metal", "vulkan", "cuda").
+// when available, see cpu_ggml), "ggml-cpu" (ggml's, no fallback), or a named
+// GPU ("metal", "vulkan", "cuda"). "native-cpu" is not a public backend in
+// this release (kNativeCpuRetired): DynaCore's CPU kernels run only through
+// --mode exact / safe and as the CPU fallback (cpu_ggml).
 Status apply_backend_choice(std::string_view choice, EngineOptions& o);
+
+// The error for `--backend native-cpu` (and `runtime.device: native-cpu` in a
+// config file written for an earlier version). Never a silent redirect.
+inline constexpr std::string_view kNativeCpuRetired =
+    "backend 'native-cpu' is not included in this release; use --backend cpu (fast CPU kernels) or "
+    "--mode exact (DD-053 accuracy, DynaCore's CPU kernels). In a config file, set runtime.device: cpu "
+    "and runtime.mode: exact";
 
 // Solo-prefill chunk on GPU devices when none is configured
 // (SchedulerConfig::solo_prefill_chunk == -1). Chosen by measurement on the
@@ -108,11 +117,15 @@ inline constexpr int32_t kGpuSoloPrefillChunk = 256;
 inline constexpr int32_t kGpuMixedPrefillBudget = 256;
 inline constexpr int32_t kGpuMaxPrefillChunk = 128;
 // DD-079 on the GPU: the halving controller with target 12x (v0.1.7's profile).
-// The predictive controller (decode_protect_predictive, target 4x) halved the
-// ITL p99 at 4-16 users but, measured 2026-10-18 on an M4 Pro, worsened the
-// ITL p50 3-4x at 16 users (1.5B: 26.6 -> 83.5 ms; 8B: 80 -> 310 ms) and cost
-// 7% throughput at 8B: it pins every mixed step at the protected minimum.
-// It stays available: DYNALM_DECODE_PREDICTIVE=1 DYNALM_DECODE_TARGET=4.
+// The predictive (cost-model) controller sizes each mixed step from the
+// measured decode-step time and per-row cost instead; it stays opt-in
+// (DYNALM_DECODE_PREDICTIVE=1 DYNALM_DECODE_TARGET=8). Measured 2026-10-20 on
+// an M4 Pro, 512-token prompts, target 8x against this default
+// (test/results/sched-prefill-e123-20261020): the longest mixed step fell
+// 17-44% and ITL p99 5-18% at 4-16 users, but Llama-3.1-8B Q8_0 at 16 users
+// lost 6% tok/s with ITL p50 +13%, and at 4 users ITL p95 rose 17%. Lower
+// targets trickle prompts into nearly every step: 6x and 4x tripled the ITL
+// p50 at 16 users (1.5B: 26 -> 76-89 ms; 8B at 4x, 2026-10-18: 80 -> 310 ms).
 inline constexpr float kGpuDecodeLatencyTarget = 12.0f;
 inline constexpr bool kGpuDecodePredictive = false;
 inline constexpr int32_t kGpuProtectedPrefillMin = 64;

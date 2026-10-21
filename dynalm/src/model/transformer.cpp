@@ -52,6 +52,13 @@ Result<std::unique_ptr<Transformer>> Transformer::create(const ModelConfig& conf
     }
     // The down projection runs with int16 activations (DD-076).
     if (L.w_down.data() != nullptr) backend.prepack_weight(L.w_down, /*int16_activations=*/true);
+    // 3-D expert tensors, only for a device that routes MoE itself
+    // (Device::moe_ffn reads them whole); others use the per-expert views.
+    if (backend.supports_moe_ffn()) {
+      for (const TensorView* w : {&L.gate_exps, &L.up_exps, &L.down_exps}) {
+        if (w->data() != nullptr) backend.prepack_weight(*w);
+      }
+    }
   }
   if (t->lm_head_.data() != nullptr) backend.prepack_weight(t->lm_head_);
   t->planner_ = std::make_unique<BatchPlanner>(config, HardwareProfile::detect(backend.parallelism(), backend.name()));
@@ -549,6 +556,7 @@ Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& c
     ap.kv = kv_views_;
     ap.num_heads = c.num_heads;
     ap.scale = attn_scale;
+    ap.prescale_q = c.attn_prescale_q;
     ap.softcap = c.attn_logit_softcap;
     ap.sliding_window = c.layer_uses_sliding_window(l) ? c.sliding_window : 0;
     backend_.attention(ap);

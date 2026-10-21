@@ -19,10 +19,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -36,12 +38,14 @@
 #include "dynacore/gpu/ggml_device.h"
 #include "dynacore/hardware/process_stats.h"
 #include "loader/model_loader.h"
+#include "model/architecture.h"
 #include "loader/model_source.h"
 #include "loader/gguf/gguf_tokenizer.h"
 #include "loader/gguf/gguf.h"
 #include "runtime/autotune.h"
 #include "tokenizer/pretokenizer.h"
 #include "runtime/engine.h"
+#include "sampling/sampler.h"
 #include "tests/tiny_gguf.h"
 
 using namespace dynalm;
@@ -304,7 +308,7 @@ void test_device_plan() {
   CHECK((p.candidates == std::vector<K>{K::kMetal}) && !p.native_cpu_last);
   CHECK(plan_devices(dense, gpu, none, true).error.code() == StatusCode::kUnsupported);
   CHECK(plan_devices(moe, gpu, std::vector<K>{K::kCpu, K::kCuda}, true).error.code() == StatusCode::kUnsupported);
-  // cpu: ggml kernels when built and able; native-cpu: native only; a named device: exactly it.
+  // cpu: ggml kernels when built and able; exact (cpu_ggml off): native only; a named device: exactly it.
   DeviceRequest cpu;
   cpu.cpu_ggml = true;
   CHECK((plan_devices(dense, cpu, metal, true).candidates == std::vector<K>{K::kGgmlCpu}));
@@ -334,6 +338,220 @@ void test_predictive_mixed_budget() {
   CHECK(predict_mixed_prefill_budget(12.0, 0.5, 1.0, 64, 256) == 64);    // target 1x: nothing spare
   CHECK(predict_mixed_prefill_budget(12.0, 0.5, 4.0, 512, 256) == 256);  // min above max: max wins
   CHECK(predict_mixed_prefill_budget(12.0, 1e-300, 4.0, 1, 256) == 256); // overflow-safe
+}
+
+// Scheduler profile per device (Engine::create_on): the GPU's mixed-step
+// profile (kGpuMixedPrefillBudget etc.) only on a GPU; the CPU kinds,
+// ggml-cpu included, keep the balanced CPU budgets. The solo-prefill chunk
+// follows the execution model: on for graph devices (GPU and ggml-cpu), off
+// for DynaCore's CPU kernels. Explicit budgets replace the device profile.
+void test_scheduler_profile(bool gpu_usable, DeviceKind gpu_kind) {
+  const SchedulerConfig def;
+  auto cpu_budgets = [&](const SchedulerConfig& s) {
+    return s.prefill_token_budget == def.prefill_token_budget && s.max_prefill_chunk == def.max_prefill_chunk &&
+           s.decode_latency_target == def.decode_latency_target && s.protected_prefill_min == def.protected_prefill_min &&
+           s.decode_protect_predictive == def.decode_protect_predictive;
+  };
+  CHECK(cpu_budgets(make_engine(DeviceKind::kCpu)->scheduler_config()));
+  CHECK(make_engine(DeviceKind::kCpu)->scheduler_config().solo_prefill_chunk == 0);
+  if (ggml_cpu_usable()) {
+    const SchedulerConfig s = make_engine(DeviceKind::kGgmlCpu)->scheduler_config();
+    CHECK(cpu_budgets(s));
+    CHECK(s.solo_prefill_chunk == kGpuSoloPrefillChunk);
+  }
+  if (gpu_usable) {
+    const SchedulerConfig s = make_engine(gpu_kind)->scheduler_config();
+    CHECK(s.prefill_token_budget == kGpuMixedPrefillBudget && s.max_prefill_chunk == kGpuMaxPrefillChunk);
+    CHECK(s.decode_latency_target == kGpuDecodeLatencyTarget && s.protected_prefill_min == kGpuProtectedPrefillMin);
+    CHECK(s.decode_protect_predictive == kGpuDecodePredictive && s.solo_prefill_chunk == kGpuSoloPrefillChunk);
+    EngineOptions o;
+    o.model_path = g_model;
+    o.backend = gpu_kind;
+    o.kv_tokens = 2048;
+    o.device_scheduler_defaults = false;  // the caller's budgets win
+    auto e = Engine::create(o);
+    CHECK(e.ok() && cpu_budgets((*e)->scheduler_config()));
+  }
+}
+
+// Sampling (sampling/sampler.h, DD-043), on hand-made logits rows: greedy and
+// its ties; top-k, top-p and min-p never return a token they cut, and keep the
+// ones they should; temperature sharpens / flattens the distribution as
+// exp(dl / T) (frequencies of seeded draws, within statistical tolerance);
+// penalties; a fixed seed repeats the same tokens; invalid parameters are refused.
+void test_sampling() {
+  constexpr int32_t kVocab = 64;
+  // Log-probabilities of p = 0.5, 0.3, 0.15, 0.05 for ids 0..3; the rest are far below.
+  auto row = [&] {
+    std::vector<float> l(kVocab, -40.0f);
+    const float p[4] = {0.5f, 0.3f, 0.15f, 0.05f};
+    for (int i = 0; i < 4; ++i) l[static_cast<size_t>(i)] = std::log(p[i]);
+    return l;
+  };
+  const std::vector<TokenId> ctx = {7, 8, 9};
+  // Counts of `n` draws per token id.
+  auto draws = [&](SamplingParams p, int n, std::vector<float> base) {
+    p.has_seed = true;
+    Sampler s(p);
+    std::vector<int> c(kVocab, 0);
+    for (int i = 0; i < n; ++i) {
+      std::vector<float> l = base;
+      const TokenId t = s.sample(l, ctx);
+      CHECK(t >= 0 && t < kVocab);
+      ++c[static_cast<size_t>(t)];
+    }
+    return c;
+  };
+  auto only = [&](const std::vector<int>& c, int n_kept) {
+    for (int i = n_kept; i < kVocab; ++i) {
+      if (c[static_cast<size_t>(i)] != 0) return false;
+    }
+    for (int i = 0; i < n_kept; ++i) {
+      if (c[static_cast<size_t>(i)] == 0) return false;
+    }
+    return true;
+  };
+  constexpr int kN = 20000;
+
+  // Greedy: temperature 0, or top_k 1 at any temperature; ties to the lowest id.
+  {
+    std::vector<float> l = row();
+    CHECK(sample_greedy(l) == 0);
+    l[5] = l[0];
+    CHECK(sample_greedy(l) == 0);
+    SamplingParams p;
+    p.temperature = 1.5f;
+    p.top_k = 1;
+    CHECK(p.greedy());
+    const auto c = draws(p, 200, row());
+    CHECK(c[0] == 200);
+  }
+  // Temperature 1, no cut: the frequencies follow p (0.5 / 0.3 / 0.15 / 0.05).
+  {
+    SamplingParams p;
+    p.temperature = 1.0f;
+    const auto c = draws(p, kN, row());
+    CHECK(only(c, 4));
+    const double want[4] = {0.5, 0.3, 0.15, 0.05};
+    for (int i = 0; i < 4; ++i) {
+      const double f = static_cast<double>(c[static_cast<size_t>(i)]) / kN;
+      CHECK(std::abs(f - want[i]) < 0.015);  // > 4 standard deviations at n = 20000
+    }
+  }
+  // Temperature scales log-odds: p0 / p1 = (5/3)^(1/T).
+  for (const float t : {0.5f, 2.0f}) {
+    SamplingParams p;
+    p.temperature = t;
+    const auto c = draws(p, kN, row());
+    const double ratio = static_cast<double>(c[0]) / std::max(1, c[1]);
+    const double want = std::pow(0.5 / 0.3, 1.0 / t);
+    CHECK(std::abs(ratio / want - 1.0) < 0.08);
+  }
+  // top-k: only the k largest.
+  {
+    SamplingParams p;
+    p.temperature = 1.0f;
+    p.top_k = 2;
+    const auto c = draws(p, kN, row());
+    CHECK(only(c, 2));
+    const double ratio = static_cast<double>(c[0]) / c[1];
+    CHECK(std::abs(ratio / (0.5 / 0.3) - 1.0) < 0.08);  // renormalized among the kept
+  }
+  // top-p: the smallest prefix with mass >= top_p (0.5, 0.8, 0.95, 1.0).
+  for (const auto& [top_p, kept] : std::vector<std::pair<float, int>>{{0.45f, 1}, {0.7f, 2}, {0.9f, 3}, {0.99f, 4}}) {
+    SamplingParams p;
+    p.temperature = 1.0f;
+    p.top_p = top_p;
+    CHECK(only(draws(p, 4000, row()), kept));
+  }
+  // Near-equal logits (one histogram bin of the pre-cut in distribution()): the exact top-k and
+  // nucleus steps decide, not the coarse cut. p is about 0.25 for each of ids 0..3.
+  {
+    std::vector<float> flat(kVocab, -40.0f);
+    for (int i = 0; i < 4; ++i) flat[static_cast<size_t>(i)] = -0.001f * static_cast<float>(i);
+    SamplingParams p;
+    p.temperature = 1.0f;
+    p.top_k = 2;
+    CHECK(only(draws(p, 4000, flat), 2));
+    p.top_k = 3;
+    CHECK(only(draws(p, 4000, flat), 3));
+    SamplingParams q;
+    q.temperature = 1.0f;
+    q.top_p = 0.4f;  // 0.25 + 0.25 >= 0.4
+    CHECK(only(draws(q, 4000, flat), 2));
+    q.top_p = 0.6f;  // three are needed
+    CHECK(only(draws(q, 4000, flat), 3));
+  }
+  // top-k then top-p (p applies to the k kept): k = 3 keeps 0.95 of the mass; top-p 0.8 of that
+  // (0.76) is reached by ids 0 and 1 (0.8 of 0.95).
+  {
+    SamplingParams p;
+    p.temperature = 1.0f;
+    p.top_k = 3;
+    p.top_p = 0.8f;
+    CHECK(only(draws(p, 4000, row()), 2));
+  }
+  // min-p: drop p < min_p x p_max (0.2 x 0.5 = 0.1: id 3 at 0.05 goes).
+  {
+    SamplingParams p;
+    p.temperature = 1.0f;
+    p.min_p = 0.2f;
+    CHECK(only(draws(p, 4000, row()), 3));
+  }
+  // Penalties (step 1, before selection): repetition divides positive and multiplies negative
+  // logits of seen tokens; frequency and presence subtract.
+  {
+    SamplingParams p;
+    p.repetition_penalty = 2.0f;
+    Sampler s(p);
+    std::vector<float> l(kVocab, 0.0f);
+    l[7] = 4.0f;
+    l[8] = -4.0f;
+    l[1] = 4.0f;  // not in the context
+    s.apply_penalties(l, ctx);
+    CHECK(l[7] == 2.0f && l[8] == -8.0f && l[1] == 4.0f);
+    SamplingParams q;
+    q.frequency_penalty = 0.5f;
+    q.presence_penalty = 1.0f;
+    Sampler s2(q);
+    std::vector<float> m(kVocab, 0.0f);
+    const std::vector<TokenId> twice = {7, 7, 9};
+    s2.apply_penalties(m, twice);
+    CHECK(std::abs(m[7] - (-2.0f)) < 1e-6f && std::abs(m[9] - (-1.5f)) < 1e-6f && m[8] == 0.0f);
+  }
+  // A fixed seed repeats; another seed gives another sequence (64 draws at p = 0.5 / 0.3 / ...).
+  {
+    auto seq = [&](uint64_t seed) {
+      SamplingParams p;
+      p.temperature = 1.0f;
+      p.seed = seed;
+      p.has_seed = true;
+      Sampler s(p);
+      std::vector<TokenId> out;
+      for (int i = 0; i < 64; ++i) {
+        std::vector<float> l = row();
+        out.push_back(s.sample(l, ctx));
+      }
+      return out;
+    };
+    CHECK(seq(42) == seq(42));
+    CHECK(seq(42) != seq(43));
+  }
+  // Invalid parameters are refused (the server answers 400 for these).
+  auto invalid = [](auto set) {
+    SamplingParams p;
+    set(p);
+    return !p.validate().ok();
+  };
+  CHECK(SamplingParams().validate().ok());
+  CHECK(invalid([](SamplingParams& p) { p.temperature = -0.1f; }));
+  CHECK(invalid([](SamplingParams& p) { p.temperature = 101.0f; }));
+  CHECK(invalid([](SamplingParams& p) { p.top_k = -1; }));
+  CHECK(invalid([](SamplingParams& p) { p.top_p = 0.0f; }));
+  CHECK(invalid([](SamplingParams& p) { p.top_p = 1.01f; }));
+  CHECK(invalid([](SamplingParams& p) { p.min_p = 1.5f; }));
+  CHECK(invalid([](SamplingParams& p) { p.repetition_penalty = 0.0f; }));
+  CHECK(invalid([](SamplingParams& p) { p.frequency_penalty = 2.5f; }));
 }
 
 // Memory admission: weights + KV within 90% of RAM (95% of free GPU memory);
@@ -422,6 +640,41 @@ void test_memory_bounded(Engine& e) {
 
 }  // namespace
 
+// Gemma 1-3 ask ggml-cpu to scale Q in its own op (llama.cpp's operation
+// order, for bit-parity); no other architecture does.
+void test_attn_prescale_q() {
+  int configured = 0;
+  for (std::string_view id : supported_architecture_ids()) {
+    ModelConfig c;
+    c.architecture = std::string(id);
+    c.num_layers = 2;
+    c.hidden_size = 128;
+    c.num_heads = 4;
+    c.num_kv_heads = 2;
+    c.head_dim = 32;
+    TensorRegistry w(c.num_layers);
+    const ModelArchitecture* a = find_architecture(id);
+    CHECK(a != nullptr);
+    if (!a->configure(c, w).ok()) continue;  // needs tensors to configure
+    ++configured;
+    const bool gemma = id == "gemma" || id == "gemma2" || id == "gemma3";
+    if (c.attn_prescale_q != gemma) std::fprintf(stderr, "attn_prescale_q wrong for %.*s\n", static_cast<int>(id.size()), id.data());
+    CHECK(c.attn_prescale_q == gemma);
+  }
+  for (std::string_view id : {"gemma3", "llama", "qwen3"}) {
+    ModelConfig c;
+    c.architecture = std::string(id);
+    c.num_layers = 2;
+    c.hidden_size = 128;
+    c.num_heads = 4;
+    c.num_kv_heads = 2;
+    c.head_dim = 32;
+    TensorRegistry w(c.num_layers);
+    CHECK(find_architecture(id)->configure(c, w).ok());
+  }
+  std::printf("  attn_prescale_q: Gemma only (%d architectures configured)\n", configured);
+}
+
 // `auto` picks the GPU only for a model it runs, and the CPU otherwise;
 // an explicit GPU request for an unsupported model fails at startup.
 void test_device_selection(const std::string& dir, bool gpu_usable, DeviceKind gpu_kind) {
@@ -494,21 +747,30 @@ void test_device_selection(const std::string& dir, bool gpu_usable, DeviceKind g
     CHECK(apply_backend_choice("auto", o).ok() && o.backend_auto && !o.backend_require_gpu);
     CHECK(apply_backend_choice("metal", o).ok() && !o.backend_auto && o.backend == DeviceKind::kMetal);
     CHECK(!apply_backend_choice("tpu", o).ok());
-    // cpu: ggml's CPU kernels when built in; native-cpu: DynaCore's fp32 kernels.
+    // cpu: ggml's CPU kernels when built in. native-cpu is not a public backend in this
+    // release: a clear error (the same for a config file's runtime.device), never a redirect.
     CHECK(apply_backend_choice("cpu", o).ok() && o.cpu_ggml && o.backend == DeviceKind::kCpu);
-    CHECK(apply_backend_choice("native-cpu", o).ok() && !o.cpu_ggml && o.backend == DeviceKind::kCpu);
+    {
+      EngineOptions before = o;
+      const Status st = apply_backend_choice("native-cpu", o);
+      CHECK(!st.ok() && st.message().find("not included in this release") != std::string::npos &&
+            st.message().find("--mode exact") != std::string::npos);
+      CHECK(o.backend == before.backend && o.backend_auto == before.backend_auto && o.cpu_ggml == before.cpu_ggml);
+    }
     CHECK(apply_backend_choice("auto", o).ok() && o.cpu_ggml);
     CHECK(apply_backend_choice("ggml-cpu", o).ok() && o.backend == DeviceKind::kGgmlCpu);
-    for (const char* choice : {"cpu", "native-cpu"}) {
+    // cpu, and cpu with --mode exact (DynaCore's kernels, DD-053).
+    for (const bool exact : {false, true}) {
       EngineOptions c;
       c.model_path = qwen3;
       c.threads = 2;
       c.kv_tokens = 512;
-      CHECK(apply_backend_choice(choice, c).ok());
+      CHECK(apply_backend_choice("cpu", c).ok());
+      CHECK(apply_tune_mode(exact ? TuneMode::kExact : TuneMode::kAuto, c).ok());
       auto e = Engine::create(c);
       CHECK(e.ok());
       const bool ggml = (*e)->backend_name().find("ggml-CPU") != std::string::npos;
-      CHECK(ggml == (std::string_view(choice) == "cpu" && ggml_cpu_usable()));
+      CHECK(ggml == (!exact && ggml_cpu_usable()));
       const Out a = gen(**e, kPrompts[0], 8), b = gen(**e, kPrompts[0], 8);
       CHECK(a.finish == StreamFinish::kLength && a.tokens == 8 && a.text == b.text);
     }
@@ -567,8 +829,8 @@ void test_autotune(const std::filesystem::path& dir) {
     CHECK(apply_backend_choice("gpu", gpu).ok());
     CHECK(!apply_tune_mode(TuneMode::kSafe, gpu).ok());  // --gpu is never silently replaced by the CPU
     CHECK(apply_tune_mode(TuneMode::kExact, gpu).ok() && gpu.backend_require_gpu);
-    EngineOptions n;
-    CHECK(apply_backend_choice("native-cpu", n).ok());
+    EngineOptions n;  // exact on the CPU: DynaCore's kernels, never ggml's
+    CHECK(apply_backend_choice("cpu", n).ok());
     CHECK(apply_tune_mode(TuneMode::kExact, n).ok() && n.backend == DeviceKind::kCpu && !n.cpu_ggml);
   }
 
@@ -865,6 +1127,63 @@ void test_tokenizer_support(const std::filesystem::path& dir) {
   CHECK(support_verdict(true, true, WeightsCheck::kAbsent).find("PARTIAL") == 0);
 }
 
+// Mixed prompt/decode steps (DD-079), cost-model (DYNALM_DECODE_PREDICTIVE=1)
+// and halving controller (=0), on the scheduler trace (no timing): a decoding
+// stream gets its row in every step until it ends, while two long prompts
+// arrive; mixed steps stay within the step budget and per-sequence chunk, and
+// their prompt share within [protected minimum, prefill budget]; every prompt
+// is computed exactly once, in order (contiguous positions), and finishes; a
+// lone request afterwards has no mixed steps.
+void test_mixed_step_protection(DeviceKind dev) {
+  for (const char* predictive : {"1", "0"}) {
+    set_env("DYNALM_DECODE_PREDICTIVE", predictive);
+    auto e = make_engine(dev, /*prefix_cache=*/false, /*solo=*/-1, /*trace=*/true);
+    const SchedulerConfig cfg = e->scheduler_config();
+    CHECK(cfg.decode_protect_predictive == (predictive[0] == '1'));
+    auto a = e->generate_text(kPrompts[0], false, greedy(160));
+    CHECK(a.ok());
+    StreamEvent ev;
+    CHECK((*a)->next(ev, std::chrono::milliseconds(60000)));  // A is decoding
+    auto b = e->generate_text(std::string(900, 'z'), false, greedy(4));
+    auto c = e->generate_text(std::string(600, 'q'), false, greedy(4));
+    CHECK(b.ok() && c.ok());
+    const Out oa = drain(*a), ob = drain(*b), oc = drain(*c);
+    CHECK(oa.finish == StreamFinish::kLength && ob.finish == StreamFinish::kLength && oc.finish == StreamFinish::kLength);
+    CHECK(ob.tokens == 4 && oc.tokens == 4);
+    const uint64_t a_id = (*a)->id();
+    std::map<uint64_t, int32_t> next_pos;  // per prompt: the first position not yet computed
+    bool a_started = false, a_done = false;
+    int mixed = 0;
+    for (const StepTrace& st : e->take_step_trace()) {
+      bool has_a = false;
+      for (const StepTraceRow& r : st.rows) {
+        if (r.request_id == a_id && r.decode) has_a = true;
+        if (r.decode) continue;
+        if (!st.solo) CHECK(r.rows <= std::max(cfg.max_prefill_chunk, 1));
+        auto [it, fresh] = next_pos.try_emplace(r.request_id, 0);
+        if (r.request_id != a_id) CHECK(r.start_pos == it->second);  // in order, nothing skipped or repeated
+        it->second = r.start_pos + r.rows;
+      }
+      if (has_a) a_started = true;
+      if (a_started && !a_done && !has_a) a_done = true;  // A has finished
+      if (a_done) CHECK(!has_a);                          // never a step without A mid-stream
+      if (st.decode_rows > 0 && st.prefill_rows > 0) {
+        ++mixed;
+        CHECK(!st.solo);
+        CHECK(st.prefill_rows <= st.prefill_budget && st.prefill_budget <= cfg.prefill_token_budget);
+        CHECK(st.prefill_budget >= cfg.protected_prefill_min);
+      }
+    }
+    CHECK(mixed > 0);  // the prompts were prefilled while A decoded
+    const uint64_t b_id = (*b)->id(), c_id = (*c)->id();
+    CHECK(next_pos.count(b_id) && next_pos.count(c_id) && next_pos[b_id] > next_pos[c_id]);  // 900 > 600 chars
+    const Out alone = gen(*e, kPrompts[3], 8);
+    CHECK(alone.finish == StreamFinish::kLength);
+    for (const StepTrace& st : e->take_step_trace()) CHECK(!(st.decode_rows > 0 && st.prefill_rows > 0));
+  }
+  set_env("DYNALM_DECODE_PREDICTIVE", "");
+}
+
 int main() {
   const auto dir = std::filesystem::temp_directory_path() / ("dynalm-test-" + test::unique_suffix());
   std::filesystem::create_directories(dir);
@@ -872,8 +1191,10 @@ int main() {
   CHECK(test::write_file(g_model, test::tiny_model_gguf()));
   int rc = 0;
   test_device_plan();
-  std::printf("device plan: auto / --gpu / cpu / native-cpu / named, per model and build\n");
+  std::printf("device plan: auto / --gpu / cpu / exact / named, per model and build\n");
   test_predictive_mixed_budget();
+  test_sampling();
+  std::printf("sampling: greedy and ties, temperature, top-k, top-p, min-p, penalties, seeds, invalid parameters\n");
   test_memory_admission();
   // Isolated from the user's tuning cache (~/.dynalm/autotune.json).
   set_env("DYNALM_AUTOTUNE_CACHE", (dir / "none.json").string());
@@ -902,6 +1223,10 @@ int main() {
     std::printf("  cancellation, deadline, invalid requests; later requests unaffected\n");
     test_solo_prefill_never_stalls_decode(DeviceKind::kCpu);
     std::printf("  solo prefill never stalls a decoding stream (scheduler trace)\n");
+    test_mixed_step_protection(DeviceKind::kCpu);
+    if (ggml_cpu_usable()) test_mixed_step_protection(DeviceKind::kGgmlCpu);
+    std::printf("  mixed steps (cost model and halving): decode never skipped, budgets and chunks held, prompts in order%s\n",
+                ggml_cpu_usable() ? ", native and ggml-cpu" : " (ggml-cpu: SKIP, not usable here)");
     test_memory_bounded(*e);
     std::printf("  memory bounded over repeated requests\n");
     test_speculative_batch(DeviceKind::kCpu, /*exact=*/true);
@@ -964,7 +1289,8 @@ int main() {
       }
       test_cancel_deadline_errors(*g);
       test_solo_prefill_never_stalls_decode(gpu_kind);
-      std::printf("  concurrent + shared prefixes, cancellation, deadline, solo prefill trace\n");
+      test_mixed_step_protection(gpu_kind);
+      std::printf("  concurrent + shared prefixes, cancellation, deadline, solo prefill and mixed-step traces\n");
       test_memory_bounded(*g);
       std::printf("  memory bounded over repeated requests\n");
       // GPU: no batch invariance, so lengths and acceptance, not text equality.
@@ -976,6 +1302,11 @@ int main() {
   } else {
     std::printf("GPU: NOT BUILT (ENABLE_METAL/VULKAN/CUDA=OFF)\n");
   }
+  test_scheduler_profile(gpu_usable, gpu_kind);
+  std::printf("scheduler profile: GPU mixed-step budgets on %s only; cpu and ggml-cpu keep the CPU budgets%s\n",
+              gpu_usable ? std::string(device_kind_name(gpu_kind)).c_str() : "the GPU (not tested here)",
+              ggml_cpu_usable() ? "" : " (ggml-cpu: SKIP, not usable here)");
+  test_attn_prescale_q();
   test_device_selection(dir.string(), gpu_usable, gpu_kind);
   std::printf("device selection: auto -> %s for Qwen2 and Qwen3 (per-head Q/K norm); cpu -> ggml kernels when built; "
               "--gpu/--cpu/--backend\n",

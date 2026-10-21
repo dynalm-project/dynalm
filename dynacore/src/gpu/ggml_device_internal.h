@@ -259,13 +259,14 @@ class GgmlDevice final : public Device, public SegmentExecutor {
       std::fprintf(stderr,
                    "[%s] %lld segments: per segment %.1f us host inputs, %.1f us graph compute (submit+wait), "
                    "%.1f us download; %lld graph builds (%.1f ms total), %lld reuses, %lld evictions, %lld errors; "
-                   "%lld nodes in the last graph; %lld weights mapped in place; "
+                   "%lld nodes in the last graph; %lld weights mapped in place; %lld sparse attention calls; "
                    "%zu prepared graphs, %.0f MiB workspace now, %.0f MiB at most\n",
                    name_.c_str(), static_cast<long long>(stats_.segments), per(stats_.input_ns), per(stats_.compute_ns),
                    per(stats_.download_ns), static_cast<long long>(stats_.graph_builds),
                    static_cast<double>(stats_.build_ns) / 1e6, static_cast<long long>(stats_.graph_reuses),
                    static_cast<long long>(stats_.graph_evictions), static_cast<long long>(stats_.errors),
-                   static_cast<long long>(stats_.graph_nodes), static_cast<long long>(mapped_weights_), graphs_.size(),
+                   static_cast<long long>(stats_.graph_nodes), static_cast<long long>(mapped_weights_),
+                   static_cast<long long>(stats_.sparse_attention), graphs_.size(),
                    static_cast<double>(memory_stats().workspace_bytes) / 1048576.0,
                    static_cast<double>(peak_workspace_) / 1048576.0);
     }
@@ -333,9 +334,14 @@ class GgmlDevice final : public Device, public SegmentExecutor {
   // with i8mm on ARM; 8x8 on AVX2), as llama.cpp does by default. The graph
   // then binds matmul weights to the copy (GraphBuilder::weight); everything
   // else (embedding lookups of a tied table) keeps reading the original.
+  // A 3-D expert tensor [experts, rows, cols] (contiguous experts) is repacked
+  // whole for mul_mat_id (GraphBuilder::expert_weight), as llama.cpp does.
   // Costs one copy of the matmul weights in RAM. DYNACORE_GGML_REPACK=0: off.
   void prepack_weight(const TensorView& w, bool) override {
-    if (type_ != DeviceType::kCpu || w.rank() != 2 || repacked_.count(static_cast<const std::byte*>(w.data()))) return;
+    if (type_ != DeviceType::kCpu || (w.rank() != 2 && w.rank() != 3) ||
+        repacked_.count(static_cast<const std::byte*>(w.data()))) {
+      return;
+    }
     static const bool on = [] {
       const char* v = std::getenv("DYNACORE_GGML_REPACK");
       return v == nullptr || std::string_view(v) != "0";
@@ -343,10 +349,13 @@ class GgmlDevice final : public Device, public SegmentExecutor {
     ggml_type type;
     if (!on || !to_ggml_type(w.dtype(), type)) return;
     ggml_backend_buffer_type_t repack = repack_buffer_type();
-    const int64_t cols = w.dim(1), rows = w.dim(0);
-    if (repack == nullptr || static_cast<size_t>(w.stride(0)) != ggml_row_size(type, cols)) return;
+    const int r = w.rank();
+    const int64_t cols = w.dim(r - 1), rows = w.dim(r - 2), experts = r == 3 ? w.dim(0) : 1;
+    const size_t row = ggml_row_size(type, cols);
+    if (repack == nullptr || static_cast<size_t>(w.stride(r - 2)) != row) return;
+    if (r == 3 && static_cast<size_t>(w.stride(0)) != row * static_cast<size_t>(rows)) return;
     if (!repack_ctx_) repack_ctx_ = meta_ctx(8192);
-    ggml_tensor* t = ggml_new_tensor_2d(repack_ctx_.get(), type, cols, rows);
+    ggml_tensor* t = ggml_new_tensor_3d(repack_ctx_.get(), type, cols, rows, experts);
     if (t == nullptr) return;
     ggml_backend_buffer_t buf = ggml_backend_buft_alloc_buffer(repack, ggml_backend_buft_get_alloc_size(repack, t));
     if (buf == nullptr) return;
@@ -362,10 +371,13 @@ class GgmlDevice final : public Device, public SegmentExecutor {
     prepack_.source_bytes += static_cast<int64_t>(ggml_nbytes(t));
   }
   PrepackStats prepack_stats() const override { return prepack_; }
-  // The repacked copy of a matmul weight at `p` with ggml shape [cols, rows], or null.
-  ggml_tensor* repacked(const std::byte* p, int64_t cols, int64_t rows) const {
+  // The repacked copy of a matmul weight at `p` with ggml shape [cols, rows,
+  // experts] (experts 1: a 2-D weight), or null.
+  ggml_tensor* repacked(const std::byte* p, int64_t cols, int64_t rows, int64_t experts = 1) const {
     auto it = repacked_.find(p);
-    return it != repacked_.end() && it->second->ne[0] == cols && it->second->ne[1] == rows ? it->second : nullptr;
+    if (it == repacked_.end()) return nullptr;
+    const ggml_tensor* t = it->second;
+    return t->ne[0] == cols && t->ne[1] == rows && t->ne[2] == experts ? it->second : nullptr;
   }
 
   void download(const TensorView& src, std::span<float> dst) override {
@@ -589,7 +601,7 @@ class GgmlDevice final : public Device, public SegmentExecutor {
 // Slot-major (in-place) attention: one entry covering every row, whose span is
 // the pool cells [0, span) that hold any block the batch attends to, padded to
 // `bucket` (capped at the pool) so a decode stream reuses one graph per bucket.
-inline Result<std::vector<SeqRows>> paged_span(const DeviceCall& c, int32_t bucket) {
+inline Result<std::vector<SeqRows>> paged_span(const DeviceCall& c, int32_t bucket, DeviceType type) {
   const AttentionParams& p = c.ap;
   const KvGeometry& g = *p.kv[0].geom;
   const int32_t bs = g.block_size;
@@ -618,15 +630,10 @@ inline Result<std::vector<SeqRows>> paged_span(const DeviceCall& c, int32_t buck
   }
   const int64_t kv_max = (most + bucket - 1) / bucket * bucket;
   SeqRows all{-1, 0, static_cast<int32_t>(p.positions.size()), static_cast<int32_t>(cells), static_cast<int32_t>(span)};
-  // Opt-in (DYNACORE_GPU_SPARSE=1). Measured on Metal (M4 Pro, 2026-10-18): one
-  // user -10% (7.13 -> 7.87 ms/token, 1.5B: the sparse kernel replaces the dense
-  // one even when the span barely exceeds the context); 8B at 16 users no gain;
-  // and the bound in the graph key multiplied the prepared graphs.
-  static const bool sparse = [] {
-    const char* v = std::getenv("DYNACORE_GPU_SPARSE");
-    return v != nullptr && std::string_view(v) == "1";
-  }();
-  all.kv_max = sparse && kv_max < span ? static_cast<int32_t>(kv_max) : 0;
+  // Sparse K/V bound, per step (sparse_kv_bound, ggml_device.h): always-on cost
+  // one user 10% on Metal (7.13 -> 7.87 ms/token, 1.5B, 2026-10-18), so kAuto
+  // takes it only when the span far exceeds the context (a cache-filled pool).
+  all.kv_max = sparse_kv_bound(span, kv_max, gpu_sparse_mode(), type);
   return std::vector<SeqRows>{all};
 }
 

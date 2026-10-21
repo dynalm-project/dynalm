@@ -7,6 +7,7 @@ The pre-check fetches only the small files (never *.safetensors), runs
 download is replaced by a local stub: no network, no model, no binary.
 """
 import importlib.util
+import json
 import os
 import stat
 import sys
@@ -89,5 +90,56 @@ with tempfile.TemporaryDirectory() as d:
     # A failed small-file download is reported as such, without running inspect.
     mm.hf_download = lambda repo, files, root, token: ("gated", None)
     check(mm.Matrix.hf_precheck(m, "owner/repo", files, "01") == "gated", "download failure passed through")
+
+# The speed method (BENCH_METHOD "d512-r5"): both engines decode 64 tokens at depth 512, 5
+# repetitions after a warm-up, flash attention on; llama.cpp's CPU run without op offload.
+# `run` is replaced: the fakes write what dynalm benchmark / llama-bench would.
+with tempfile.TemporaryDirectory() as d:
+    d = Path(d)
+    (d / "logs").mkdir()
+    fake_lb = d / "llama-bench"
+    fake_lb.write_text("")
+    fake_lb.chmod(0o755)
+    m = SimpleNamespace(dynalm="dynalm", out=d, logs=d / "logs", threads="8", llama_bench=str(fake_lb))
+    m.llama_cmd = lambda ngl, model: mm.Matrix.llama_cmd(m, ngl, model)
+    gpu, cpu = mm.Matrix.llama_cmd(m, 99, "m.gguf"), mm.Matrix.llama_cmd(m, 0, "m.gguf")
+    for cmd in (gpu, cpu):
+        flags = dict(zip(cmd[1::2], cmd[2::2]))
+        check(flags.get("-p") == "512" and flags.get("-n") == "64" and flags.get("-d") == "0,512", f"depths: {cmd}")
+        check(flags.get("-r") == "5" and flags.get("-fa") == "on" and "--no-warmup" not in cmd, f"reps, fa, warm-up: {cmd}")
+    check(dict(zip(cpu[1::2], cpu[2::2])).get("-nopo") == "1" and "-nopo" not in gpu, "op offload off on the CPU only")
+    calls = []
+
+    def fake_run(cmd, log, timeout, stdout=None):
+        calls.append(cmd)
+        log.write_text("")
+        if cmd[0] == str(fake_lb):
+            res = [{"n_prompt": 512, "n_gen": 0, "n_depth": 0, "avg_ts": 900.0, "stddev_ts": 9.0},
+                   {"n_prompt": 0, "n_gen": 64, "n_depth": 0, "avg_ts": 110.0, "stddev_ts": 1.0},
+                   {"n_prompt": 512, "n_gen": 0, "n_depth": 512, "avg_ts": 800.0, "stddev_ts": 8.0},
+                   {"n_prompt": 0, "n_gen": 64, "n_depth": 512, "avg_ts": 100.0, "stddev_ts": 2.0}]
+            stdout.write_text(json.dumps(res))
+            return 0
+        a = dict(zip(cmd[3::2], cmd[4::2]))  # dynalm benchmark MODEL --backend B ...
+        c, n = int(a["--concurrency"]), int(a["--requests"])
+        with open(a["--out"], "a") as f:
+            f.write(json.dumps({"concurrency": c, "errors": 0, "requests": n, "completed": n, "output_tok_s": 300.0}) + "\n")
+        with open(a["--request-log"], "a") as f:
+            for i in range(n):  # decode: 63 tokens in 630 / 600 ms alternately -> 105, 100, 105, 100, 105 tok/s
+                f.write(json.dumps({"concurrency": c, "ok": True, "completion_tokens": 64, "prompt_tokens": 512,
+                                    "ttft_ms": 512.0, "e2e_ms": 512.0 + (630.0 if i % 2 else 600.0)}) + "\n")
+        return 0
+
+    real_run, mm.run = mm.run, fake_run
+    got = mm.Matrix.llama(m, 99, "m.gguf", "01")
+    check(got == ("900.0", "100.0", "9.00", "2.00", "110.0"), f"llama-bench: decode at depth 512, not 0: {got}")
+    pp, tg, four, pp_sd, tg_sd = mm.Matrix.dyn_bench(m, "auto", "m.gguf", "01")
+    check(pp == "1000.0" and tg == "103.0" and four == "300.0", f"dynalm: mean of the 5 requests: {pp} {tg} {four}")
+    check(tg_sd == "2.74" and pp_sd == "0.00", f"dynalm: spread of the 5 requests: {tg_sd} {pp_sd}")
+    one = next(c for c in calls if c[0] == "dynalm" and "1" == dict(zip(c[3::2], c[4::2]))["--concurrency"])
+    oa = dict(zip(one[3::2], one[4::2]))
+    check(oa["--prompt"] == "512" and oa["--output"] == "64" and oa["--requests"] == "5" and oa["--warmup-requests"] == "1",
+          f"dynalm one-user point: {one}")
+    mm.run = real_run
 
 print(f"all model matrix pre-check tests passed ({checks} checks)")

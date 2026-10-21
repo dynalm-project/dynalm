@@ -40,6 +40,12 @@ struct AttentionParams {
   float scale = 1.0f;
   float softcap = 0.0f;         // 0 = off
   int32_t sliding_window = 0;   // 0 = full causal attention
+  // Same math, other rounding: multiply Q by `scale` in its own op before the
+  // QK product (llama.cpp's Gemma graphs), not inside attention. Only
+  // ggml-cpu honors it, for bit-parity with llama.cpp: its flash attention
+  // rounds Q to fp16 and accumulates QK in fp16 on ARM, so the order changes
+  // the low bits. Neither order is more accurate.
+  bool prescale_q = false;
 };
 
 // A routed mixture-of-experts feed-forward block in one op (devices that

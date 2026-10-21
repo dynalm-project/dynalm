@@ -164,6 +164,7 @@ void RecordingDevice::sign(const Call& c) {
     view(c.ap.out);
     s.push_back(static_cast<uint64_t>(c.ap.num_heads) | float_word(c.ap.scale) << 32);
     s.push_back(float_word(c.ap.softcap) | static_cast<uint64_t>(static_cast<uint32_t>(c.ap.sliding_window)) << 32);
+    if (c.ap.prescale_q) s.push_back(1);
   }
   if (c.m == Call::M::kMoeFfn) {
     for (const TensorView* t : {&c.moe.x, &c.moe.router, &c.moe.gate, &c.moe.up, &c.moe.down, &c.moe.sh_gate,

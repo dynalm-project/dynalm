@@ -10,6 +10,10 @@ Third-party components (not stored in this repository; fetched at build time):
 - ggml v0.27.0 (MIT License), https://github.com/ggml-org/ggml, commit a05c9922613c
   (GPU builds, -DENABLE_METAL, -DENABLE_VULKAN or -DENABLE_CUDA, and builds with ggml's CPU
   kernels, -DENABLE_GGML_CPU, on by default). Its license text is in THIRD_PARTY_LICENSES.md.
+  DynaLM builds that commit with its own patches applied (cmake/patches/, by
+  cmake/GgmlPatch.cmake); currently one: ggml-metal-mem-ranges-touching.patch, a one-line
+  change to src/ggml-metal/ggml-metal-common.cpp. The patched code remains under ggml's MIT
+  License.
 
 Data:
 - Unicode Character Database 15.0.0 (Unicode License V3), https://www.unicode.org: the tokenizer's

@@ -122,13 +122,14 @@ Status GgmlDevice::run_segment(std::span<const DeviceCall* const> calls, std::sp
       ++stats_.errors;
       return Internal("attention without KV");
     }
-    auto rows = c.ap.kv[0].geom->layout == KvLayout::kSlotMajor ? paged_span(c, opts_.kv_bucket)
+    auto rows = c.ap.kv[0].geom->layout == KvLayout::kSlotMajor ? paged_span(c, opts_.kv_bucket, type_)
                                                                  : seq_rows(c, opts_.kv_bucket);
     if (!rows.ok()) {
       ++stats_.errors;
       return rows.status();
     }
     seqs[i] = std::move(*rows);
+    for (const SeqRows& s : seqs[i]) stats_.sparse_attention += s.kv_max > 0 ? 1 : 0;
     key.push_back(0xA77Eull << 32 | i);
     for (const SeqRows& s : seqs[i]) {
       key.push_back(static_cast<uint64_t>(s.seq) << 32 | static_cast<uint32_t>(s.r0));
@@ -414,3 +415,32 @@ Result<std::unique_ptr<Device>> create_ggml_gpu_device(DeviceType, const GgmlDev
 }  // namespace dynacore
 
 #endif
+
+// Sparse K/V policy for slot-major attention (ggml_device.h). Pure, and
+// defined in every build so it can be unit-tested anywhere.
+namespace dynacore {
+
+GpuSparseMode gpu_sparse_mode() {
+  static const GpuSparseMode mode = [] {
+    const char* v = std::getenv("DYNACORE_GPU_SPARSE");
+    if (v == nullptr) return GpuSparseMode::kAuto;
+    const std::string_view s(v);
+    return s == "1" ? GpuSparseMode::kAlways : s == "0" ? GpuSparseMode::kNever : GpuSparseMode::kAuto;
+  }();
+  return mode;
+}
+
+int32_t sparse_kv_bound(int64_t span, int64_t kv_max, GpuSparseMode mode, DeviceType type) {
+  if (kv_max <= 0 || kv_max >= span) return 0;  // nothing to skip
+  switch (mode) {
+    case GpuSparseMode::kNever: return 0;
+    case GpuSparseMode::kAlways: return static_cast<int32_t>(kv_max);
+    case GpuSparseMode::kAuto:
+      return type == DeviceType::kMetal && kv_max <= kSparseMaxKv && span >= kSparseSpanRatio * kv_max
+                 ? static_cast<int32_t>(kv_max)
+                 : 0;
+  }
+  return 0;
+}
+
+}  // namespace dynacore

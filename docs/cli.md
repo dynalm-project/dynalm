@@ -209,10 +209,10 @@ dynalm run <model> -p <prompt> [options]
 | `-c, --ctx N` | Context / KV cache size in tokens (default 4096) |
 | `--batch N` | Max tokens per forward pass (default 256) |
 | `--kv f16\|f32` | KV cache precision (default f16) |
-| `--int8-decode N` | DynaLM's CPU kernels (`native-cpu`, `--mode exact`): int8 activations for matmuls of ≤ N rows (default 4, 64 on ARM64; 0 = off, making output independent of batching) |
+| `--int8-decode N` | DynaLM's CPU kernels (`--mode exact` on the CPU): int8 activations for matmuls of ≤ N rows (default 4, 64 on ARM64; 0 = off, making output independent of batching) |
 | `--gpu` / `--cpu` | Use the GPU (the default when it can run the model) / use the CPU. Same as `--backend gpu` / `--backend cpu` |
 | `--backend auto\|gpu\|cpu\|metal\|vulkan\|cuda` | Compute backend. `auto` (default): a GPU built into this binary (CUDA, then Metal, then Vulkan) when it starts and runs the model, else the CPU (the reason is logged). Each GPU needs its build option (`-DENABLE_METAL/VULKAN/CUDA=ON`); see [gpu.md](gpu.md). `DYNACORE_GPU_INDEX=N` picks the N-th GPU of that kind |
-| `--backend cpu` / `native-cpu` / `ggml-cpu` | The CPU. `cpu` (and `auto` without a GPU) uses ggml's CPU kernels: 8-bit activations as in llama.cpp, about 4× the speed of the native kernels, llama.cpp-level accuracy (Qwen2.5-1.5B: mean KL 0.023 against the fp32 reference). Models they cannot run (mixture-of-experts, Gemma 3) use the native kernels. `native-cpu`: DynaLM's own kernels, DD-053 accuracy (int8 activations per 32 values for up to 4 rows, 64 on ARM64, with SIMD on AVX2 and on ARM with dot-product instructions; fp32 otherwise). `ggml-cpu`: the fast kernels only, an error if they cannot run the model |
+| `--backend cpu` / `ggml-cpu` | The CPU. `cpu` (and `auto` without a GPU) uses ggml's CPU kernels: 8-bit activations as in llama.cpp, about 4× the speed of DynaLM's own CPU kernels, llama.cpp-level accuracy (Qwen2.5-1.5B: mean KL 0.023 against the fp32 reference). Models they cannot run use DynaLM's own kernels. `ggml-cpu`: the fast kernels only, an error if they cannot run the model. For DD-053 accuracy on the CPU use `--mode exact` (DynaLM's own kernels: int8 activations per 32 values for up to 4 rows, 64 on ARM64, with SIMD on AVX2 and on ARM with dot-product instructions; fp32 otherwise). `--backend native-cpu` is not part of this release: it is an error that names `--mode exact` |
 | `--mode M` | `auto` (default), `performance`, `exact` (DD-053 accuracy on every device, never ggml's 8-bit CPU kernels) or `safe` (fp32 CPU reference kernels only). See [Execution modes and AutoTune](#execution-modes-and-autotune) |
 | `--no-stream` | Print the answer at the end instead of word by word |
 
@@ -319,7 +319,7 @@ Request fields: `messages` / `prompt`, `max_tokens`, `temperature`, `top_p`, `to
 
 | Command | What it shows |
 |---|---|
-| `dynalm doctor [--json]` | System report for bug reports; loads no model and runs no benchmark. Versions (DynaLM, DynaCore), OS, CPU and cores (P/E), caches, ISA support (detected at run time), RAM, the backends built in (native CPU, ggml CPU, Metal / Vulkan / CUDA with the devices each finds), the device `--backend auto` tries first, default thread counts, model store, config file, the AutoTune cache state, a short kernel self-test, actionable warnings, and status. Exit code 1 when not ready. (`dynalm info` is an alias.) |
+| `dynalm doctor [--json]` | System report for bug reports; loads no model and runs no benchmark. Versions (DynaLM, DynaCore), OS, CPU and cores (P/E), caches, ISA support (detected at run time), RAM, the backends built in (DynaLM's CPU kernels for `--mode exact`, ggml CPU, Metal / Vulkan / CUDA with the devices each finds), the device `--backend auto` tries first, default thread counts, model store, config file, the AutoTune cache state, a short kernel self-test, actionable warnings, and status. Exit code 1 when not ready. (`dynalm info` is an alias.) |
 | `dynalm version` | DynaLM and DynaCore versions, build type, compiler, compiled and selected kernels |
 | `dynalm config [show]` | Every configuration key, its effective value and its source (default, file, environment) |
 | `dynalm config path` / `init` | The config file in use / write a commented starter `~/.dynalm/config.yaml` |
@@ -356,7 +356,8 @@ largest effect on a hybrid CPU (M4 Pro, Qwen2.5-1.5B decode with ggml's kernels:
    overrides the path). If the machine was not quiet, it does not store the
    result; `--force` stores it marked `UNRELIABLE`.
 
-Options: `--backend cpu|native-cpu|ggml-cpu` (default `cpu`), `--budget S` (stop
+Options: `--backend cpu|ggml-cpu` (default `cpu`), `--mode exact` (tune exact mode's CPU
+kernels instead), `--budget S` (stop
 trying more counts after about S seconds, default 120), `--tokens N`, `--force`.
 
 The stored setting is used only when `--threads` is not given. Each entry is keyed

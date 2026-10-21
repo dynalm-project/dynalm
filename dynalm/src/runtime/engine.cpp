@@ -185,17 +185,17 @@ Result<ExecutionMode> parse_execution_mode(std::string_view s) {
 }
 
 Status apply_backend_choice(std::string_view choice, EngineOptions& o) {
+  if (choice == "native-cpu") return InvalidArgument(std::string(kNativeCpuRetired));  // `o` unchanged
   o.backend_auto = choice == "auto" || choice == "gpu";
   o.backend_require_gpu = choice == "gpu";
   o.cpu_ggml = choice == "auto" || choice == "cpu";
-  if (o.backend_auto || choice == "native-cpu") {
+  if (o.backend_auto) {
     o.backend = DeviceKind::kCpu;
     return Status::Ok();
   }
   auto k = parse_device_kind(choice);
   if (!k.ok()) {
-    return InvalidArgument("unknown backend '" + std::string(choice) +
-                           "' (auto, gpu, cpu, native-cpu, ggml-cpu, metal, vulkan, cuda)");
+    return InvalidArgument("unknown backend '" + std::string(choice) + "' (auto, gpu, cpu, ggml-cpu, metal, vulkan, cuda)");
   }
   o.backend = *k;
   return Status::Ok();
@@ -264,9 +264,14 @@ Result<std::unique_ptr<Engine>> Engine::create_on(EngineOptions opts) {
   }
   // Device defaults (explicit settings always win). Solo-prefill steps carry
   // no decode rows, so a larger GPU chunk cannot stall running streams; mixed
-  // steps keep the DD-079 decode protection.
+  // steps keep the DD-079 decode protection. ggml-cpu also runs whole graphs
+  // (segment device) and keeps the solo chunk, but not the GPU's mixed-step
+  // profile: on the CPU every prompt row adds its full cost to the step, so
+  // its 64-row mixed steps took 11x a decode step (ITL p99 193 ms at 4 users,
+  // test/results/perf-diag-20261020).
+  const bool gpu_device = segment_device && e->backend_->device().type != dynacore::DeviceType::kCpu;
   if (opts.scheduler.solo_prefill_chunk < 0) opts.scheduler.solo_prefill_chunk = segment_device ? kGpuSoloPrefillChunk : 0;
-  if (segment_device && opts.device_scheduler_defaults && opts.scheduler.policy == SchedulerPolicy::kBalanced) {
+  if (gpu_device && opts.device_scheduler_defaults && opts.scheduler.policy == SchedulerPolicy::kBalanced) {
     opts.scheduler.prefill_token_budget = kGpuMixedPrefillBudget;
     opts.scheduler.max_prefill_chunk = kGpuMaxPrefillChunk;
     opts.scheduler.decode_latency_target = kGpuDecodeLatencyTarget;

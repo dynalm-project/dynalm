@@ -63,6 +63,8 @@ target_compile_definitions(dynacore PUBLIC
 # private to src/gpu; DynaLM never sees them.
 if(DYNALM_WITH_GGML)
   target_link_libraries(dynacore PRIVATE ggml ggml-base)
+  # ggml-backend-impl.h (the backend's graph_optimize, src/gpu/ggml_graph.cpp).
+  target_include_directories(dynacore SYSTEM PRIVATE $<TARGET_PROPERTY:ggml-base,SOURCE_DIR>)
   target_compile_definitions(dynacore PRIVATE DYNACORE_HAS_GGML=1 DYNACORE_GGML_REVISION="${DYNALM_GGML_COMMIT}")
   foreach(_gpu METAL VULKAN CUDA)
     string(TOLOWER ${_gpu} _lib)  # ggml-metal, ggml-vulkan, ggml-cuda
@@ -117,6 +119,13 @@ if(ENABLE_BENCHMARKS)
   # GPU device through pinned ggml (docs/gpu-backend.md); skips without a GPU backend.
   add_executable(test_ggml_device tests/test_ggml_device.cpp)
   target_link_libraries(test_ggml_device PRIVATE dynacore)
+  # ggml-metal's concurrency check with cmake/patches (skips without Metal).
+  add_executable(test_ggml_metal_ranges tests/test_ggml_metal_ranges.cpp)
+  target_link_libraries(test_ggml_metal_ranges PRIVATE dynacore)
+  if(ENABLE_METAL)
+    target_link_libraries(test_ggml_metal_ranges PRIVATE ggml-metal ggml-cpu ggml-base)
+    target_include_directories(test_ggml_metal_ranges SYSTEM PRIVATE $<TARGET_PROPERTY:ggml-metal,SOURCE_DIR>)
+  endif()
   # CPU matmul kernel registry (DynaLM Next): selection, execution, diagnostics.
   add_executable(test_matmul_registry tests/test_matmul_registry.cpp)
   target_link_libraries(test_matmul_registry PRIVATE dynacore)

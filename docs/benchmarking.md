@@ -143,7 +143,7 @@ ids, and llama-server's `POST /tokenize` (`"add_special": false`) gives llama.cp
 
 ## Exact-mode CPU kernel coverage (profiling plan)
 
-Exact mode (`--backend native-cpu`) is fast only for weight types with DynaLM int8 row kernels.
+Exact mode (`--mode exact` on the CPU) is fast only for weight types with DynaLM int8 row kernels.
 
 | Weight type | int8 row kernel (DD-053) | fp32 fallback |
 |---|---|---|
@@ -161,7 +161,7 @@ To confirm on one small model before writing kernels (minutes, not a benchmark c
 ```bash
 # which kernel each matmul shape takes, and the time per kernel
 DYNACORE_MATMUL_EXPLAIN=1 DYNACORE_MATMUL_TIMING=1 \
-  dynalm benchmark MODEL.gguf --backend native-cpu --concurrency 1 --prompt 128 --output 32 --requests 2 --no-diag
+  dynalm benchmark MODEL.gguf --backend cpu --mode exact --concurrency 1 --prompt 128 --output 32 --requests 2 --no-diag
 # per (weight type, shape) timings of every matmul path, on the model's real weights
 build/macos-release/dynalm/benchmarks/bench_decode_matmul MODEL.gguf 8 1,4
 ```
@@ -247,17 +247,31 @@ repos also ship a duplicate `consolidated.safetensors`, which is skipped.
    check the size against `--max-gb` (default 16).
 2. **Download.**
 3. **Generate** 32 greedy tokens with `--backend auto` (GPU), `cpu` (fast kernels) and
-   `native-cpu` (exact). Each path's text is compared with `native-cpu`'s (reported, not gated).
+   `cpu --mode exact` (exact). Each path's text is compared with exact mode's (reported, not gated;
+   the TSV keeps the column names `native*`).
 4. **`--accuracy`:** the DD-053 GPU accuracy check.
-5. **`--bench`:**
+5. **`--bench`** (`--bench-paths gpu,cpu,exact` picks which):
    - DynaLM in-process on the GPU, the fast CPU path (`cpu`, ggml's kernels) and exact mode
-     (`native-cpu`, DynaLM's DD-053 kernels): one user (prompt and decode tok/s) and 4 users;
-   - with `LLAMA_BENCH`, `llama-bench` pp512 / tg128 on the same GGUF (GPU and CPU), with
-     DynaLM ÷ llama.cpp ratios;
+     (`--mode exact`, DynaLM's DD-053 kernels): one user (prompt and decode tok/s) and 4 users;
+   - with `LLAMA_BENCH`, `llama-bench` on the same GGUF (GPU and CPU), with DynaLM ÷ llama.cpp
+     ratios;
    - AC power and load are recorded with each.
 
-   These are short single runs: a screen for failures and outliers. Published numbers come from
-   `baseline.sh`.
+   Both engines are measured alike (`bench_method` `d512-r5` in `results.tsv`):
+
+   | | DynaLM | llama.cpp |
+   |---|---|---|
+   | Decode | 64 tokens after a 512-token prompt (depth 512–575); per request (tokens − 1) / (E2E − TTFT) | `-d 512 -n 64` (also `-d 0`, reported as the depth effect) |
+   | Prompt | 512 / TTFT per request (includes the first token) | `-p 512` at depth 0 |
+   | Repetitions | `--warmup-requests 1`, then 5 requests; mean and standard deviation | its warm-up run, then `-r 5`; `avg_ts` and `stddev_ts` |
+   | Settings | flash attention (always); fast CPU: the performance cores | `-fa on`; CPU: `-ngl 0 -nopo 1` (op offload off, or its prompt runs on the GPU), `-t` = the same threads |
+
+   The raw data stays in `logs/`: `<n>-bench-<path>.requests.jsonl` (one line per DynaLM
+   request) and `<n>-llama-{gpu,cpu}.json`. Remaining differences: llama.cpp's CPU prompt can use
+   Accelerate (BLAS) where DynaLM's ggml CPU path does not, and DynaLM's numbers include its
+   scheduler and sampling, llama-bench's only the forward pass. Results from before `d512-r5`
+   (empty `bench_method`) compared DynaLM at depth 512 with llama.cpp's tg128 at depth 0, with
+   `-r 2`. Published server comparisons come from `baseline.sh`.
 
 Downloads are deleted after each model unless `--keep`. Gated repos (meta-llama, google, mpt)
 need `HF_TOKEN` with the license accepted on Hugging Face.

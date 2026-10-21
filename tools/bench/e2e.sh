@@ -9,10 +9,10 @@
 #                with checksums and versions in OUT/manifest.txt: a rebuild during
 #                the run cannot change what is measured.
 #   2. matrix    tools/bench/model_matrix.py on models-e2e-tier1.txt (--tier2: also
-#                models-providers.txt): download, generate on auto / cpu / native-cpu,
+#                models-providers.txt): download, generate on auto / cpu / exact (--mode exact),
 #                cross-path agreement, DD-053 GPU accuracy, and speed (DynaLM in-process
 #                vs llama-bench on the same GGUF: GPU, fast CPU and exact-mode CPU,
-#                --backend native-cpu). Speed runs wait for AC
+#                --backend cpu --mode exact). Speed runs wait for AC
 #                power, Energy Mode Automatic and a quiet machine (--gate).
 #   3. engines   tools/bench/baseline.sh --quick: DynaLM vs llama.cpp vs Ollama servers,
 #                1 to 16 users, GPU (1.5B, 8B) and CPU (1.5B, 4B), rotated rounds, gated.

@@ -38,6 +38,8 @@ void usage() {
                "  --arrival-rate R      open loop: Poisson arrivals at R requests/s, at most --concurrency\n"
                "                        in flight; latencies count from the scheduled arrival (default: closed loop)\n"
                "  --seed N              arrival schedule seed for --arrival-rate (default 1)\n"
+               "  --prompt-base N       first prompt index (default 0): give each benchmark process against\n"
+               "                        the same server its own range, so no prompt repeats (prompt caches)\n"
                "  --arrival-trace FILE  open loop with explicit arrivals: \"offset_ms,prompt_tokens\" per line\n"
                "                        (replaces --prompt/--prompt-mix/--requests and --arrival-rate)\n"
                "  --request-log FILE    append one JSON line per request (scheduled, dispatch, TTFT, E2E, ...)\n"
@@ -64,7 +66,7 @@ void usage() {
                "  --policy P            balanced | latency | throughput (in-process, DD-061)\n"
                "  --execution MODE      reference (default) | compiled (in-process; DD-072)\n"
                "  --gpu / --cpu         in-process device (default auto: GPU first, else CPU)\n"
-               "  --backend B           auto | gpu | cpu | native-cpu | metal | vulkan | cuda (in-process)\n"
+               "  --backend B           auto | gpu | cpu | ggml-cpu | metal | vulkan | cuda (in-process)\n"
                "  --mode M              auto | performance | exact | safe (in-process; see dynalm autotune)\n"
                "  --out FILE            append JSON lines (one per point)\n"
                "  --no-diag             skip the bandwidth probe and per-point diagnostics\n");
@@ -104,7 +106,7 @@ int cmd_benchmark(std::span<const std::string_view> args) {
   int prefill_aging_ms = -1;
   std::string step_trace_file;
   double arrival_rate = 0;
-  int seed = 1, warmup_requests = 0;
+  int seed = 1, warmup_requests = 0, prompt_base = 0;
   SchedulerPolicy policy = SchedulerPolicy::kBalanced;
   ExecutionMode execution = ExecutionMode::kReference;
   EngineOptions device;  // --backend / --cpu / --gpu (default auto)
@@ -127,6 +129,7 @@ int cmd_benchmark(std::span<const std::string_view> args) {
       ok = !v.empty() && end == v.c_str() + v.size() && arrival_rate > 0;
     }
     else if (a == "--seed") ok = parse_int(value(), seed) && seed >= 0;
+    else if (a == "--prompt-base") ok = parse_int(value(), prompt_base) && prompt_base >= 0 && prompt_base <= 1000000000;
     else if (a == "--warmup-requests") ok = parse_int(value(), warmup_requests) && warmup_requests >= 0;
     else if (a == "--arrival-trace") ok = !(trace_file = std::string(value())).empty();
     else if (a == "--request-log") ok = !(request_log_file = std::string(value())).empty();
@@ -156,7 +159,10 @@ int cmd_benchmark(std::span<const std::string_view> args) {
       ok = x.ok();
       if (ok) execution = *x;
     } else if (a == "--backend") {
-      ok = apply_backend_choice(value(), device).ok();
+      if (Status st = apply_backend_choice(value(), device); !st.ok()) {
+        std::fprintf(stderr, "benchmark: %s\n", st.message().c_str());
+        ok = false;
+      }
     } else if (a == "--cpu" || a == "--gpu") {
       (void)apply_backend_choice(a.substr(2), device);
     } else if (a == "--mode") {
@@ -317,6 +323,7 @@ int cmd_benchmark(std::span<const std::string_view> args) {
         bench::PointConfig cfg{c, p, o, requests, prompt_mix};
         cfg.arrival_rate = arrival_rate;
         cfg.seed = static_cast<uint32_t>(seed);
+        cfg.prompt_base = prompt_base;
         cfg.warmup_requests = warmup_requests;
         cfg.arrival_trace = arrival_trace;
         cfg.arrival_trace_path = trace_file;

@@ -25,19 +25,32 @@ Per model:
   2. fetch     `dynalm pull`, or the repo files for hf:.
   3. generate  a fixed chat prompt, greedy, N tokens, with --backend auto (the
                GPU when it runs the model), cpu (ggml's fast CPU kernels) and
-               native-cpu (DynaCore's kernels, DD-053, the reference): device,
-               success, tok/s, and whether each text equals native-cpu's
+               exact (`--backend cpu --mode exact`: DynaCore's kernels, DD-053,
+               the reference): device, success, tok/s, and whether each text
+               equals exact's (the TSV keeps the column names native*)
                (reported, not gated: GPU and 8-bit kernels may choose
                differently at a near-tie).
   4. accuracy  (--accuracy, GGUF on a GPU) bench_gpu_accuracy: DD-053 PASS/FAIL.
-  5. bench     (--bench) `dynalm benchmark` in-process on the GPU (if auto used
-               one), cpu (ggml's kernels) and native-cpu (exact mode, DynaLM's
-               DD-053 kernels; compared with llama.cpp's CPU too): one user (512-token prompt, 64 tokens: prompt tok/s
-               = 512 / TTFT p50, decode tok/s = 1000 / ITL p50) and 4 users
-               (output tok/s); llama-bench pp512 / tg128 on the GPU (-ngl 99)
-               and CPU (-ngl 0) for GGUF. AC power and load are recorded with
-               each. Short single runs: a screen for outliers and failures, not
-               a published benchmark (that is tools/bench/baseline.sh).
+  5. bench     (--bench; --bench-paths, default gpu,cpu,exact) `dynalm benchmark`
+               in-process on the GPU (if auto used one), cpu (ggml's kernels) and
+               exact (`--mode exact`, DynaLM's DD-053 kernels; compared with
+               llama.cpp's CPU too), and llama-bench on the same GGUF, measured
+               alike (BENCH_METHOD, recorded in the bench_method column):
+                 - one user: a 512-token prompt, then 64 tokens, so decode runs
+                   at depth 512-575 in both engines (llama-bench -d 512 -n 64);
+                 - BENCH_REPS (5) measured repetitions after a warm-up in both
+                   (DynaLM: --warmup-requests 1 and 5 requests; llama-bench: its
+                   warm-up run and -r 5); each rate is the mean of the
+                   repetitions, its standard deviation in the *_sd columns;
+                 - DynaLM per request: prompt tok/s = prompt / TTFT, decode
+                   tok/s = (tokens - 1) / (E2E - TTFT) (--request-log);
+                 - flash attention on in both (-fa on: DynaLM's graphs always
+                   use it); llama-bench's CPU run is -ngl 0 -nopo 1 (op offload
+                   off: otherwise its prompt runs on the GPU); THREADS threads
+                   (default: the performance cores, as DynaLM's ggml CPU path);
+                 - 4 users: output tok/s (DynaLM only).
+               AC power and load are recorded with each. A screen for outliers
+               and failures; tools/bench/baseline.sh is the server comparison.
 Downloads are deleted after their row unless --keep, so the sweep needs only
 the largest model's disk space. Time limits per step: RUN_TIMEOUT (default
 300 s) for generation; 1200 s for accuracy and bench; 7200 s for downloads.
@@ -51,6 +64,7 @@ import os
 import platform
 import re
 import shutil
+import statistics
 import subprocess
 import sys
 import time
@@ -59,6 +73,9 @@ import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+# The runtime paths measured, as dynalm options. "exact" is DynaCore's CPU kernels (DD-053), the
+# reference the other texts are compared with; there is no public native-cpu backend in this release.
+PATHS = {"auto": ["--backend", "auto"], "cpu": ["--backend", "cpu"], "exact": ["--backend", "cpu", "--mode", "exact"]}
 PROMPT = "Write one sentence about the ocean."
 COLS = ["n", "model", "format", "supported", "size_gb", "file", "arch", "quant",
         "auto_device", "auto", "auto_tok_s", "cpu_device", "cpu", "cpu_tok_s", "native", "native_tok_s",
@@ -68,7 +85,17 @@ COLS = ["n", "model", "format", "supported", "size_gb", "file", "arch", "quant",
         "llama_gpu_pp512", "llama_gpu_tg128", "llama_cpu_pp512", "llama_cpu_tg128", "bench_conditions", "seconds",
         # Added after the first release of this file: appended, so column numbers above stay
         # (tools/bench/e2e_watch.sh reads them by position).
-        "exact_prompt_tok_s", "exact_decode_tok_s", "exact_4user_tok_s"]
+        "exact_prompt_tok_s", "exact_decode_tok_s", "exact_4user_tok_s",
+        # Since bench_method "d512-r5": llama_*_pp512 is pp512 at depth 0 and llama_*_tg128 is
+        # tg64 at depth 512 (names kept, so older results still render; an empty bench_method
+        # means the old pp512 / tg128 at depth 0, -r 2). *_sd: standard deviation of the
+        # repetitions, tok/s. llama_*_tg_d0: tg64 at depth 0 (the depth effect).
+        "bench_method", "gpu_prompt_sd", "gpu_decode_sd", "cpu_prompt_sd", "cpu_decode_sd",
+        "exact_prompt_sd", "exact_decode_sd", "llama_gpu_pp_sd", "llama_gpu_tg_sd", "llama_cpu_pp_sd",
+        "llama_cpu_tg_sd", "llama_gpu_tg_d0", "llama_cpu_tg_d0"]
+# The speed method (docstring, step 5). Change BENCH_METHOD with it.
+BENCH_METHOD = "d512-r5"
+BENCH_PROMPT, BENCH_GEN, BENCH_REPS = 512, 64, 5
 # Hugging Face model_type values the safetensors loader accepts (keep in sync
 # with dynalm/src/loader/hf/hf_model.cpp; the load step is the final word).
 HF_MODEL_TYPES = {"llama", "mistral", "mixtral", "qwen2", "qwen3", "qwen2_moe", "qwen3_moe", "gemma", "gemma2",
@@ -229,8 +256,8 @@ class Matrix:
     def generate(self, backend: str, model: str, tag: str) -> tuple[str, str, str, Path]:
         """('ok'|'fail'|'timeout', device, tok/s, text file)."""
         txt, log = self.logs / f"{tag}-{backend}.txt", self.logs / f"{tag}-{backend}.log"
-        say(tag, f"generate: --backend {backend}, {self.a.tokens} tokens ...")
-        code = run([self.dynalm, "run", model, "--backend", backend, "-p", PROMPT, "-n", str(self.a.tokens), "--temp", "0",
+        say(tag, f"generate: {' '.join(PATHS[backend])}, {self.a.tokens} tokens ...")
+        code = run([self.dynalm, "run", model, *PATHS[backend], "-p", PROMPT, "-n", str(self.a.tokens), "--temp", "0",
                     "--ctx", "2048"], log, self.timeout, stdout=txt)
         text = log.read_text(errors="replace")
         devs = re.findall(r"Device: (?:compiled/)?([A-Za-z-]+/[^,\n]*)", text)
@@ -266,40 +293,60 @@ class Matrix:
             return "no"
         return "yes"
 
-    def dyn_bench(self, backend: str, model: str, tag: str) -> tuple[str, str, str]:
+    def dyn_bench(self, backend: str, model: str, tag: str) -> tuple[str, str, str, str, str]:
+        """(prompt tok/s, decode tok/s, 4-user output tok/s, prompt sd, decode sd): BENCH_METHOD."""
         j = self.logs / f"{tag}-bench-{backend}.jsonl"
+        rl = self.logs / f"{tag}-bench-{backend}.requests.jsonl"  # raw, one line per request
         log = self.logs / f"{tag}-bench-{backend}.log"
         j.unlink(missing_ok=True)
-        for c, req in ((1, 3), (4, 8)):
-            say(tag, f"speed: DynaLM --backend {backend}, {c} user(s), 512-token prompt, 64 tokens, {req} requests ...")
-            run([self.dynalm, "benchmark", model, "--backend", backend, "--concurrency", str(c), "--prompt", "512",
-                 "--output", "64", "--requests", str(req), "--warmup-requests", "1", "--out", str(j)],
-                Path(str(log) + f".c{c}"), 1200)
+        rl.unlink(missing_ok=True)
+        for c, req in ((1, BENCH_REPS), (4, 8)):
+            say(tag, f"speed: DynaLM {' '.join(PATHS[backend])}, {c} user(s), {BENCH_PROMPT}-token prompt, "
+                     f"{BENCH_GEN} tokens, {req} requests after 1 warm-up ...")
+            run([self.dynalm, "benchmark", model, *PATHS[backend], "--concurrency", str(c), "--prompt", str(BENCH_PROMPT),
+                 "--output", str(BENCH_GEN), "--requests", str(req), "--warmup-requests", "1", "--out", str(j),
+                 "--request-log", str(rl)], Path(str(log) + f".c{c}"), 1200)
         rows = [json.loads(l) for l in j.read_text().splitlines() if l.strip()] if j.exists() else []
         ok = lambda d: d.get("errors", 1) == 0 and d.get("completed") == d.get("requests")
         one = next((d for d in rows if d["concurrency"] == 1 and ok(d)), None)
         four = next((d for d in rows if d["concurrency"] == 4 and ok(d)), None)
+        reqs = [json.loads(l) for l in rl.read_text().splitlines() if l.strip()] if rl.exists() else []
+        solo = [r for r in reqs if r.get("concurrency") == 1 and r.get("ok") and r.get("completion_tokens") == BENCH_GEN]
+        pps = [r["prompt_tokens"] * 1000 / r["ttft_ms"] for r in solo if r["ttft_ms"] > 0]
+        tgs = [(r["completion_tokens"] - 1) * 1000 / (r["e2e_ms"] - r["ttft_ms"]) for r in solo if r["e2e_ms"] > r["ttft_ms"]]
         f = lambda v: f"{v:.1f}" if v else "-"
-        pp = one["prompt_tokens"] / one["ttft_ms"]["p50"] * 1000 if one and one["ttft_ms"]["p50"] else 0
-        tg = 1000 / one["itl_ms"]["p50"] if one and one["itl_ms"]["p50"] else 0
-        say(tag, f"speed {backend}: prompt {f(pp)} tok/s, decode {f(tg)} tok/s, 4 users {f(four['output_tok_s']) if four else '-'} tok/s")
-        return f(pp), f(tg), (f(four["output_tok_s"]) if four else "-")
+        sd = lambda v: f"{statistics.stdev(v):.2f}" if len(v) > 1 else "-"
+        if one is None or len(tgs) != BENCH_REPS:  # a failed or short request: no rate rather than a partial one
+            pps, tgs = [], []
+        pp, tg = (statistics.mean(pps) if pps else 0), (statistics.mean(tgs) if tgs else 0)
+        say(tag, f"speed {backend}: prompt {f(pp)} tok/s, decode {f(tg)} ± {sd(tgs)} tok/s, "
+                 f"4 users {f(four['output_tok_s']) if four else '-'} tok/s")
+        return f(pp), f(tg), (f(four["output_tok_s"]) if four else "-"), sd(pps), sd(tgs)
 
-    def llama(self, ngl: int, model: str, tag: str) -> tuple[str, str]:
+    def llama_cmd(self, ngl: int, model: str) -> list[str]:
+        """llama-bench as BENCH_METHOD: pp512 and tg64, each at depth 0 and 512, -r 5 after its warm-up."""
+        return [self.llama_bench, "-m", model, "-p", str(BENCH_PROMPT), "-n", str(BENCH_GEN), "-d", f"0,{BENCH_PROMPT}",
+                "-r", str(BENCH_REPS), "-fa", "on", "-ngl", str(ngl), *(["-nopo", "1"] if ngl == 0 else []),
+                "-t", self.threads, "-o", "json"]
+
+    def llama(self, ngl: int, model: str, tag: str) -> tuple[str, str, str, str, str]:
+        """(pp512 at depth 0, tg64 at depth 512, pp sd, tg sd, tg64 at depth 0), tok/s."""
         if not self.llama_bench or not os.access(self.llama_bench, os.X_OK):
-            return "-", "-"
+            return "-", "-", "-", "-", "-"
         j = self.logs / f"{tag}-llama-{'gpu' if ngl else 'cpu'}.json"
-        say(tag, f"speed: llama-bench on the {'GPU' if ngl else 'CPU'} (pp512, tg128) ...")
-        run([self.llama_bench, "-m", model, "-p", "512", "-n", "128", "-ngl", str(ngl), "-t", self.threads, "-r", "2",
-             "-o", "json"], Path(str(j) + ".log"), 1200, stdout=j)
+        say(tag, f"speed: llama-bench on the {'GPU' if ngl else 'CPU'} (pp{BENCH_PROMPT}, tg{BENCH_GEN} at depth 0 "
+                 f"and {BENCH_PROMPT}, -r {BENCH_REPS}) ...")
+        run(self.llama_cmd(ngl, model), Path(str(j) + ".log"), 1800, stdout=j)
         try:
             e = json.loads(j.read_text())
-            pp = next(x["avg_ts"] for x in e if x["n_prompt"] == 512 and x["n_gen"] == 0)
-            tg = next(x["avg_ts"] for x in e if x["n_gen"] == 128 and x["n_prompt"] == 0)
-            say(tag, f"llama.cpp {'GPU' if ngl else 'CPU'}: prompt {pp:.1f} tok/s, decode {tg:.1f} tok/s")
-            return f"{pp:.1f}", f"{tg:.1f}"
+            pick = lambda p, g, d: next(x for x in e if (x["n_prompt"], x["n_gen"], x.get("n_depth", 0)) == (p, g, d))
+            pp, tg, tg0 = pick(BENCH_PROMPT, 0, 0), pick(0, BENCH_GEN, BENCH_PROMPT), pick(0, BENCH_GEN, 0)
+            say(tag, f"llama.cpp {'GPU' if ngl else 'CPU'}: prompt {pp['avg_ts']:.1f} tok/s, decode at depth "
+                     f"{BENCH_PROMPT} {tg['avg_ts']:.1f} ± {tg['stddev_ts']:.2f} tok/s (depth 0: {tg0['avg_ts']:.1f})")
+            return (f"{pp['avg_ts']:.1f}", f"{tg['avg_ts']:.1f}", f"{pp['stddev_ts']:.2f}", f"{tg['stddev_ts']:.2f}",
+                    f"{tg0['avg_ts']:.1f}")
         except Exception:
-            return "fail", "fail"
+            return "fail", "fail", "-", "-", "-"
 
     def one(self, n: int, entry: str) -> dict:
         a, tag = self.a, f"{n:02d}"
@@ -369,7 +416,7 @@ class Matrix:
             R["size_gb"] = f"{size / 2**30:.1f}"
         R["auto"], R["auto_device"], R["auto_tok_s"], ta = self.generate("auto", m, tag)
         R["cpu"], R["cpu_device"], R["cpu_tok_s"], tc = self.generate("cpu", m, tag)
-        R["native"], _, R["native_tok_s"], tn = self.generate("native-cpu", m, tag)
+        R["native"], _, R["native_tok_s"], tn = self.generate("exact", m, tag)
         same = lambda x, y: "yes" if x.exists() and y.exists() and x.stat().st_size and x.read_bytes() == y.read_bytes() else "no"
         if R["native"] == "ok":
             R["auto_matches_native"] = same(ta, tn) if R["auto"] == "ok" else "-"
@@ -387,15 +434,26 @@ class Matrix:
         if a.bench:
             say(tag, "speed: waiting for AC power, normal power mode and a quiet machine ..." if a.gate else "speed: start")
             R["bench_conditions"] = (wait_quiet(a.max_load, self.out / "conditions.log", tag) if a.gate else conditions())
-            if on_gpu:
-                R["gpu_prompt_tok_s"], R["gpu_decode_tok_s"], R["gpu_4user_tok_s"] = self.dyn_bench("auto", m, tag)
-            if R["cpu"] == "ok":
-                R["cpu_prompt_tok_s"], R["cpu_decode_tok_s"], R["cpu_4user_tok_s"] = self.dyn_bench("cpu", m, tag)
-            if R["native"] == "ok":  # exact mode (--mode exact): DynaLM's own DD-053 CPU kernels
-                R["exact_prompt_tok_s"], R["exact_decode_tok_s"], R["exact_4user_tok_s"] = self.dyn_bench("native-cpu", m, tag)
+            R["bench_method"] = BENCH_METHOD
+            paths = a.bench_paths
+            if on_gpu and "gpu" in paths:
+                (R["gpu_prompt_tok_s"], R["gpu_decode_tok_s"], R["gpu_4user_tok_s"], R["gpu_prompt_sd"],
+                 R["gpu_decode_sd"]) = self.dyn_bench("auto", m, tag)
+            if R["cpu"] == "ok" and "cpu" in paths:
+                (R["cpu_prompt_tok_s"], R["cpu_decode_tok_s"], R["cpu_4user_tok_s"], R["cpu_prompt_sd"],
+                 R["cpu_decode_sd"]) = self.dyn_bench("cpu", m, tag)
+            if R["native"] == "ok" and "exact" in paths:  # exact mode (--mode exact): DynaLM's own DD-053 CPU kernels
+                (R["exact_prompt_tok_s"], R["exact_decode_tok_s"], R["exact_4user_tok_s"], R["exact_prompt_sd"],
+                 R["exact_decode_sd"]) = self.dyn_bench("exact", m, tag)
             if R["format"] == "gguf":
-                R["llama_gpu_pp512"], R["llama_gpu_tg128"] = self.llama(99, m, tag)
-                R["llama_cpu_pp512"], R["llama_cpu_tg128"] = self.llama(0, m, tag)
+                if a.gate:  # llama-bench under the same conditions as DynaLM's runs (state in conditions.log)
+                    wait_quiet(a.max_load, self.out / "conditions.log", tag + " llama-bench")
+                if "gpu" in paths:
+                    (R["llama_gpu_pp512"], R["llama_gpu_tg128"], R["llama_gpu_pp_sd"], R["llama_gpu_tg_sd"],
+                     R["llama_gpu_tg_d0"]) = self.llama(99, m, tag)
+                if "cpu" in paths or "exact" in paths:
+                    (R["llama_cpu_pp512"], R["llama_cpu_tg128"], R["llama_cpu_pp_sd"], R["llama_cpu_tg_sd"],
+                     R["llama_cpu_tg_d0"]) = self.llama(0, m, tag)
         if downloaded and not a.keep:
             shutil.rmtree(path) if path.is_dir() else path.unlink(missing_ok=True)
             say(tag, f"deleted {path.name} (downloaded by this run)")
@@ -419,6 +477,8 @@ def main() -> int:
     ap.add_argument("--accuracy", action="store_true")
     ap.add_argument("--bench", action="store_true")
     ap.add_argument("--keep", action="store_true")
+    ap.add_argument("--bench-paths", default="gpu,cpu,exact", type=lambda s: set(s.split(",")),
+                    help="speed runs to make with --bench: any of gpu, cpu, exact")
     ap.add_argument("--gate", action="store_true",
                     help="before speed runs, wait for AC power, Energy Mode Automatic and load < --max-load")
     ap.add_argument("--max-load", type=float, default=3.0)

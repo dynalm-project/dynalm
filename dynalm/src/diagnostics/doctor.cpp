@@ -254,7 +254,7 @@ std::string format_doctor_text(const DoctorReport& r) {
   std::string have, missing;
   for (const auto& [name, on] : r.isa) (on ? have : missing) += (on ? have : missing).empty() ? name : " " + name;
   line("CPU features:", (have.empty() ? "none" : have) + (missing.empty() ? "" : "  (not available: " + missing + ")"));
-  std::string backends = "native-cpu (" + r.kernel + ")";
+  std::string backends = "DynaCore CPU (" + r.kernel + ", --mode exact)";
   if (r.ggml_cpu) backends += r.ggml_cpu_usable ? ", cpu (ggml kernels)" : ", cpu (ggml kernels: not usable, this CPU lacks AVX2/FMA/F16C)";
   for (const DoctorReport::GpuBackend& g : r.gpu_backends) backends += ", " + g.provider;
   line("Backends:", backends + (r.isa_note.empty() ? "" : "  [" + r.isa_note + "]"));

@@ -47,6 +47,9 @@ class GemmaArchitecture final : public ModelArchitecture {
     const bool is_27b = (g2 && c.num_layers == 46) || (g3 && c.num_layers == 62);
     c.attn_scale = is_27b ? 1.0f / std::sqrt(static_cast<float>(c.hidden_size / c.num_heads))
                           : 1.0f / std::sqrt(static_cast<float>(c.head_dim));
+    // llama.cpp scales Q in its own op for Gemma 1-3 (Qcur = ggml_scale, then
+    // attention with scale 1); ggml-cpu rounds differently otherwise.
+    c.attn_prescale_q = true;
 
     if (g2) {
       if (c.sliding_window > 0) c.sliding_layers = swa_pattern(c.num_layers, 2);

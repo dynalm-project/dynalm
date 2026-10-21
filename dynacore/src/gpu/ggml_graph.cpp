@@ -5,6 +5,8 @@
 
 #if DYNACORE_HAS_GGML
 
+#include "ggml-backend-impl.h"  // graph_optimize: internal to ggml, re-check when the pin moves
+
 namespace dynacore::ggml_detail {
 
 // Builds one ggml graph for a recorded segment. Values flow through ggml
@@ -300,6 +302,9 @@ class GraphBuilder {
     if (nb1 < ggml_row_size(type, cols) || nb2 != nb1 * static_cast<size_t>(rows)) {
       return Unsupported("expert weights with padded rows or experts");
     }
+    // ggml-cpu: the repacked copy (GgmlDevice::prepack_weight), used whole:
+    // mul_mat_id reads its kernel from the tensor's own buffer.
+    if (ggml_tensor* r = d_.repacked(static_cast<const std::byte*>(w.data()), cols, rows, ne)) return r;
     ENGINE_ASSIGN_OR_RETURN(ggml_tensor * flat, bind(static_cast<const std::byte*>(w.data()), type, cols, ne * rows, nb1));
     return ggml_view_3d(ctx_, flat, cols, rows, ne, nb1, nb2, 0);
   }
@@ -447,6 +452,13 @@ class GraphBuilder {
     const int32_t hd = g.head_dim, hdv = g.head_dim_v, nkv = g.num_kv_heads, nh = p.num_heads;
     ENGINE_ASSIGN_OR_RETURN(ggml_tensor * q, read(p.q));
     if (!ggml_is_contiguous(q)) q = ggml_cont(ctx_, q);
+    // ggml-cpu: Q scaled in its own op when asked (AttentionParams::prescale_q),
+    // as llama.cpp's Gemma graphs do. Metal keeps the scale inside attention.
+    float scale = p.scale;
+    if (p.prescale_q && d_.type_ == DeviceType::kCpu) {
+      q = ggml_scale(ctx_, q, p.scale);
+      scale = 1.0f;
+    }
     ENGINE_ASSIGN_OR_RETURN(ggml_tensor * kpool, pool(p.kv[0], false));
     ENGINE_ASSIGN_OR_RETURN(ggml_tensor * vpool, pool(p.kv[0], true));
     const std::vector<SeqRows>& seqs = seqs_[static_cast<size_t>(ci_)];
@@ -462,7 +474,7 @@ class GraphBuilder {
       ggml_tensor* ks = ggml_view_3d(ctx_, kpool, hd, L, nkv, kpool->nb[1], ggml_row_size(kpool->type, hd), 0);
       ggml_tensor* vs = ggml_view_3d(ctx_, vpool, hdv, L, nkv, vpool->nb[1], ggml_row_size(vpool->type, hdv), 0);
       ggml_tensor* mask = input(InKind::kPagedMask, GGML_TYPE_F16, L, m, -1, 0, static_cast<int32_t>(m), static_cast<int32_t>(L));
-      ggml_tensor* o = ggml_flash_attn_ext(ctx_, qs, ks, vs, mask, p.scale, 0.0f, p.softcap);  // [hdv, nh, m]
+      ggml_tensor* o = ggml_flash_attn_ext(ctx_, qs, ks, vs, mask, scale, 0.0f, p.softcap);  // [hdv, nh, m]
       (void)ggml_prec_set_acc(o, GGML_PREC_F32);  // fp32 softmax/accumulation, as on Metal
       // Sparse K/V: each row visits only its finite mask entries (its own
       // sequence) instead of the whole span; the backend decides when that
@@ -479,7 +491,7 @@ class GraphBuilder {
       ggml_tensor* ks = ggml_reshape_3d(ctx_, ggml_get_rows(ctx_, kpool, gidx), hd, L, nkv);
       ggml_tensor* vs = ggml_reshape_3d(ctx_, ggml_get_rows(ctx_, vpool, gidx), hdv, L, nkv);
       ggml_tensor* mask = input(InKind::kMask, GGML_TYPE_F16, L, n, s.seq, s.r0, s.n, s.span);
-      ggml_tensor* o = ggml_flash_attn_ext(ctx_, qs, ks, vs, mask, p.scale, 0.0f, p.softcap);  // [hdv, nh, n]
+      ggml_tensor* o = ggml_flash_attn_ext(ctx_, qs, ks, vs, mask, scale, 0.0f, p.softcap);  // [hdv, nh, n]
       (void)ggml_prec_set_acc(o, GGML_PREC_F32);
       o = ggml_reshape_2d(ctx_, o, static_cast<int64_t>(hdv) * nh, n);
       out = out == nullptr ? o : ggml_concat(ctx_, out, o, 1);
@@ -529,12 +541,58 @@ class GraphBuilder {
   std::vector<ggml_tensor*> pools_written_;
 };
 
+// Reorders a graph for concurrency, as ggml_backend_sched does in llama.cpp:
+// the backend's graph_optimize, before allocation. The tensors it must keep
+// allocated past their last reader (the MoE fused reduction's inputs) are
+// added after the node they must outlive, as empty views with them as sources,
+// so ggml_gallocr does not reuse them early. Metal only: measured on an M4 Pro
+// (2026-10-19), DynaLM's unordered graph put a barrier before 98% of its
+// dispatches (487 against llama.cpp's 338 per token on Qwen2.5-0.5B).
+// DYNACORE_GPU_GRAPH_OPTIMIZE=0 turns it off.
+static Status optimize_graph(ggml_backend_t backend, ggml_context* ctx, ggml_cgraph* graph) {
+  static const bool off = [] {
+    const char* v = std::getenv("DYNACORE_GPU_GRAPH_OPTIMIZE");
+    return v != nullptr && std::string_view(v) == "0";
+  }();
+  if (off || backend->iface.graph_optimize == nullptr) return Status::Ok();
+  std::unordered_map<ggml_tensor*, std::vector<ggml_tensor*>> keep;  // node -> tensors kept until it
+  ggml_backend_graph_optimize_params params{};
+  params.add_alloc_dep = [](void* user, ggml_tensor* t, ggml_tensor* until) {
+    auto& v = (*static_cast<std::unordered_map<ggml_tensor*, std::vector<ggml_tensor*>>*>(user))[until];
+    if (std::find(v.begin(), v.end(), t) == v.end()) v.push_back(t);
+  };
+  params.user_data = &keep;
+  backend->iface.graph_optimize(backend, graph, &params);
+  if (keep.empty()) return Status::Ok();
+  const int n = ggml_graph_n_nodes(graph);
+  std::vector<ggml_tensor*> nodes;
+  nodes.reserve(static_cast<size_t>(n) * 2);
+  for (int i = 0; i < n; ++i) {
+    ggml_tensor* node = ggml_graph_node(graph, i);
+    nodes.push_back(node);
+    auto it = keep.find(node);
+    if (it == keep.end()) continue;
+    for (size_t k = 0; k < it->second.size(); k += GGML_MAX_SRC) {
+      ggml_tensor* dep = ggml_view_tensor(ctx, it->second[k]);
+      for (size_t s = 0; s < GGML_MAX_SRC && k + s < it->second.size(); ++s) dep->src[s] = it->second[k + s];
+      nodes.push_back(dep);
+    }
+  }
+  if (nodes.size() > static_cast<size_t>(ggml_graph_size(graph))) {
+    return Internal("graph too small for the reordering's allocation dependencies");
+  }
+  for (size_t i = static_cast<size_t>(n); i < nodes.size(); ++i) ggml_graph_add_node(graph, nodes[i]);  // grow n_nodes
+  std::copy(nodes.begin(), nodes.end(), ggml_graph_nodes(graph));
+  return Status::Ok();
+}
+
 Result<std::unique_ptr<Prepared>> GgmlDevice::build(std::span<const DeviceCall* const> calls, std::vector<uint64_t> key,
                                                     const std::vector<std::vector<SeqRows>>& seqs) {
   auto g = std::make_unique<Prepared>();
   g->key = std::move(key);
   GraphBuilder b(*this, *g, calls, seqs);
   ENGINE_RETURN_IF_ERROR(b.build());
+  if (type_ == DeviceType::kMetal) ENGINE_RETURN_IF_ERROR(optimize_graph(backend_, g->ctx.get(), g->graph));
   g->in_buf = ggml_backend_alloc_ctx_tensors(g->ctx_in.get(), backend_);
   if (g->in_buf == nullptr && !g->inputs.empty()) return OutOfMemory(name_ + ": cannot allocate graph inputs");
   g->galloc = ggml_gallocr_new(buft_);

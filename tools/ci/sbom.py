@@ -6,7 +6,8 @@
 Components: DynaLM itself, cpp-httplib (version and SHA-256 from
 dynalm/src/CMakeLists.txt), the Unicode Character Database data the tokenizer
 tables are generated from (dynalm/src/tokenizer/unicode_tables.inc) and, with
---ggml (alias --metal), ggml (commit from cmake/Ggml.cmake): every build with
+--ggml (alias --metal), ggml (commit from cmake/Ggml.cmake, DynaLM's patches from
+cmake/patches as its pedigree): every build with
 a GPU backend (Metal, Vulkan, CUDA) or ggml's CPU kernels (ENABLE_GGML_CPU,
 on by default; tools/ci/package.sh reads it from the build's CMakeCache.txt).
 Scope: the third-party code and data compiled into the binaries.
@@ -40,12 +41,18 @@ if "--ggml" in sys.argv or "--metal" in sys.argv:
     g = (root / "cmake/Ggml.cmake").read_text()
     commit = re.search(r"set\(DYNALM_GGML_COMMIT\s+([0-9a-f]{40})", g).group(1)
     gver = re.search(r"set\(DYNALM_GGML_VERSION\s+([0-9.]+)", g).group(1)
-    components.append({
+    ggml = {
         "type": "library", "name": "ggml", "version": gver,
         "purl": f"pkg:github/ggml-org/ggml@{commit}",
         "licenses": [{"license": {"id": "MIT"}}],
         "externalReferences": [{"type": "vcs", "url": "https://github.com/ggml-org/ggml", "comment": f"commit {commit}"}],
-    })
+    }
+    # DynaLM's patches to the pinned tree (cmake/patches, applied by cmake/GgmlPatch.cmake).
+    patches = sorted((root / "cmake/patches").glob("*.patch"))
+    if patches:
+        ggml["pedigree"] = {"patches": [{"type": "unofficial",
+                                         "diff": {"url": f"cmake/patches/{p.name}"}} for p in patches]}
+    components.append(ggml)
 bom = {
     "bomFormat": "CycloneDX", "specVersion": "1.5", "serialNumber": f"urn:uuid:{uuid.uuid4()}", "version": 1,
     "metadata": {"component": {"type": "application", "name": "dynalm", "version": version,
