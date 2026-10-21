@@ -1,10 +1,17 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(dynalm
-  VERSION 0.1.7
+  VERSION 0.2.0
   DESCRIPTION "DynaLM: CPU-first LLM inference engine"
   HOMEPAGE_URL "https://github.com/dynalm-project/dynalm"
   LANGUAGES CXX)
+# The release version: PROJECT_VERSION (numeric, x.y.z) plus a pre-release
+# suffix, "" for a stable release (e.g. "-beta.1" -> 0.2.0-beta.1). The one
+# source of the version string: `dynalm --version` (version.h.in), the SBOM
+# (tools/ci/sbom.py) and the release workflow's check against the tag
+# (tools/ci/package.sh) all read it from here.
+set(DYNALM_VERSION_SUFFIX "-beta.1")
+set(DYNALM_VERSION "${PROJECT_VERSION}${DYNALM_VERSION_SUFFIX}")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -167,6 +174,6 @@ else()
 endif()
 include(CPack)
 
-message(STATUS "DynaLM ${PROJECT_VERSION}: build=${CMAKE_BUILD_TYPE} arch=${DYNALM_ARCH} "
+message(STATUS "DynaLM ${DYNALM_VERSION}: build=${CMAKE_BUILD_TYPE} arch=${DYNALM_ARCH} "
                "avx2=${ENABLE_AVX2} avx512=${ENABLE_AVX512} amx=${ENABLE_AMX} neon=${ENABLE_NEON} "
                "metal=${ENABLE_METAL} vulkan=${ENABLE_VULKAN} cuda=${ENABLE_CUDA} server=${ENABLE_SERVER} bench=${ENABLE_BENCHMARKS}")

@@ -1,4 +1,12 @@
-# Release: push a tag like v0.1.0.
+# Release: push a tag like v0.2.0 (stable) or v0.2.0-beta.1 (pre-release).
+# The tag must equal "v" + the source version (CMakeLists.txt: project VERSION
+# + DYNALM_VERSION_SUFFIX; tools/ci/version.py), and every installed binary
+# must report it (tools/ci/package.sh). The release is created as a DRAFT,
+# only when every package job passed, with the notes in
+# .github/release-notes/<tag>.md (required); a maintainer reviews the draft and
+# its assets, then publishes it. A tag with a pre-release suffix is marked
+# pre-release and never becomes the Latest release; its assets leave out the
+# experimental Vulkan builds; the Docker image job runs for stable tags only.
 #
 # Every platform job builds and runs the full test suite, then builds the
 # self-contained release archive (static C/C++ runtime), installs it into an
@@ -75,6 +83,10 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: ${{ matrix.msvc_arch || 'x64' }}
+      - name: Tag matches the source version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: python3 tools/ci/version.py --check-tag "$GITHUB_REF_NAME"
       - name: Build
         shell: bash
         run: |
@@ -82,7 +94,10 @@ jobs:
           cmake --build --preset ${{ matrix.preset }}
       - name: Package and validate a fresh install
         shell: bash
-        run: bash tools/ci/package.sh ${{ matrix.cmake_args }}
+        run: |
+          # Tag builds: the installed binary must report the tag's version.
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then export DYNALM_EXPECT_VERSION="${GITHUB_REF_NAME#v}"; fi
+          bash tools/ci/package.sh ${{ matrix.cmake_args }}
       - uses: actions/upload-artifact@v4
         with:
           name: dynalm-${{ matrix.name }}
@@ -91,14 +106,26 @@ jobs:
 
   publish:
     needs: package
-    # Publish whatever passed: a failed platform is left out, never shipped untested.
-    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/') }}
+    # Only when every package job passed (a failed platform stops the release; nothing
+    # incomplete is published), and only for tags. The release is a draft until reviewed.
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     permissions:
       contents: write
       id-token: write      # signed build provenance (Sigstore), below
       attestations: write
     steps:
+      - uses: actions/checkout@v4
+      - name: Release kind and notes
+        id: kind
+        run: |
+          python3 tools/ci/version.py --check-tag "$GITHUB_REF_NAME"
+          pre="$(python3 tools/ci/version.py --prerelease)"
+          echo "prerelease=$pre" >> "$GITHUB_OUTPUT"
+          echo "latest=$([ "$pre" = true ] && echo false || echo true)" >> "$GITHUB_OUTPUT"
+          notes=".github/release-notes/$GITHUB_REF_NAME.md"
+          [ -s "$notes" ] || { echo "missing release notes: $notes"; exit 1; }
+          echo "notes=$notes" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -106,6 +133,15 @@ jobs:
           # docker job's build record artifact does not extract and failed the download.
           pattern: dynalm-[lmw]*
           merge-multiple: true
+      - name: Expected assets
+        run: |
+          cd dist
+          # Pre-releases leave out the experimental Vulkan builds (built and tested above).
+          if [ "${{ steps.kind.outputs.prerelease }}" = true ]; then rm -f dynalm-*-vulkan.*; fi
+          want="dynalm-macos-arm64.tar.gz dynalm-macos-x86_64.tar.gz dynalm-linux-x86_64.tar.gz dynalm-linux-arm64.tar.gz dynalm-windows-x86_64.zip dynalm-windows-arm64.zip"
+          [ "${{ steps.kind.outputs.prerelease }}" = true ] || want="$want dynalm-linux-x86_64-vulkan.tar.gz dynalm-windows-x86_64-vulkan.zip"
+          for f in $want; do [ -s "$f" ] || { echo "missing release asset: $f"; exit 1; }; done
+          ls -l
       - name: SHA256SUMS
         run: |
           cd dist
@@ -123,14 +159,19 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           name: DynaLM ${{ github.ref_name }}
+          draft: true
+          prerelease: ${{ steps.kind.outputs.prerelease }}
+          make_latest: ${{ steps.kind.outputs.latest }}
+          body_path: ${{ steps.kind.outputs.notes }}
           files: |
             dist/dynalm-*
             dist/SHA256SUMS
           generate_release_notes: true
 
   # CPU server image (amd64 + arm64): ghcr.io/<owner>/dynalm:cpu and :<tag>-cpu.
+  # Stable tags only: a pre-release (v*-beta.N, -rc.N, ...) must never replace the :cpu image.
   docker:
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-')
     runs-on: ubuntu-24.04
     permissions:
       contents: read
