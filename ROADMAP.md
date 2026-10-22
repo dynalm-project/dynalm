@@ -32,8 +32,10 @@ timeline
 **Status labels** (this beta; the same as the README's):
 - ✅ **Beta-verified:** checked for this release on real hardware with real models (Apple M4 Pro, macOS 26):
   the full test suite plus token-by-token parity with llama.cpp.
-- 🧪 **Preview:** implemented and covered by DynaLM's model-free tests (in CI on its platforms), not yet
-  checked with real models for this release.
+- ☑️ **CI-tested:** built, tested with the model-free test suite and checked with a fresh install in CI
+  on that platform; not yet checked with real models for this release.
+- 🧪 **Preview:** implemented and covered by DynaLM's model-free tests, not yet checked with real models
+  for this release.
 - ⚗️ **Experimental:** built in CI, tested only on a software GPU or not on a GPU at all.
 - 🔄 **In progress** · 📋 **Planned**
 
@@ -42,7 +44,7 @@ timeline
 | Capability | Status | Target Hardware / Platform | Details & Notes |
 | :--- | :---: | :--- | :--- |
 | **CPU on Apple Silicon (ggml kernels, NEON)** | ✅ Beta-verified | macOS on Apple Silicon | The default CPU path (`--cpu`); parity with llama.cpp 99.96–100% on eight models. |
-| **CPU on x86-64 (AVX2) and Linux ARM64** | 🧪 Preview | x86-64 (Intel, AMD), ARM64 Linux | Built and tested in CI (model-free tests); not checked with real models for this release. |
+| **CPU on x86-64 (AVX2) and Linux ARM64** | ☑️ CI-tested | x86-64 (Intel, AMD), ARM64 Linux | Built and tested in CI (model-free tests); not checked with real models for this release. |
 | **Exact mode (`--mode exact`, DynaCore's CPU kernels)** | 🧪 Preview | x86-64, ARM64 | DD-053 accuracy reference path; slower than the default CPU path. |
 | **Compiled Kernel Mode** | 🧪 Preview | x86_64 & ARM64 | DynaCore IR compiling and kernel fusion (`--execution compiled`; the GPU always uses it). |
 | **Intel AMX / AVX-512** | 🔄 In Progress | Intel CPUs with AVX-512 / AMX | Matrix Tile acceleration for high-throughput prefill. |
@@ -50,7 +52,7 @@ timeline
 | **Vulkan GPU Backend** | ⚗️ Experimental | AMD, Intel, NVIDIA and Qualcomm GPUs | Built in CI and tested on a software GPU (lavapipe) only. |
 | **NVIDIA CUDA Backend** | ⚗️ Experimental | NVIDIA GPUs | Built in CI; not tested on a GPU. |
 | **Automatic CPU/GPU Selection** | ✅ Beta-verified (macOS) · 🧪 elsewhere | All platforms | `--backend auto` picks the GPU when it can run the model, else the CPU. |
-| **Windows (x64, ARM64)** | 🧪 Preview | Windows 10/11 | Built and tested in CI (model-free tests). |
+| **Windows (x64, ARM64)** | ☑️ CI-tested | Windows 10/11 | Built and tested in CI (model-free tests). |
 | **GPU: Qwen3 / Gemma 3 / MoE** | ✅ Beta-verified on Metal | Metal | Qwen3 0.6B/4B/8B, Gemma 3 1B and Granite 3.1 MoE pass parity on Metal; YaRN RoPE scaling still runs on the CPU; MoE on CUDA is not supported yet. |
 | **GPU multi-user throughput** | 🔄 In Progress | All GPU backends | At 16 users DynaLM delivers 0.71–0.78× llama.cpp's total tokens/s on Metal (README [Speed](README.md#speed)). |
 
@@ -112,7 +114,7 @@ README's [Speed](README.md#speed) section.
 ## ⚠️ Known Limitations (this beta)
 
 - **Platforms:** beta-verified on macOS on Apple Silicon only (one machine, M4 Pro). Linux and Windows
-  are Preview; Vulkan and CUDA are Experimental.
+  are CI-tested; Vulkan and CUDA are Experimental.
 - **Multi-user GPU throughput:** at 16 users DynaLM delivers 0.71–0.78× llama.cpp's total tokens/s
   (confirmed on 3 of 4 models; its worst-case token gaps are much shorter, confirmed on the 8B models).
 - **Four-user tail latency:** with 4 users the 99th-percentile gap between tokens is longer than

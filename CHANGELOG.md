@@ -5,7 +5,7 @@
 ## [0.2.0-beta.1] - 2026-10-22
 
 Beta pre-release: verified on macOS on Apple Silicon (one Apple M4 Pro, CPU and Metal); the Linux
-and Windows builds are preview, Vulkan and CUDA experimental. Release notes:
+and Windows builds are CI-tested (model-free tests in CI), Vulkan and CUDA experimental. Release notes:
 `.github/release-notes/v0.2.0-beta.1.md`.
 
 ### Changed (release process)
