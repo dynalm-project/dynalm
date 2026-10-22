@@ -85,13 +85,10 @@ dynalm run qwen2.5:1.5b
 | **Windows 10 / 11 (x64 and ARM64)** | PowerShell: `irm https://raw.githubusercontent.com/dynalm-project/dynalm/main/scripts/install.ps1 \| iex` |
 | **Docker** | `docker run --rm -p 127.0.0.1:8000:8000 -v "$PWD/models:/models" ghcr.io/dynalm-project/dynalm:cpu serve /models/model.gguf --allow-unauthenticated` |
 
-**GPU included:** the installer gives you the GPU version when your computer can use it:
-- **Macs with Apple Silicon:** always (Metal).
-- **Linux x86-64 and Windows x64 with graphics drivers:** the Vulkan version (AMD, Intel or
-  NVIDIA).
-
-Otherwise you get the CPU version. To choose yourself, add `--cpu` or `--gpu`:
-`curl -fsSL .../install.sh | sh -s -- --cpu`.
+**Which build you get:**
+- **Macs with Apple Silicon:** the GPU version (Metal), always.
+- **Everything else:** the CPU version. On Linux x86-64 and Windows x64, add `--gpu` (`-Gpu` on
+  Windows) for the experimental Vulkan version: `curl -fsSL .../install.sh | sh -s -- --gpu`.
 
 **Notes:**
 - No administrator rights are needed.
@@ -104,8 +101,8 @@ More detail, including manual downloads and building from source: [docs/installa
 
 ## Where it runs
 
-**Status labels** (this beta):
-- ✅ **Beta-verified:** checked on real hardware with real models for this release: the full test
+**Status labels** (this release):
+- ✅ **Verified:** checked on real hardware with real models for this release: the full test
   suite plus token-by-token parity with llama.cpp on eight models (Apple M4 Pro, macOS 26).
 - ☑️ **CI-tested:** built, tested with the model-free test suite and checked with a fresh install in CI
   on that platform; not yet checked with real models for this release.
@@ -117,7 +114,7 @@ More detail, including manual downloads and building from source: [docs/installa
 
 | System | Chips | Status |
 |---|---|---|
-| macOS | Apple Silicon | ✅ Beta-verified |
+| macOS | Apple Silicon | ✅ Verified |
 | macOS | Intel Macs | ☑️ CI-tested (under Rosetta) |
 | Linux x86-64 | Intel and AMD (AVX2, AVX-512, AMX) | ☑️ CI-tested |
 | Linux ARM64 | 64-bit ARM boards and servers | ☑️ CI-tested |
@@ -131,7 +128,7 @@ Older CPUs without AVX2 still work, using portable code. `dynalm doctor` shows w
 
 | GPU | Works on | Status |
 |---|---|---|
-| **Apple Metal** | Apple Silicon Macs | ✅ Beta-verified (M4 Pro) |
+| **Apple Metal** | Apple Silicon Macs | ✅ Verified (M4 Pro) |
 | **Vulkan** | AMD, Intel, NVIDIA and Qualcomm GPUs (Windows and Linux) | ⚗️ Experimental (CI: software GPU, lavapipe) |
 | **NVIDIA CUDA** | NVIDIA GPUs (Windows and Linux) | ⚗️ Experimental (CI: build only) |
 
@@ -317,11 +314,11 @@ DynaLM uses it automatically for faster answers.
 Yes. It runs on Apple Silicon Macs, on the CPU and on the GPU through Metal.
 
 ### Does it work with AMD or Intel graphics cards?
-Yes, through Vulkan. On Linux and Windows, the installer picks the Vulkan version when your
-graphics driver supports it.
+Experimentally, through Vulkan: install with `--gpu` (`-Gpu` on Windows). Vulkan is tested in
+CI on a software GPU only.
 
 ### Does it work with NVIDIA GPUs?
-Yes, through Vulkan (installed automatically) or CUDA (build from source,
+Experimentally, through Vulkan (install with `--gpu`) or CUDA (build from source,
 [docs/gpu.md](docs/gpu.md)).
 
 ### Does it run on Windows on ARM laptops?
@@ -358,7 +355,7 @@ plain fp32 CPU kernels, for debugging. `dynalm autotune` shows what each mode ru
 
 ## Known limitations
 
-- **Platform status for this beta:** beta-verified on macOS on Apple Silicon (CPU and Metal), on one
+- **Platform status for this release:** verified on macOS on Apple Silicon (CPU and Metal), on one
   machine (M4 Pro). Linux and Windows are CI-tested (model-free tests in CI); Vulkan and CUDA are
   Experimental. Models that a GPU cannot run yet fall back to the CPU under `--backend auto`;
   `--gpu` reports why instead of falling back.

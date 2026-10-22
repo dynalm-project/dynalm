@@ -19,9 +19,9 @@
   powershell -ExecutionPolicy Bypass -File scripts\install.ps1 -Cpu     # CPU-only build
   powershell -ExecutionPolicy Bypass -File scripts\install.ps1 -Gpu     # the GPU (Vulkan) build
 
-  GPU first: on x64 PCs with a Vulkan driver (vulkan-1.dll, installed with AMD,
-  Intel and NVIDIA graphics drivers) the Vulkan build dynalm-windows-x86_64-vulkan
-  is installed; otherwise the CPU build. -FromSource enables Vulkan (VULKAN_SDK)
+  The CPU build is the default; -Gpu installs the experimental Vulkan build
+  dynalm-windows-x86_64-vulkan (needs a Vulkan driver, vulkan-1.dll, installed
+  with AMD, Intel and NVIDIA graphics drivers). -FromSource enables Vulkan (VULKAN_SDK)
   and CUDA (nvcc) when their toolkits are found.
 #>
 param(
@@ -52,11 +52,10 @@ switch ($machineArch) {
 $bin = Join-Path $Prefix 'bin'
 if ($Cpu -and $Gpu) { throw 'Use either -Cpu or -Gpu, not both.' }
 
-# GPU first: the Vulkan build when this PC has a Vulkan driver.
+# Vulkan is experimental: the Vulkan build only with -Gpu.
 $variant = ''
-$hasVulkan = Test-Path (Join-Path $env:WINDIR 'System32\vulkan-1.dll')
 if ($platform -eq 'windows-x86_64') {
-  if ($Gpu -or (-not $Cpu -and $hasVulkan)) { $variant = '-vulkan' }
+  if ($Gpu) { $variant = '-vulkan' }
 } elseif ($Gpu -and -not $FromSource) {
   throw "No GPU build is published for $platform; use -Cpu (or -FromSource with a GPU toolkit)."
 }

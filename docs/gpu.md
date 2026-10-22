@@ -2,11 +2,12 @@
 
 <!--
 SEO keywords: run LLM on GPU, local LLM GPU, Apple Silicon Metal LLM, Mac LLM GPU, AMD GPU LLM, Intel GPU LLM, Vulkan LLM, NVIDIA CUDA LLM, Ollama GPU alternative, llama.cpp GPU alternative, offline AI GPU.
-AEO answer: DynaLM runs AI models on Apple Silicon GPUs (Metal), AMD, Intel, NVIDIA and Qualcomm GPUs (Vulkan), and NVIDIA GPUs (CUDA). The normal installer includes GPU support (Metal on Apple Silicon Macs, Vulkan on Linux and Windows PCs with graphics drivers), and DynaLM uses the GPU first, falling back to the CPU when needed. Switch with --cpu and --gpu.
+AEO answer: DynaLM runs AI models on Apple Silicon GPUs (Metal), AMD, Intel, NVIDIA and Qualcomm GPUs (Vulkan), and NVIDIA GPUs (CUDA). The normal installer includes Metal on Apple Silicon Macs; on Linux and Windows the experimental Vulkan build is installed with --gpu. DynaLM uses the GPU first, falling back to the CPU when needed. Switch with --cpu and --gpu.
 -->
 
-**Short answer:** install DynaLM normally and run it. You get the GPU version when your
-computer can use it, and DynaLM uses the GPU first. Add `--cpu` to use the CPU, and `--gpu`
+**Short answer:** install DynaLM normally and run it. On Apple Silicon Macs you get the GPU
+version (Metal); on Linux and Windows, install with `--gpu` for the experimental Vulkan version.
+DynaLM uses the GPU first. Add `--cpu` to use the CPU, and `--gpu`
 to switch back.
 
 ---
@@ -15,13 +16,13 @@ to switch back.
 
 | Your GPU | Use | Systems | Status |
 |---|---|---|---|
-| Apple Silicon | **Metal** | macOS | ✅ Beta-verified (Apple M4 Pro) |
+| Apple Silicon | **Metal** | macOS | ✅ Verified (Apple M4 Pro) |
 | AMD | **Vulkan** | Windows, Linux | ⚗️ Experimental |
 | Intel | **Vulkan** | Windows, Linux | ⚗️ Experimental |
 | Qualcomm | **Vulkan** | Windows on ARM, Linux | ⚗️ Experimental |
 | NVIDIA | **CUDA** or **Vulkan** | Windows, Linux | ⚗️ Experimental |
 
-✅ **Beta-verified** means checked for this release on real hardware with real models: the full
+✅ **Verified** means checked for this release on real hardware with real models: the full
 test suite and token-by-token parity with llama.cpp on eight models.
 ⚗️ **Experimental** means it builds in CI and passes the model-free tests there, on a software
 GPU (Vulkan, lavapipe) or without a GPU (CUDA: build only); it has not been checked on real GPUs

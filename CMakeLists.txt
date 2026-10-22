@@ -10,7 +10,7 @@ project(dynalm
 # source of the version string: `dynalm --version` (version.h.in), the SBOM
 # (tools/ci/sbom.py) and the release workflow's check against the tag
 # (tools/ci/package.sh) all read it from here.
-set(DYNALM_VERSION_SUFFIX "-beta.1")
+set(DYNALM_VERSION_SUFFIX "")
 set(DYNALM_VERSION "${PROJECT_VERSION}${DYNALM_VERSION_SUFFIX}")
 
 set(CMAKE_CXX_STANDARD 20)
