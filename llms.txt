@@ -10,11 +10,11 @@
 - **What it does:** runs open-weight AI models locally (`dynalm run`, `dynalm serve`) with familiar
   commands (`pull`, `run`, `serve`).
 - **CPU support:**
-  - NEON on Apple Silicon (beta-verified);
+  - NEON on Apple Silicon (verified);
   - AVX2, AVX-512 and AMX on Intel and AMD, NEON on ARM64 Linux and Windows on ARM (CI-tested:
     model-free tests in CI, not yet checked with real models).
 - **GPU support:**
-  - Apple Metal (Apple Silicon; beta-verified);
+  - Apple Metal (Apple Silicon; verified);
   - Vulkan (AMD, Intel, NVIDIA and Qualcomm GPUs; experimental);
   - NVIDIA CUDA (experimental).
 - **Automatic device choice:** `--backend auto` uses the GPU when it can run the model, otherwise the

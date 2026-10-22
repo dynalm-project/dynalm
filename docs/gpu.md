@@ -15,13 +15,13 @@ to switch back.
 
 | Your GPU | Use | Systems | Status |
 |---|---|---|---|
-| Apple Silicon | **Metal** | macOS | ✅ Beta-verified (Apple M4 Pro) |
+| Apple Silicon | **Metal** | macOS | ✅ Verified (Apple M4 Pro) |
 | AMD | **Vulkan** | Windows, Linux | ⚗️ Experimental |
 | Intel | **Vulkan** | Windows, Linux | ⚗️ Experimental |
 | Qualcomm | **Vulkan** | Windows on ARM, Linux | ⚗️ Experimental |
 | NVIDIA | **CUDA** or **Vulkan** | Windows, Linux | ⚗️ Experimental |
 
-✅ **Beta-verified** means checked for this release on real hardware with real models: the full
+✅ **Verified** means checked for this release on real hardware with real models: the full
 test suite and token-by-token parity with llama.cpp on eight models.
 ⚗️ **Experimental** means it builds in CI and passes the model-free tests there, on a software
 GPU (Vulkan, lavapipe) or without a GPU (CUDA: build only); it has not been checked on real GPUs

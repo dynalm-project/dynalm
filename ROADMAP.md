@@ -8,7 +8,7 @@
 
 1. **CPU-First Excellence:** Fast, accurate token generation on consumer laptops, desktop CPUs, and edge hardware without requiring dedicated GPUs. Measured results, including where llama.cpp is ahead, are in the README's [Speed](README.md#speed) section.
 2. **Zero-Friction Ergonomics:** Single statically linked native binary (C++20), zero Python/CUDA dependencies, with familiar Ollama-compatible CLI workflows (`pull`, `run`, `serve`).
-3. **Drop-in Standards:** OpenAI-compatible REST API (`/v1/chat/completions`, `/v1/completions`, `/v1/models`) with Server-Sent Events (SSE) streaming, designed for tools such as LangChain, LlamaIndex, LiteLLM, Open WebUI and Cursor (for this beta only DynaLM's own client and test suite are verified against it).
+3. **Drop-in Standards:** OpenAI-compatible REST API (`/v1/chat/completions`, `/v1/completions`, `/v1/models`) with Server-Sent Events (SSE) streaming, designed for tools such as LangChain, LlamaIndex, LiteLLM, Open WebUI and Cursor (for this release only DynaLM's own client and test suite are verified against it).
 4. **Air-Gapped Privacy:** Zero telemetry, no phoning home, no cloud accounts, and 100% offline local inference.
 
 ---
@@ -29,8 +29,8 @@ timeline
 
 ## 📍 Feature Status & Upcoming Capabilities
 
-**Status labels** (this beta; the same as the README's):
-- ✅ **Beta-verified:** checked for this release on real hardware with real models (Apple M4 Pro, macOS 26):
+**Status labels** (this release; the same as the README's):
+- ✅ **Verified:** checked for this release on real hardware with real models (Apple M4 Pro, macOS 26):
   the full test suite plus token-by-token parity with llama.cpp.
 - ☑️ **CI-tested:** built, tested with the model-free test suite and checked with a fresh install in CI
   on that platform; not yet checked with real models for this release.
@@ -43,17 +43,17 @@ timeline
 
 | Capability | Status | Target Hardware / Platform | Details & Notes |
 | :--- | :---: | :--- | :--- |
-| **CPU on Apple Silicon (ggml kernels, NEON)** | ✅ Beta-verified | macOS on Apple Silicon | The default CPU path (`--cpu`); parity with llama.cpp 99.96–100% on eight models. |
+| **CPU on Apple Silicon (ggml kernels, NEON)** | ✅ Verified | macOS on Apple Silicon | The default CPU path (`--cpu`); parity with llama.cpp 99.96–100% on eight models. |
 | **CPU on x86-64 (AVX2) and Linux ARM64** | ☑️ CI-tested | x86-64 (Intel, AMD), ARM64 Linux | Built and tested in CI (model-free tests); not checked with real models for this release. |
 | **Exact mode (`--mode exact`, DynaCore's CPU kernels)** | 🧪 Preview | x86-64, ARM64 | DD-053 accuracy reference path; slower than the default CPU path. |
 | **Compiled Kernel Mode** | 🧪 Preview | x86_64 & ARM64 | DynaCore IR compiling and kernel fusion (`--execution compiled`; the GPU always uses it). |
 | **Intel AMX / AVX-512** | 🔄 In Progress | Intel CPUs with AVX-512 / AMX | Matrix Tile acceleration for high-throughput prefill. |
-| **Apple Metal GPU Backend** | ✅ Beta-verified | macOS on Apple Silicon (M4 Pro tested) | Whole-step GPU graphs, in-place paged attention, zero-copy weights; parity 99.80–100% on eight models ([docs/gpu.md](docs/gpu.md)). |
+| **Apple Metal GPU Backend** | ✅ Verified | macOS on Apple Silicon (M4 Pro tested) | Whole-step GPU graphs, in-place paged attention, zero-copy weights; parity 99.80–100% on eight models ([docs/gpu.md](docs/gpu.md)). |
 | **Vulkan GPU Backend** | ⚗️ Experimental | AMD, Intel, NVIDIA and Qualcomm GPUs | Built in CI and tested on a software GPU (lavapipe) only. |
 | **NVIDIA CUDA Backend** | ⚗️ Experimental | NVIDIA GPUs | Built in CI; not tested on a GPU. |
-| **Automatic CPU/GPU Selection** | ✅ Beta-verified (macOS) · 🧪 elsewhere | All platforms | `--backend auto` picks the GPU when it can run the model, else the CPU. |
+| **Automatic CPU/GPU Selection** | ✅ Verified (macOS) · 🧪 elsewhere | All platforms | `--backend auto` picks the GPU when it can run the model, else the CPU. |
 | **Windows (x64, ARM64)** | ☑️ CI-tested | Windows 10/11 | Built and tested in CI (model-free tests). |
-| **GPU: Qwen3 / Gemma 3 / MoE** | ✅ Beta-verified on Metal | Metal | Qwen3 0.6B/4B/8B, Gemma 3 1B and Granite 3.1 MoE pass parity on Metal; YaRN RoPE scaling still runs on the CPU; MoE on CUDA is not supported yet. |
+| **GPU: Qwen3 / Gemma 3 / MoE** | ✅ Verified on Metal | Metal | Qwen3 0.6B/4B/8B, Gemma 3 1B and Granite 3.1 MoE pass parity on Metal; YaRN RoPE scaling still runs on the CPU; MoE on CUDA is not supported yet. |
 | **GPU multi-user throughput** | 🔄 In Progress | All GPU backends | At 16 users DynaLM delivers 0.71–0.78× llama.cpp's total tokens/s on Metal (README [Speed](README.md#speed)). |
 
 ---
@@ -62,15 +62,15 @@ timeline
 
 | Architecture | Status | Supported Sizes & Variants |
 | :--- | :---: | :--- |
-| **Meta Llama** | ✅ Beta-verified: Llama 3.1 8B Instruct (Q8_0) · 🧪 Preview: other Llama 1–3.2 versions and sizes | Llama 1, 2, 3, 3.1, 3.2 |
-| **Qwen (Dense & MoE)** | ✅ Beta-verified: Qwen2.5 0.5B / 1.5B Instruct (Q4_K_M), Qwen3 0.6B (Q8_0), 4B / 8B (Q4_K_M) · 🧪 Preview: other sizes, MoE | Qwen 2, Qwen 2.5, Qwen 3 |
+| **Meta Llama** | ✅ Verified: Llama 3.1 8B Instruct (Q8_0) · 🧪 Preview: other Llama 1–3.2 versions and sizes | Llama 1, 2, 3, 3.1, 3.2 |
+| **Qwen (Dense & MoE)** | ✅ Verified: Qwen2.5 0.5B / 1.5B Instruct (Q4_K_M), Qwen3 0.6B (Q8_0), 4B / 8B (Q4_K_M) · 🧪 Preview: other sizes, MoE | Qwen 2, Qwen 2.5, Qwen 3 |
 | **DeepSeek R1 Distill** | 🧪 Preview | DeepSeek-R1-Distill-Qwen, DeepSeek-R1-Distill-Llama |
-| **Google Gemma** | ✅ Beta-verified: Gemma 3 1B (Q4_K_M) · 🧪 Preview: Gemma 1, 2 and other Gemma 3 sizes | Gemma 1, Gemma 2, Gemma 3 |
+| **Google Gemma** | ✅ Verified: Gemma 3 1B (Q4_K_M) · 🧪 Preview: Gemma 1, 2 and other Gemma 3 sizes | Gemma 1, Gemma 2, Gemma 3 |
 | **Microsoft Phi** | 🧪 Preview | Phi-3 Mini, Phi-3.5 Medium |
 | **Mistral AI** | 🧪 Preview | Mistral 7B, Mixtral 8x7B MoE |
-| **IBM Granite** | ✅ Beta-verified: Granite 3.1 1B-A400M (MoE, Q4_K_M) · 🧪 Preview: other Granite 3.x | Granite 3.x, Granite-MoE |
+| **IBM Granite** | ✅ Verified: Granite 3.1 1B-A400M (MoE, Q4_K_M) · 🧪 Preview: other Granite 3.x | Granite 3.x, Granite-MoE |
 
-"Beta-verified" models were checked token by token against llama.cpp on the CPU and on Metal
+"Verified" models were checked token by token against llama.cpp on the CPU and on Metal
 (parity 99.80–100%), with DD-053 GPU accuracy and greedy-text checks. Preview models load and run
 with the same code but were not checked for this release.
 | **Qwen 3.5 / 3.8** | 📋 Planned | Next-generation hybrid architectures |
@@ -83,7 +83,7 @@ with the same code but were not checked for this release.
 
 | Format / DType | Status | Description |
 | :--- | :---: | :--- |
-| **GGUF Format** | ✅ Beta-verified | Zero-copy memory mapping of llama.cpp `.gguf` files (verified: Q4_K_M and Q8_0 on the models above) |
+| **GGUF Format** | ✅ Verified | Zero-copy memory mapping of llama.cpp `.gguf` files (verified: Q4_K_M and Q8_0 on the models above) |
 | **SafeTensors** | 🧪 Preview | Native loading of Hugging Face `.safetensors` model directories |
 | **GPTQ & AWQ** | 🧪 Preview | On-the-fly repacking for 4-bit weights |
 | **Other quantizations** | 🧪 Preview | `Q2_K`–`Q6_K`, `F16`, `BF16`, `F32` (kernel tests; not checked with real models for this release) |
@@ -111,9 +111,9 @@ README's [Speed](README.md#speed) section.
 
 ---
 
-## ⚠️ Known Limitations (this beta)
+## ⚠️ Known Limitations (this release)
 
-- **Platforms:** beta-verified on macOS on Apple Silicon only (one machine, M4 Pro). Linux and Windows
+- **Platforms:** verified on macOS on Apple Silicon only (one machine, M4 Pro). Linux and Windows
   are CI-tested; Vulkan and CUDA are Experimental.
 - **Multi-user GPU throughput:** at 16 users DynaLM delivers 0.71–0.78× llama.cpp's total tokens/s
   (confirmed on 3 of 4 models; its worst-case token gaps are much shorter, confirmed on the 8B models).

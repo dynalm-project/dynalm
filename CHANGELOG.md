@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-22
+
+Stable release of the 0.2.0-beta.1 code; no code changes since the beta. Verified on macOS on
+Apple Silicon (one Apple M4 Pro, CPU and Metal); the Linux and Windows builds are CI-tested
+(model-free tests in CI), Vulkan and CUDA experimental. This release also attaches the Vulkan
+archives (experimental) and updates the Docker `:cpu` image. Release notes:
+`.github/release-notes/v0.2.0.md`.
+
 ## [0.2.0-beta.1] - 2026-10-22
 
 Beta pre-release: verified on macOS on Apple Silicon (one Apple M4 Pro, CPU and Metal); the Linux
