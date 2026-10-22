@@ -69,7 +69,7 @@ Pre-compiled, statically linked binaries are provided for every major OS:
 | `dynalm-macos-x86_64.tar.gz` | macOS on Intel | **AVX2**, fallback to generic |
 | `dynalm-windows-x86_64.zip` | Windows 10 / 11 64-bit (x64) | **AVX2**, fallback to generic |
 | `dynalm-windows-x86_64-vulkan.zip` | Windows 10 / 11 x64 with a GPU driver: **GPU version**, chosen by the installer | **AVX2** + Vulkan GPU |
-| `dynalm-windows-arm64.zip` (or `scripts\install.ps1 -FromSource`) | Windows 11 on ARM (ARM64 PCs), 🧪 Preview | **NEON** |
+| `dynalm-windows-arm64.zip` (or `scripts\install.ps1 -FromSource`) | Windows 11 on ARM (ARM64 PCs), ☑️ CI-tested | **NEON** |
 | `SHA256SUMS` | Cryptographic SHA-256 hashes for all archives | Cross-platform verification |
 
 - **Zero External Dependencies:** Statically linked C/C++ runtime. Requires no Visual C++ Redistributable on Windows and no external `libstdc++` package on Linux.

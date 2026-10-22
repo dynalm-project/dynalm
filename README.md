@@ -107,8 +107,10 @@ More detail, including manual downloads and building from source: [docs/installa
 **Status labels** (this beta):
 - ✅ **Beta-verified:** checked on real hardware with real models for this release: the full test
   suite plus token-by-token parity with llama.cpp on eight models (Apple M4 Pro, macOS 26).
-- 🧪 **Preview:** built and tested in CI with the model-free test suite; not yet checked with real
-  models for this release. Feedback is welcome.
+- ☑️ **CI-tested:** built, tested with the model-free test suite and checked with a fresh install in CI
+  on that platform; not yet checked with real models for this release.
+- 🧪 **Preview:** implemented and covered by model-free tests; not yet checked with real models for
+  this release. Feedback is welcome.
 - ⚗️ **Experimental:** built in CI, tested only on a software GPU or not on a GPU at all.
 
 ### CPU
@@ -116,11 +118,11 @@ More detail, including manual downloads and building from source: [docs/installa
 | System | Chips | Status |
 |---|---|---|
 | macOS | Apple Silicon | ✅ Beta-verified |
-| macOS | Intel Macs | 🧪 Preview (CI runs the x86-64 build under Rosetta) |
-| Linux x86-64 | Intel and AMD (AVX2, AVX-512, AMX) | 🧪 Preview |
-| Linux ARM64 | 64-bit ARM boards and servers | 🧪 Preview |
-| Windows 10 / 11 x64 | Intel and AMD | 🧪 Preview |
-| Windows 11 on ARM | ARM64 PCs | 🧪 Preview |
+| macOS | Intel Macs | ☑️ CI-tested (under Rosetta) |
+| Linux x86-64 | Intel and AMD (AVX2, AVX-512, AMX) | ☑️ CI-tested |
+| Linux ARM64 | 64-bit ARM boards and servers | ☑️ CI-tested |
+| Windows 10 / 11 x64 | Intel and AMD | ☑️ CI-tested |
+| Windows 11 on ARM | ARM64 PCs | ☑️ CI-tested |
 | Docker | linux/amd64, linux/arm64 | 🧪 Preview |
 
 Older CPUs without AVX2 still work, using portable code. `dynalm doctor` shows what your CPU uses.
@@ -357,7 +359,7 @@ plain fp32 CPU kernels, for debugging. `dynalm autotune` shows what each mode ru
 ## Known limitations
 
 - **Platform status for this beta:** beta-verified on macOS on Apple Silicon (CPU and Metal), on one
-  machine (M4 Pro). Linux and Windows are Preview (model-free tests in CI); Vulkan and CUDA are
+  machine (M4 Pro). Linux and Windows are CI-tested (model-free tests in CI); Vulkan and CUDA are
   Experimental. Models that a GPU cannot run yet fall back to the CPU under `--backend auto`;
   `--gpu` reports why instead of falling back.
 - **16 users on Metal:** total throughput is 0.71–0.78× llama.cpp's (worst-case token gaps are
