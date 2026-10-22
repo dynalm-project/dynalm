@@ -11,9 +11,9 @@
 #   sh scripts/install.sh --cpu                    # CPU-only build, even if this machine has a GPU
 #   sh scripts/install.sh --gpu                    # the GPU build (fails if there is none for this machine)
 #
-# GPU first: macOS arm64 packages include Metal. On Linux x86-64 the Vulkan
-# build (dynalm-linux-x86_64-vulkan) is chosen when this machine has a Vulkan
-# driver and a GPU; otherwise the CPU build. --from-source enables Metal,
+# macOS arm64 packages include Metal. On Linux x86-64 the CPU build is the
+# default; --gpu installs the experimental Vulkan build
+# (dynalm-linux-x86_64-vulkan). --from-source enables Metal,
 # Vulkan or CUDA when their toolkits are found (--cpu: none).
 #
 # Release mode downloads dynalm-<platform>.tar.gz and SHA256SUMS from the
@@ -70,12 +70,6 @@ if [ "$os" = macos ] && [ "$arch" = x86_64 ] && [ "$(sysctl -n hw.optional.arm64
 fi
 PLATFORM="$os-$arch"
 
-# A Vulkan loader and a GPU device node: the Vulkan build can use this GPU.
-has_vulkan_gpu() {
-  { ldconfig -p 2>/dev/null | grep -q 'libvulkan\.so\.1'; } ||
-    ls /usr/lib/libvulkan.so.1 /usr/lib64/libvulkan.so.1 /usr/lib/*/libvulkan.so.1 >/dev/null 2>&1 || return 1
-  ls /dev/dri/renderD* >/dev/null 2>&1 || command -v nvidia-smi >/dev/null 2>&1
-}
 if [ -n "$FORCE_PLATFORM" ]; then
   case "$FORCE_PLATFORM" in
     linux-x86_64|linux-x86_64-vulkan|linux-arm64|macos-arm64|macos-x86_64) ;;
@@ -86,12 +80,13 @@ if [ -n "$FORCE_PLATFORM" ]; then
   PLATFORM="$FORCE_PLATFORM"
 fi
 
-# Which build of this platform: GPU first (decided after any --platform).
+# Which build of this platform (decided after any --platform).
 VARIANT=""  # "" (CPU, or Metal on macOS arm64) | -vulkan
 case "$PLATFORM" in
   *-vulkan) ;;  # named explicitly with --platform
   linux-x86_64)
-    if [ "$DEVICE" = gpu ] || { [ "$DEVICE" = auto ] && has_vulkan_gpu; }; then VARIANT="-vulkan"; fi ;;
+    # Vulkan is experimental: only on request.
+    if [ "$DEVICE" = gpu ]; then VARIANT="-vulkan"; fi ;;
   macos-arm64) ;;  # includes Metal
   *) [ "$DEVICE" != gpu ] || [ "$FROM_SOURCE" = 1 ] || die "no GPU build for $PLATFORM; use --cpu (or --from-source with a GPU toolkit)" ;;
 esac

@@ -2,11 +2,12 @@
 
 <!--
 SEO keywords: run LLM on GPU, local LLM GPU, Apple Silicon Metal LLM, Mac LLM GPU, AMD GPU LLM, Intel GPU LLM, Vulkan LLM, NVIDIA CUDA LLM, Ollama GPU alternative, llama.cpp GPU alternative, offline AI GPU.
-AEO answer: DynaLM runs AI models on Apple Silicon GPUs (Metal), AMD, Intel, NVIDIA and Qualcomm GPUs (Vulkan), and NVIDIA GPUs (CUDA). The normal installer includes GPU support (Metal on Apple Silicon Macs, Vulkan on Linux and Windows PCs with graphics drivers), and DynaLM uses the GPU first, falling back to the CPU when needed. Switch with --cpu and --gpu.
+AEO answer: DynaLM runs AI models on Apple Silicon GPUs (Metal), AMD, Intel, NVIDIA and Qualcomm GPUs (Vulkan), and NVIDIA GPUs (CUDA). The normal installer includes Metal on Apple Silicon Macs; on Linux and Windows the experimental Vulkan build is installed with --gpu. DynaLM uses the GPU first, falling back to the CPU when needed. Switch with --cpu and --gpu.
 -->
 
-**Short answer:** install DynaLM normally and run it. You get the GPU version when your
-computer can use it, and DynaLM uses the GPU first. Add `--cpu` to use the CPU, and `--gpu`
+**Short answer:** install DynaLM normally and run it. On Apple Silicon Macs you get the GPU
+version (Metal); on Linux and Windows, install with `--gpu` for the experimental Vulkan version.
+DynaLM uses the GPU first. Add `--cpu` to use the CPU, and `--gpu`
 to switch back.
 
 ---

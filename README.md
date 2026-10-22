@@ -85,13 +85,10 @@ dynalm run qwen2.5:1.5b
 | **Windows 10 / 11 (x64 and ARM64)** | PowerShell: `irm https://raw.githubusercontent.com/dynalm-project/dynalm/main/scripts/install.ps1 \| iex` |
 | **Docker** | `docker run --rm -p 127.0.0.1:8000:8000 -v "$PWD/models:/models" ghcr.io/dynalm-project/dynalm:cpu serve /models/model.gguf --allow-unauthenticated` |
 
-**GPU included:** the installer gives you the GPU version when your computer can use it:
-- **Macs with Apple Silicon:** always (Metal).
-- **Linux x86-64 and Windows x64 with graphics drivers:** the Vulkan version (AMD, Intel or
-  NVIDIA).
-
-Otherwise you get the CPU version. To choose yourself, add `--cpu` or `--gpu`:
-`curl -fsSL .../install.sh | sh -s -- --cpu`.
+**Which build you get:**
+- **Macs with Apple Silicon:** the GPU version (Metal), always.
+- **Everything else:** the CPU version. On Linux x86-64 and Windows x64, add `--gpu` (`-Gpu` on
+  Windows) for the experimental Vulkan version: `curl -fsSL .../install.sh | sh -s -- --gpu`.
 
 **Notes:**
 - No administrator rights are needed.
@@ -317,11 +314,11 @@ DynaLM uses it automatically for faster answers.
 Yes. It runs on Apple Silicon Macs, on the CPU and on the GPU through Metal.
 
 ### Does it work with AMD or Intel graphics cards?
-Yes, through Vulkan. On Linux and Windows, the installer picks the Vulkan version when your
-graphics driver supports it.
+Experimentally, through Vulkan: install with `--gpu` (`-Gpu` on Windows). Vulkan is tested in
+CI on a software GPU only.
 
 ### Does it work with NVIDIA GPUs?
-Yes, through Vulkan (installed automatically) or CUDA (build from source,
+Experimentally, through Vulkan (install with `--gpu`) or CUDA (build from source,
 [docs/gpu.md](docs/gpu.md)).
 
 ### Does it run on Windows on ARM laptops?
