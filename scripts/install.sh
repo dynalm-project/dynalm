@@ -10,6 +10,7 @@
 #   sh scripts/install.sh --platform macos-x86_64  # override detection (e.g. Intel build under Rosetta)
 #   sh scripts/install.sh --cpu                    # CPU-only build, even if this machine has a GPU
 #   sh scripts/install.sh --gpu                    # the GPU build (fails if there is none for this machine)
+#   sh scripts/install.sh --no-modify-path         # do not add <prefix>/bin to PATH in your shell's startup file
 #
 # macOS arm64 packages include Metal. On Linux x86-64 the CPU build is the
 # default; --gpu installs the experimental Vulkan build
@@ -21,7 +22,11 @@
 # bin/dynacorec into <prefix>/bin (default ~/.local) and runs `dynalm --version`.
 # Supported: linux-x86_64[-vulkan], linux-arm64, macos-arm64, macos-x86_64.
 # Anything else stops with an error instead of installing a wrong binary.
-# Environment: DYNALM_REPO (default dynalm-project/dynalm), DYNALM_PREFIX.
+# If <prefix>/bin is not on PATH, it is added once to the shell's startup file:
+# ~/.zshrc (zsh), ~/.bashrc (bash on Linux), ~/.bash_profile (bash on macOS),
+# ~/.config/fish/conf.d/dynalm.fish (fish), else ~/.profile.
+# Environment: DYNALM_REPO (default dynalm-project/dynalm), DYNALM_PREFIX,
+# DYNALM_NO_MODIFY_PATH=1 (as --no-modify-path).
 set -eu
 
 REPO="${DYNALM_REPO:-dynalm-project/dynalm}"
@@ -32,6 +37,8 @@ SUMS=""
 FROM_SOURCE=0
 FORCE_PLATFORM=""
 DEVICE=auto  # auto | cpu | gpu
+MODIFY_PATH=1
+[ "${DYNALM_NO_MODIFY_PATH:-}" = 1 ] && MODIFY_PATH=0
 
 say() { printf '==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -46,7 +53,8 @@ while [ $# -gt 0 ]; do
     --platform) FORCE_PLATFORM="$2"; shift 2 ;;
     --cpu) DEVICE=cpu; shift ;;
     --gpu) DEVICE=gpu; shift ;;
-    -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
+    --no-modify-path) MODIFY_PATH=0; shift ;;
+    -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
     *) die "unknown option: $1 (see --help)" ;;
   esac
 done
@@ -195,8 +203,32 @@ fi
 # --- verify -------------------------------------------------------------------------
 "$PREFIX/bin/dynalm" --version || die "the installed binary does not run on this machine"
 say "Installed: $PREFIX/bin/dynalm"
+
+# --- PATH -------------------------------------------------------------------------
+# Written with $HOME when the prefix is under it, so the line survives a renamed home.
+case "$PREFIX/bin" in
+  "$HOME"/*) BIN_DIR="\$HOME${PREFIX#"$HOME"}/bin" ;;
+  *) BIN_DIR="$PREFIX/bin" ;;
+esac
+case "$(basename "${SHELL:-sh}")" in
+  zsh) RC="${ZDOTDIR:-$HOME}/.zshrc"; LINE="export PATH=\"$BIN_DIR:\$PATH\"" ;;
+  bash) if [ "$OS" = Darwin ]; then RC="$HOME/.bash_profile"; else RC="$HOME/.bashrc"; fi
+        LINE="export PATH=\"$BIN_DIR:\$PATH\"" ;;
+  fish) RC="${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/dynalm.fish"
+        LINE="contains -- \"$BIN_DIR\" \$PATH; or set -gx PATH \"$BIN_DIR\" \$PATH" ;;
+  *) RC="$HOME/.profile"; LINE="export PATH=\"$BIN_DIR:\$PATH\"" ;;
+esac
 case ":$PATH:" in
   *":$PREFIX/bin:"*) ;;
-  *) echo "Add it to your PATH:  echo 'export PATH=\"$PREFIX/bin:\$PATH\"' >> ~/.profile   (then open a new shell)" ;;
+  *)
+    if [ "$MODIFY_PATH" = 0 ]; then
+      echo "Add it to your PATH:  echo '$LINE' >> $RC   (then open a new shell)"
+    elif [ -f "$RC" ] && grep -qF "$LINE" "$RC"; then
+      say "$RC already adds $PREFIX/bin to PATH; open a new shell to use it"
+    elif mkdir -p "$(dirname "$RC")" 2>/dev/null && printf '\n# Added by the DynaLM installer\n%s\n' "$LINE" >> "$RC" 2>/dev/null; then
+      say "Added $PREFIX/bin to PATH in $RC. Open a new shell, or run:  source $RC"
+    else
+      echo "Could not write $RC. Add it to your PATH:  echo '$LINE' >> $RC"
+    fi ;;
 esac
 echo "Next:  dynalm doctor   ->   dynalm pull qwen3:4b   ->   dynalm run qwen3:4b"

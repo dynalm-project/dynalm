@@ -93,7 +93,8 @@ dynalm run qwen2.5:1.5b
 **Notes:**
 - No administrator rights are needed.
 - Every download is checked with SHA-256.
-- Open a new terminal afterwards, then run `dynalm doctor`.
+- The installer adds DynaLM to your `PATH` (skip with `--no-modify-path`, or `-NoPath` on Windows).
+  Open a new terminal afterwards, then run `dynalm doctor`.
 
 More detail, including manual downloads and building from source: [docs/installation.md](docs/installation.md).
 

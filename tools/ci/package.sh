@@ -77,7 +77,7 @@ if [ "$WIN" = 1 ]; then
 else
   PLATFORM="${NAME#dynalm-}"
   PLATFORM="${PLATFORM%.tar.gz}"
-  sh scripts/install.sh --archive "$DIST/$NAME" --sha256sums "$DIST/$NAME.sha256" --prefix "$PREFIX"     --platform "$PLATFORM"
+  sh scripts/install.sh --archive "$DIST/$NAME" --sha256sums "$DIST/$NAME.sha256" --prefix "$PREFIX" --platform "$PLATFORM" --no-modify-path
   EXE="$PREFIX/bin/dynalm"
   CEXE="$PREFIX/bin/dynacorec"
 fi

@@ -50,7 +50,7 @@ dynalm run qwen3:4b
 1. **System & CPU Architecture Detection:** Detects operating system (Linux, macOS, Windows) and CPU instruction sets (`x86_64` vs. `arm64`).
 2. **Cryptographic Integrity Verification:** Downloads the binary release alongside official `SHA256SUMS` from GitHub Releases and validates checksums before installation.
 3. **User-Space Installation (No Root Required):**
-   - **Linux & macOS:** Installs to `~/.local/bin/dynalm` and `~/.local/bin/dynacorec` (customizable with `--prefix <directory>`).
+   - **Linux & macOS:** Installs to `~/.local/bin/dynalm` and `~/.local/bin/dynacorec` (customizable with `--prefix <directory>`), and adds that directory to `PATH` once in your shell's startup file: `~/.zshrc` (zsh), `~/.bashrc` or `~/.bash_profile` (bash), `~/.config/fish/conf.d/dynalm.fish` (fish), else `~/.profile` (suppress with `--no-modify-path`).
    - **Windows:** Installs to `%LOCALAPPDATA%\Programs\DynaLM\bin\dynalm.exe` and automatically updates the user `PATH` (suppress with `-NoPath`).
 4. **Health Check:** Runs `dynalm --version` to confirm binary readiness.
 
