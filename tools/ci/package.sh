@@ -83,6 +83,13 @@ else
 fi
 
 "$EXE" --version
+# The installed binary reports the release version: DYNALM_EXPECT_VERSION (the
+# release workflow sets it from the tag, v0.2.0-beta.1 -> 0.2.0-beta.1), else
+# CMakeLists.txt's project VERSION + DYNALM_VERSION_SUFFIX.
+want="${DYNALM_EXPECT_VERSION:-$("$PY" tools/ci/version.py)}"
+got="$("$EXE" --version | awk 'NR==1{print $2}')"
+[ "$got" = "$want" ] || { echo "version mismatch: the binary reports '$got', expected '$want'"; exit 1; }
+echo "version ok: $got"
 [ -f "$CEXE" ] || [ -f "$CEXE.exe" ] || { echo "dynacorec missing from the install"; exit 1; }
 "$PY" tools/ci/check_isa.py "$EXE"
 "$EXE" doctor

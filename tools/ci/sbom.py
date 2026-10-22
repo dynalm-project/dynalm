@@ -19,7 +19,9 @@ from pathlib import Path
 
 root = Path(__file__).resolve().parents[2]
 top = (root / "CMakeLists.txt").read_text()
-version = re.search(r"project\(dynalm\s+VERSION\s+([0-9.]+)", top).group(1)
+# The release version: project(VERSION) plus DYNALM_VERSION_SUFFIX (CMakeLists.txt).
+version = re.search(r"project\(dynalm\s+VERSION\s+([0-9.]+)", top).group(1) + \
+    re.search(r'set\(DYNALM_VERSION_SUFFIX\s+"([^"]*)"\)', top).group(1)
 srv = (root / "dynalm/src/CMakeLists.txt").read_text()
 httplib_ver = re.search(r"cpp-httplib/(v[0-9.]+)/httplib.h", srv).group(1)
 httplib_sha = re.search(r"_httplib_sha256\s+([0-9a-f]{64})", srv).group(1)

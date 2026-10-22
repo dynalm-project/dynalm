@@ -114,9 +114,10 @@ README's [Speed](README.md#speed) section.
 - **Platforms:** beta-verified on macOS on Apple Silicon only (one machine, M4 Pro). Linux and Windows
   are Preview; Vulkan and CUDA are Experimental.
 - **Multi-user GPU throughput:** at 16 users DynaLM delivers 0.71–0.78× llama.cpp's total tokens/s
-  (it reaches the first token 2.1–3.3× sooner and has far shorter worst-case gaps).
+  (confirmed on 3 of 4 models; its worst-case token gaps are much shorter, confirmed on the 8B models).
 - **Four-user tail latency:** with 4 users the 99th-percentile gap between tokens is longer than
-  llama.cpp's (0.19–0.30×), because new prompts are processed in chunks alongside running streams.
+  llama.cpp's (0.19–0.30×, consistent but not confirmed by the verdict rule), because new prompts are
+  processed in chunks alongside running streams.
 - **CPU decode:** 0.77–0.97× llama.cpp's time per token, more at longer contexts (the two engines'
   CPU builds differ: llama.cpp native with Apple Accelerate, DynaLM portable).
 - **Memory limits:** DynaLM refuses a KV cache that does not fit the GPU working set instead of

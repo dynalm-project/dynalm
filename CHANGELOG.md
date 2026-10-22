@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [0.2.0-beta.1] - 2026-10-22
+
+Beta pre-release: verified on macOS on Apple Silicon (one Apple M4 Pro, CPU and Metal); the Linux
+and Windows builds are preview, Vulkan and CUDA experimental. Release notes:
+`.github/release-notes/v0.2.0-beta.1.md`.
+
+### Changed (release process)
+- **The version has one source:** `project(VERSION)` plus `DYNALM_VERSION_SUFFIX` in
+  `CMakeLists.txt` (`dynalm --version`: `0.2.0-beta.1`; also the SBOM and `CITATION.cff`).
+  `tools/ci/version.py` prints it and checks a tag against it; `run_tests.sh` and the release
+  packaging check the built and the installed binary's version.
+- **Release workflow:** a tag must match the source version; the release is created as a draft for
+  review, only when every package job passed (a failed platform no longer gets left out silently);
+  a pre-release tag (`-alpha.N`, `-beta.N`, `-rc.N`) is marked pre-release and never Latest, leaves
+  out the experimental Vulkan builds, and does not run the Docker image job (the `:cpu` image is
+  for stable tags only); notes come from `.github/release-notes/<tag>.md`. Test:
+  `tools/test_release.py`.
+
 ### Changed (compatibility)
 - **`--backend native-cpu` is not part of this release.** It, and `runtime.device: native-cpu` /
   `DYNALM_BACKEND=native-cpu` from configurations written for earlier versions, now stop with an

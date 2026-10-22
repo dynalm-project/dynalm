@@ -62,7 +62,7 @@ for t in "${TESTS[@]}"; do
   fi
 done
 PY="$(command -v python3 || command -v python)"
-for t in tools/test_compare_engines.py tools/test_bench_analyze.py tools/test_bench_report.py tools/test_e2e_report.py tools/test_model_matrix.py tools/test_ab.py tools/test_llama_parity.py; do
+for t in tools/test_compare_engines.py tools/test_bench_analyze.py tools/test_bench_report.py tools/test_e2e_report.py tools/test_model_matrix.py tools/test_ab.py tools/test_llama_parity.py tools/test_release.py; do
   out="$("$PY" "$t" 2>&1)"
   code=$?
   ran=$((ran + 1))
@@ -74,5 +74,13 @@ for t in tools/test_compare_engines.py tools/test_bench_analyze.py tools/test_be
     fail=1
   fi
 done
+# The built binary reports the release version (CMakeLists.txt: project VERSION +
+# DYNALM_VERSION_SUFFIX; tools/ci/version.py).
+exe="$BUILD/bin/dynalm"; [ -f "$exe.exe" ] && exe="$exe.exe"
+if [ -f "$exe" ]; then
+  want="$("$PY" tools/ci/version.py)"; got="$("$exe" --version | awk 'NR==1{print $2}' | tr -d '\r')"
+  ran=$((ran + 1))
+  if [ "$got" = "$want" ]; then echo "ok    dynalm --version: $got"; else echo "FAIL  dynalm --version: '$got', expected '$want'"; fail=1; fi
+fi
 echo "$ran test programs run; $([ $fail -eq 0 ] && echo 'all passed' || echo 'FAILURES above')"
 exit $fail
