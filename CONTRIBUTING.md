@@ -5,6 +5,11 @@ welcome.
 
 ## Ways to help
 
+- **Start here:** issues labelled
+  [`good first issue`](https://github.com/dynalm-project/dynalm/labels/good%20first%20issue) and
+  [`help wanted`](https://github.com/dynalm-project/dynalm/labels/help%20wanted).
+- **Test on your machine:** run a model and open a "Hardware test report" issue. Reports from Linux,
+  Windows and AMD / Intel / NVIDIA GPUs move those platforms from CI-tested to Verified.
 - **Report a bug or a model that does not load:** open an issue with the output of `dynalm version`,
   `dynalm info` and `dynalm inspect <model>`.
 - **Request a model:** run `dynalm pull <link> --check` and paste the result into a "Model request" issue.

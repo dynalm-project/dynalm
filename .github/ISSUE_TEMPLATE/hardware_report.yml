@@ -1,0 +1,53 @@
+name: Hardware test report
+description: You ran DynaLM on your machine (works or not). Helps move Linux, Windows and GPUs to "Verified".
+labels: [testing]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing! Reports from machines we have not checked (Linux, Windows, Intel Macs,
+        AMD / Intel / NVIDIA GPUs) are the most useful. A short "it works" report helps too.
+  - type: textarea
+    id: doctor
+    attributes:
+      label: dynalm doctor
+      description: Paste the full output of `dynalm doctor`.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      description: The model you ran, e.g. `qwen2.5:1.5b` or a Hugging Face GGUF link.
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend
+      options: [CPU, Metal, Vulkan, CUDA]
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: Did it work?
+      options:
+        - Yes, the output looks right
+        - It runs, but the output looks wrong
+        - It fails to load or crashes
+    validations:
+      required: true
+  - type: textarea
+    id: run
+    attributes:
+      label: What you ran and what you saw
+      description: For example `dynalm run qwen2.5:1.5b -p "What is the capital of France?"` and its answer, or the error.
+      render: text
+  - type: textarea
+    id: bench
+    attributes:
+      label: Benchmark (optional)
+      description: Output of `dynalm benchmark <model> --concurrency 1,4`.
+      render: text
