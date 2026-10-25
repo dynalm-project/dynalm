@@ -198,6 +198,36 @@ dynalm models --available                                                       
 
 ## Speed
 
+### CPU (DynaLM 0.3.0, CPU suite v1)
+
+Measured on one Apple M4 Pro (24 GB, AC power) against llama.cpp's server (commit `9a16f1dbe`, CPU
+build native with Apple Accelerate) and Ollama, on the same GGUF files: Qwen2.5-1.5B and Qwen3-4B
+(Q4_K_M). Prompts of 128, 512 and 2,048 tokens; 1, 4 and 8 users; 128 output tokens; 4,096 tokens
+of context per user; 5 rounds. The workloads were fixed before any measurement
+([docs/perf/cpu-suite-v1.md](docs/perf/cpu-suite-v1.md)). Ratio per workload = median over the
+rounds; above 1 means DynaLM is better.
+
+| CPU workload | vs llama.cpp |
+|---|---|
+| 1.5B, one user, 128-token prompt: output tokens/s | 1.08× |
+| 1.5B, one user, 2,048-token prompt: whole request | 1.78× |
+| 1.5B, 4 users: total tokens/s | 1.95× |
+| 1.5B, 8 users: total tokens/s | 1.68× |
+| 1.5B, 8 users: 95th-percentile token gap | 1.19× |
+| 4B, one user, 512-token prompt: output tokens/s | 1.46× |
+| 4B, one user, 2,048-token prompt: first token | 2.26× |
+| 4B, one user, 2,048-token prompt: token gap | 1.23× |
+| **Geometric mean** | **1.53×** |
+
+Peak server memory: 1,508 MiB (1.5B) and 3,944 MiB (4B), 2.73× and 2.89× less than llama.cpp.
+Against Ollama: 1.53× on the three 4B workloads (on 1.5B Ollama stops early despite `ignore_eos`,
+so those are not comparable). Next-token agreement with llama.cpp's logits: 100%, mean KL ≤ 4e-7.
+These are DynaLM's own CPU kernels, the default CPU path on Apple M4 class CPUs (SME); other CPUs
+use ggml's kernels by default and were not measured. The project's 2× target is not met. Details:
+[docs/perf/cpu-experiments.md](docs/perf/cpu-experiments.md).
+
+### Metal (DynaLM 0.2.0)
+
 Measured on one machine (Apple M4 Pro, 24 GB, macOS 26.7, AC power) against llama.cpp's server
 (commit `9a16f1dbe`) on the same GGUF files: Qwen2.5-1.5B, Qwen3-4B and Qwen3-8B (Q4_K_M) and
 Llama-3.1-8B (Q8_0); 512-token prompts, 128 output tokens, 2,048 tokens of context per user,
@@ -218,16 +248,9 @@ consistent, the size is uncertain).
 | 16 users: first token | 2.1–3.3× sooner with DynaLM (median) | no, on all four models |
 | 4 users: 99th-percentile token gaps | longer with DynaLM (0.19–0.30×) | no (consistent direction) |
 
-| CPU | Result | Confirmed? |
-|---|---|---|
-| One user: time per token | 0.77–0.97× llama.cpp's (the gap grows with context) | yes, 3 of 4 models |
-| 4 users: first token | 1.7–2.0× sooner with DynaLM | yes, 2 of 4 models |
-| 4 users: total tokens per second | 0.83–0.93× | yes for one model; parity or inconclusive for the others |
-
-DynaLM is not faster than llama.cpp overall: it trades total throughput for first-token time and
-worst-case gaps at high concurrency. The two engines were built with different CPU options
-(llama.cpp: native CPU features and Apple Accelerate; DynaLM's package: portable), which affects
-the CPU rows. Method: [docs/benchmarking.md](docs/benchmarking.md). Earlier results (DynaLM
+On Metal DynaLM is not faster than llama.cpp overall: it trades total throughput for first-token
+time and worst-case gaps at high concurrency. Metal was not re-measured for 0.3.0, which does not
+change the Metal code. Method: [docs/benchmarking.md](docs/benchmarking.md). Earlier results (DynaLM
 0.1.5–0.1.6), now withdrawn, stay in [docs/benchmarks.md](docs/benchmarks.md) for reference.
 
 **Measure your own machine:** `dynalm benchmark qwen2.5:1.5b`.
@@ -330,9 +353,9 @@ Yes. It uses the same kind of commands (`pull`, `run`, `serve`), the same GGUF m
 an OpenAI-compatible API. It ships as one small program with no background service.
 
 ### How does DynaLM compare to llama.cpp?
-Both run the same ggml kernels for GGUF models on Metal and on the fast CPU path, and DynaLM's
-output is checked against llama.cpp's token by token (teacher-forced parity). Speed and memory
-comparisons are being re-measured for this release; see [Speed](#speed).
+On Apple M4 class CPUs DynaLM runs its own CPU kernels: 1.53× llama.cpp on CPU suite v1, with
+2.7–2.9× less memory. On Metal, and on other CPUs by default, both run ggml's kernels. DynaLM's
+output is checked against llama.cpp's token by token (teacher-forced parity). See [Speed](#speed).
 
 ### Is it private?
 Yes. Nothing is sent anywhere. DynaLM only goes online when you run `dynalm pull`.
@@ -346,8 +369,9 @@ Yes. Add `--cpu` or `--gpu` to any command, or set `runtime: device: cpu` in
 
 ### Can I trade speed for accuracy?
 Yes, with `--mode`. `auto` (the default) picks the fastest validated path; on the CPU that is
-ggml's kernels, with llama.cpp-level accuracy. `--mode exact` keeps DynaLM's own accuracy contract
-(perplexity within +1%, DD-053) on every device, so it is slower on the CPU. `--mode safe` uses
+DynaLM's own kernels on Apple M4 class CPUs and ggml's kernels (llama.cpp-level accuracy)
+elsewhere. `--mode exact` keeps DynaLM's own accuracy contract (perplexity within +1%, DD-053) on
+every device; on CPUs without SME it is slower. `--mode safe` uses
 plain fp32 CPU kernels, for debugging. `dynalm autotune` shows what each mode runs on your machine;
 `dynalm autotune --run <model>` picks the best CPU thread count and remembers it
 ([docs/cli.md](docs/cli.md#execution-modes-and-autotune)).
@@ -365,7 +389,9 @@ plain fp32 CPU kernels, for debugging. `dynalm autotune` shows what each mode ru
 - **4 users:** the 99th-percentile gap between tokens is longer than llama.cpp's (0.19–0.30×,
   consistent in every round but not confirmed by the verdict rule): new prompts are processed in
   chunks alongside the running streams.
-- **CPU decode:** 0.77–0.97× llama.cpp's time per token, more at longer contexts.
+- **CPU:** measured on one Apple M4 Pro only. Single-user decode is 1.08–1.46× llama.cpp; with 8
+  users on Qwen3-4B, token gaps reach about 1 s while new 512-token prompts are processed. Other
+  CPUs (Apple M1–M3, x86-64, Linux ARM64) have not been measured.
 - **Memory limits are enforced at load.** A KV cache that does not fit the GPU working set is
   refused with the largest `--ctx` that fits. Example: Llama-3.1-8B Q8_0 with 16 users × 4,096
   tokens on a 24 GB Mac (8.0 GiB of KV, 6.9 GiB available) is refused; `--ctx 57024` or

@@ -2,6 +2,50 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-25
+
+DynaLM's own CPU engine (no ggml in the CPU path) and the CPU performance work measured on the
+fixed CPU suite v1 (docs/perf/cpu-suite-v1.md; development measurements and the controlled runs:
+docs/perf/cpu-experiments.md). Controlled result on an Apple M4 Pro (AC power, 5 rounds): 1.53×
+geometric mean vs llama.cpp over the 8 workloads, peak memory 2.73× (1.5B) and 2.89× (4B) lower;
+the 2× target is not met.
+
+### Added
+- **Strict native mode:** `DYNALM_NATIVE_ONLY=ON` (presets `macos-native`, `linux-native`) builds
+  no ggml / llama.cpp code; `tools/ci/check_native.sh` proves it for a build.
+- **qmm CPU kernels** (`dynacore/cpu/qmm`): int8 / int16 per-32 activations (the DD-053 / DD-076
+  accuracy classes), NEON dot-product gemv and i8mm gemm, packed 4-row Q4_K / Q6_K copies.
+- NEON grouped-head attention kernels (were scalar on ARM).
+- **SME CPU tier** (Apple M4 and other CPUs with FEAT_SME and 512-bit streaming vectors): fp32
+  panel gemm for prefill-sized matmuls (`sme_f32_gemm`, reference accuracy class) and flash
+  attention for prompt chunks; `DYNACORE_SME=0` turns it off.
+- **CPU suite v1** (`tools/bench/cpu_suite.py`, `docs/perf/cpu-suite-v1.md`): fixed CPU workloads,
+  geometric mean vs llama.cpp / Ollama, memory metrics, and a keep / reject A/B rule.
+- `tools/bench/baseline.sh`: `REQUIRE_AC=0` for development runs (marked not controlled).
+
+### Changed
+- **Default CPU path on SME CPUs (Apple M4 class):** `--backend cpu` and `auto` without a GPU use
+  DynaLM's own CPU kernels there, also in builds with ggml's CPU kernels (`--backend ggml-cpu`
+  still selects those). Other CPUs keep ggml's kernels as the default until they are measured.
+  `dynalm doctor` reports the default.
+- DynaCore's qmm CPU kernels default to the performance cores on hybrid CPUs (as ggml's do; CPU
+  suite v1 was measured that way). `--threads` overrides.
+- Release workflow: the macOS arm64 package is built on `macos-15` and the build stops if the
+  SME tier does not compile.
+- `--execution auto` (new default): compiled on GPUs and on CPUs with qmm kernels.
+- On ARM CPUs with qmm, the native int8 path covers prefill too (no fp32 weight expansion).
+- CPU memory: after a weight is packed, the file pages of the original are dropped from resident
+  memory (`DYNACORE_QMM_RELEASE_SOURCE=0` keeps them); the CPU prefix cache keeps at most a
+  quarter of the KV pool when `prefix_cache_max_blocks` is not set.
+- CPU scheduling where the SME prefill runs: 512-token solo-prefill chunks and prefill bursts
+  (decoding streams wait while prompts prefill, at most 2 s; `DYNALM_PREFILL_BURST_MS`).
+- CPU decode attention on fp16 KV reads fp16 directly in the grouped kernels; prompt-chunk
+  elementwise ops (add, rms_norm, KV writes, SiLU) run vectorized and in parallel. SiLU uses the
+  polynomial exp (relative error ~1e-7).
+- CPU decode matmuls split the weights into equal per-thread chunks of at least 2 MiB
+  (`KernelPlan::gemv_min_chunk_bytes`, `DYNACORE_GEMV_CHUNK_KB`) instead of 32 small chunks per
+  thread: decode steps 15–21 % faster on an M4 Pro, same output.
+
 ## [0.2.0] - 2026-10-22
 
 Stable release of the 0.2.0-beta.1 code; no code changes since the beta. Verified on macOS on
