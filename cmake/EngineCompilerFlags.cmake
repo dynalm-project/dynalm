@@ -56,7 +56,7 @@ else()
 endif()
 
 # --- Per-file ISA flags ----------------------------------------------------
-# engine_set_isa(<isa> <files...>) where isa is AVX2 | AVXVNNI | AVX512 | AMX | NEONDOT (ARM64).
+# engine_set_isa(<isa> <files...>) where isa is AVX2 | AVXVNNI | AVX512 | AMX | NEONDOT | NEONI8MM | SME (ARM64).
 function(engine_set_isa isa)
   if(MSVC)
     if(isa STREQUAL "AVX2" OR isa STREQUAL "AVXVNNI")
@@ -75,9 +75,15 @@ function(engine_set_isa isa)
       set(_flags -mavx512f -mavx512bw -mavx512vl -mamx-tile -mamx-int8 -mamx-bf16)
     elseif(isa STREQUAL "NEONDOT")
       set(_flags -march=armv8.2-a+dotprod)
+    elseif(isa STREQUAL "NEONI8MM")
+      set(_flags -march=armv8.6-a+dotprod+i8mm)
+    elseif(isa STREQUAL "SME")
+      # SME base only, no +sve: the compiler must not emit SVE outside
+      # streaming mode (Apple M4 has SME without non-streaming SVE).
+      set(_flags -march=armv8.6-a+sme)
     endif()
   endif()
-  if(MSVC AND isa STREQUAL "NEONDOT")
+  if(MSVC AND (isa STREQUAL "NEONDOT" OR isa STREQUAL "NEONI8MM" OR isa STREQUAL "SME"))
     return()  # MSVC: no per-file flag; the file compiles to its fallback
   endif()
   if(NOT _flags)

@@ -55,6 +55,10 @@ struct CostModel {
   int32_t threads = 10;
   int32_t int8_max_rows = 4;    // KernelPlan::int8_decode_max_rows
   int32_t expand_min_rows = 2;  // KernelPlan::expand_min_rows
+  // The CPU runs the qmm kernels (dynacore/cpu/qmm.h): KernelPlan::qmm on a
+  // CPU with an accelerated qmm tier.
+  bool qmm = false;
+  int32_t qmm_gemm_min_rows = 9;  // KernelPlan::qmm_gemm_min_rows
 
   static CostModel from(const KernelPlan& plan, int32_t threads);
 };
@@ -63,7 +67,8 @@ struct CostModel {
 double estimate_op_us(const Graph& g, const Op& op, const CostModel& cm);
 
 // Annotates Op::kernel with the implementation the CPU device will run for
-// this shape (e.g. "cpu.int8_dot.q4_K", "cpu.panel_gemm.q6_K", "cpu.gqa_grouped").
+// this shape (e.g. "cpu.qmm_gemv.q4_K", "cpu.qmm_gemm16.q6_K", "cpu.int8_dot.q4_K",
+// "cpu.panel_gemm.q6_K", "cpu.gqa_grouped").
 void select_kernels(Graph& g, const CostModel& cm);
 
 // --- fusion and execution planning ----------------------------------------------

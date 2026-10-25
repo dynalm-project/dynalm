@@ -125,6 +125,13 @@ struct CpuKernels {
   // sharing one KV head: each v vector is loaded once for all heads.
   void (*attn_accum_heads_f32)(const float* v, int64_t n, int32_t dim, const float* w, int32_t nh, int64_t w_stride,
                                float* acc) = nullptr;
+  // The same two on fp16 KV, converted in registers (no fp32 copy of the
+  // run); identical results (the conversion is exact). Null where the tier
+  // has no such kernel (the device then converts the run first).
+  void (*attn_scores_heads_f16)(const uint16_t* k, int64_t n, int32_t dim, const float* q, int32_t nh, float scale,
+                                float* scores, int64_t s_stride) = nullptr;
+  void (*attn_accum_heads_f16)(const uint16_t* v, int64_t n, int32_t dim, const float* w, int32_t nh, int64_t w_stride,
+                               float* acc) = nullptr;
 
   // int8 activation path: entries are null for types without an integer kernel
   // (the backend then uses vec_dot / dequant).

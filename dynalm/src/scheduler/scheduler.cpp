@@ -97,6 +97,13 @@ Scheduler::Scheduler(Transformer& model, KvBlockPool& kv, const Tokenizer& token
       LOG_WARN("ignoring DYNALM_PROTECT_MIN='{}' (expected an integer >= 1)", pm);
     }
   }
+  if (const char* pb = dynacore::env_value("DYNALM_PREFILL_BURST_MS")) {
+    if (dynacore::parse_env_long(pb, lv) && lv >= 0) {
+      config_.prefill_burst_max_stall_ms = static_cast<int32_t>(lv);
+    } else {
+      LOG_WARN("ignoring DYNALM_PREFILL_BURST_MS='{}' (expected an integer >= 0)", pb);
+    }
+  }
   config_.protected_prefill_min = std::clamp(config_.protected_prefill_min, 1, config_.prefill_token_budget);
   // A step without decode rows carries prefill rows only: the solo chunk may use the whole batch.
   config_.solo_prefill_chunk = std::clamp(config_.solo_prefill_chunk, 0, cap);
@@ -388,7 +395,18 @@ bool Scheduler::step() {
     // Experimental prefill order (default FIFO); only matters with >= 2 prompts prefilling.
     srpt = config_.prefill_order == PrefillOrder::kShortestRemaining && prefilling > 1;
     const int64_t aging_ns = static_cast<int64_t>(config_.prefill_aging_ms) * 1000000;
-    solo = config_.solo_prefill_chunk > 0 && !any_decode && (prefilling == 1 || config_.solo_prefill_split);
+    // Prefill burst: prompt rows only, unless a decoding stream has waited
+    // prefill_burst_max_stall_ms since its last token.
+    bool burst = false;
+    if (config_.prefill_burst_max_stall_ms > 0 && config_.solo_prefill_chunk > 0 && any_decode && prefilling > 0) {
+      const int64_t bound = static_cast<int64_t>(config_.prefill_burst_max_stall_ms) * 1000000;
+      burst = true;
+      for (const Entry* e : order) {
+        if (is_decode_row(*e) && e->last_token_ns > 0 && now - e->last_token_ns >= bound) burst = false;
+      }
+    }
+    if (burst) any_decode = false;  // planned as a step without decode rows
+    solo = config_.solo_prefill_chunk > 0 && !any_decode && (prefilling == 1 || config_.solo_prefill_split || burst);
     solo_skipped = config_.solo_prefill_chunk > 0 && !any_decode && !solo;
     const int32_t prefill_budget = solo ? std::max(config_.prefill_token_budget, config_.solo_prefill_chunk)
                                    : config_.decode_protect && any_decode ? mixed_prefill_budget_
@@ -396,7 +414,7 @@ bool Scheduler::step() {
     int32_t prefill_chunk = config_.max_prefill_chunk;  // 0 = up to the budget
     if (solo) {
       prefill_chunk = config_.solo_prefill_chunk;
-      if (config_.solo_prefill_split && prefilling > 1) {
+      if ((config_.solo_prefill_split || burst) && prefilling > 1) {
         prefill_chunk = std::max({config_.max_prefill_chunk, config_.solo_prefill_chunk / prefilling, 1});
       }
     }
@@ -421,6 +439,7 @@ bool Scheduler::step() {
     for (Entry* e : order) {
       if (is_terminal(e->seq->status()) || e->seq->pending() == 0) continue;
       const bool decode = is_decode_row(*e);
+      if (decode && burst) continue;  // waits for the burst
       int32_t& used = decode ? decode_rows : prefill_rows;
       const int32_t budget = decode ? config_.decode_token_budget : prefill_budget;
       int32_t n = std::min(e->seq->pending(), budget - used);
@@ -464,6 +483,7 @@ bool Scheduler::step() {
     stats_.last_decode_rows = decode_rows;
     stats_.last_prefill_rows = prefill_rows;
     if (solo && prefill_rows > 0) ++stats_.steps_solo_prefill;
+    if (burst && prefill_rows > 0) ++stats_.steps_prefill_burst;
     if (solo_skipped && prefill_rows > 0) ++stats_.steps_solo_prefill_skipped;
     if (srpt && prefill_rows > 0) ++stats_.steps_prefill_srpt;
     break;
@@ -584,6 +604,7 @@ bool Scheduler::step() {
     const int32_t drafts = e.spec_drafts;  // speculative row: only the real token is committed here
     e.seq->mark_computed(drafts > 0 ? 1 : static_cast<int32_t>(batch_[b].tokens.size()));
     if (was_decode) e.last_step = step_no;
+    if (batch_[b].want_logits) e.last_token_ns = now_ns();
     if (config_.trace && !was_decode) e.trace.prefill_forward_ms += fwd_ms;
     if (prefix_cache_) {
       // Offer newly completed (hence immutable) blocks for reuse.

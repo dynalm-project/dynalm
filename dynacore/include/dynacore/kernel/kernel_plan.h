@@ -38,6 +38,15 @@ struct KernelPlan {
   // pool: chunks are claimed dynamically, so more chunks shorten the tail when
   // fast (P) and slow (E) cores finish unevenly, at the cost of more claims.
   int32_t matmul_chunks_per_thread = 32;  // DD-067 (was 8)
+  // Decode-shaped matmuls (at most qmm::kGemvMaxRows activation rows) read
+  // each weight byte once, so they are memory bound: chunks of fewer weight
+  // bytes than this restart the hardware prefetch stream and contend on the
+  // claim counter often enough to cost bandwidth (M4 Pro, Qwen2.5-1.5B FFN
+  // gate, 28 KB chunks: 166 GB/s; 480 KB: 228 GB/s). Every thread gets the
+  // same number of chunks, as many as hold at least this many weight bytes
+  // (at least 1, at most matmul_chunks_per_thread).
+  // 0 = matmul_chunks_per_thread alone, as for larger batches.
+  int64_t gemv_min_chunk_bytes = 2 * 1024 * 1024;
   // Matmuls with at most this many rows use int8 activations and integer
   // dot products where the backend accelerates them (DD-053); 0 = never.
   // Default 4: the measured crossover with the fp32 expand path (AVX2), and
@@ -134,6 +143,23 @@ struct KernelPlan {
   // through to the next eligible kernel. Override: DYNACORE_MATMUL_DISABLE=
   // name,name or all-accelerated (the fp32 reference arithmetic only).
   uint32_t matmul_disabled = 0;
+  // Native quantized matmul kernels (dynacore/cpu/qmm.h) where the CPU tier
+  // accelerates them (ARM dot product / i8mm): every matmul whose op allows
+  // int8 activations (int8_decode_max_rows > 0) runs them with int8 per-32
+  // activations, the FFN down projection (int16_decode_max_rows > 0) with
+  // int16 activations, at any row count: the per-row arithmetic is that of
+  // int8_per32 / int16_rows (DD-053 / DD-076) whatever the batch size. Ops
+  // the plan keeps in fp32 stay in fp32. Override: DYNACORE_QMM=0.
+  bool qmm = true;
+  // Rows from which qmm uses its matrix (gemm) kernel instead of gemv tiles.
+  int32_t qmm_gemm_min_rows = 9;
+  // Rows from which the SME fp32 panel gemm (qmm::sme_gemm, CPUs with
+  // FEAT_SME) replaces the qmm kernels; 0 = off. DYNACORE_SME_ROWS.
+  int32_t sme_min_rows = 64;
+  // Shortest run of consecutive prompt rows (one sequence) whose attention
+  // runs on the SME tiles (CpuDevice::attention_sme); 0 = off.
+  // DYNACORE_SME_ATTN_ROWS.
+  int32_t sme_attention_min_rows = 16;
   // Consult kernels registered with CpuDevice::register_external_matmul
   // (DynaKernel extension point) before the built-in ones. Off by default.
   bool external_matmul = false;
@@ -154,8 +180,9 @@ struct KernelPlan {
   // DYNACORE_GEMM_KC, DYNACORE_INT8_DECODE_ROWS, DYNACORE_INT8_SUPERBLOCK,
   // DYNACORE_INT8_SUBSCALE, DYNACORE_Q4_REPACK_ROWS, DYNACORE_Q4_REPACK_MAX_ROWS,
   // DYNACORE_PACKED_8ROWS, DYNACORE_INT16_PREFILL_ROWS, DYNACORE_INT16_PREFILL_SPLIT,
-  // DYNACORE_MATMUL_DISABLE, DYNACORE_INT16_FFN_DOWN, DYNACORE_ATTN_GROUPED and
-  // DYNACORE_MATMUL_CHUNKS applied (read once per process).
+  // DYNACORE_MATMUL_DISABLE, DYNACORE_INT16_FFN_DOWN, DYNACORE_ATTN_GROUPED,
+  // DYNACORE_QMM, DYNACORE_QMM_GEMM_ROWS, DYNACORE_SME_ROWS and DYNACORE_MATMUL_CHUNKS applied
+  // (read once per process).
   static const KernelPlan& defaults();
 
   friend bool operator==(const KernelPlan&, const KernelPlan&) = default;

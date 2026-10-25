@@ -21,6 +21,8 @@ TESTS=(
   dynacore/test_int16_prefill
   dynacore/test_packed_8rows
   dynacore/test_int_kernels
+  dynacore/test_qmm
+  dynacore/test_cpu_attention
   dynacore/test_thread_pool
   dynacore/test_ggml_device
   dynacore/test_ggml_metal_ranges

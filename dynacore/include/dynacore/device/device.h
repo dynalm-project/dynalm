@@ -109,6 +109,7 @@ class Device {
     int64_t source_bytes = 0;
     int64_t packed_bytes = 0;
     int64_t skipped = 0;  // tensors left unpacked by the memory budget
+    int64_t released_bytes = 0;  // original file pages dropped from residency after packing
     double ms = 0;
   };
   virtual PrepackStats prepack_stats() const { return {}; }

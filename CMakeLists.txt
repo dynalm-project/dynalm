@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(dynalm
-  VERSION 0.2.0
+  VERSION 0.3.0
   DESCRIPTION "DynaLM: CPU-first LLM inference engine"
   HOMEPAGE_URL "https://github.com/dynalm-project/dynalm"
   LANGUAGES CXX)
@@ -25,6 +25,12 @@ endif()
 # ---------------------------------------------------------------------------
 # Feature flags
 # ---------------------------------------------------------------------------
+# Strict native mode (docs/build.md): the production
+# inference path is DynaLM's own code only. Turns every ggml-based backend
+# off (ggml-cpu, ggml Metal / Vulkan / CUDA) and refuses to configure if one
+# is requested; ggml is then not fetched, built or linked.
+option(DYNALM_NATIVE_ONLY "Build only DynaLM's native backends (no ggml / llama.cpp code)" OFF)
+
 # GPU backends through pinned ggml (docs/gpu-backend.md); any combination.
 option(ENABLE_CUDA   "CUDA GPU backend through pinned ggml (NVIDIA; needs the CUDA toolkit)" OFF)
 option(ENABLE_HIP    "ROCm/HIP backend (not implemented)" OFF)
@@ -41,6 +47,14 @@ endif()
 set(_ggml_cpu_default ON)
 if(CMAKE_VERSION VERSION_LESS 3.28 OR (MSVC AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(ARM64|arm64|aarch64)$"))
   set(_ggml_cpu_default OFF)
+endif()
+if(DYNALM_NATIVE_ONLY)
+  set(_ggml_cpu_default OFF)
+  foreach(_g ENABLE_CUDA ENABLE_METAL ENABLE_VULKAN ENABLE_GGML_CPU)
+    if(${_g})
+      message(FATAL_ERROR "DYNALM_NATIVE_ONLY=ON: ${_g} builds a ggml backend; turn it off")
+    endif()
+  endforeach()
 endif()
 option(ENABLE_GGML_CPU "ggml's CPU kernels as the default CPU path (fetches pinned ggml)" ${_ggml_cpu_default})
 if(NOT ENABLE_GGML_CPU)
@@ -176,4 +190,5 @@ include(CPack)
 
 message(STATUS "DynaLM ${DYNALM_VERSION}: build=${CMAKE_BUILD_TYPE} arch=${DYNALM_ARCH} "
                "avx2=${ENABLE_AVX2} avx512=${ENABLE_AVX512} amx=${ENABLE_AMX} neon=${ENABLE_NEON} "
-               "metal=${ENABLE_METAL} vulkan=${ENABLE_VULKAN} cuda=${ENABLE_CUDA} server=${ENABLE_SERVER} bench=${ENABLE_BENCHMARKS}")
+               "metal=${ENABLE_METAL} vulkan=${ENABLE_VULKAN} cuda=${ENABLE_CUDA} server=${ENABLE_SERVER} bench=${ENABLE_BENCHMARKS} "
+               "ggml=${DYNALM_WITH_GGML} native_only=${DYNALM_NATIVE_ONLY}")

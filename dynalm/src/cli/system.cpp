@@ -28,7 +28,7 @@ constexpr const char* kConfigTemplate =
     "  # path: qwen3:4b           # model for `dynalm serve` when none is given\n"
     "\n"
     "runtime:\n"
-    "  threads: auto              # auto = physical cores\n"
+    "  threads: auto              # auto = physical cores (performance cores on hybrid CPUs)\n"
     "  context_length: auto       # KV cache tokens; auto = from free RAM\n"
     "  # device: auto             # cpu (GPU devices are not built yet)\n"
     "\n"

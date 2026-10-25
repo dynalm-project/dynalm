@@ -1,6 +1,8 @@
 #include "dynacore/memory/mapped_file.h"
 
 #include <algorithm>
+#include <map>
+#include <mutex>
 
 #include "dynacore/base/platform.h"
 
@@ -17,6 +19,30 @@
 #endif
 
 namespace dynacore {
+
+namespace {
+// Live mappings (start -> end), for release_file_pages.
+std::mutex g_maps_mu;
+std::map<const std::byte*, const std::byte*>& live_maps() {
+  static auto* m = new std::map<const std::byte*, const std::byte*>();
+  return *m;
+}
+void add_map(const std::byte* p, size_t n) {
+  std::lock_guard<std::mutex> lock(g_maps_mu);
+  live_maps()[p] = p + n;
+}
+void remove_map(const std::byte* p) {
+  std::lock_guard<std::mutex> lock(g_maps_mu);
+  live_maps().erase(p);
+}
+bool inside_map(const std::byte* b, const std::byte* e) {
+  std::lock_guard<std::mutex> lock(g_maps_mu);
+  auto it = live_maps().upper_bound(b);
+  if (it == live_maps().begin()) return false;
+  --it;
+  return b >= it->first && e <= it->second;
+}
+}  // namespace
 
 #if ENGINE_OS_WINDOWS
 
@@ -54,10 +80,12 @@ Result<std::shared_ptr<MappedFile>> MappedFile::open(const std::string& path) {
   void* view = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
   if (!view) return IoError("cannot map view of " + path + ": " + last_error());
   f->data_ = static_cast<const std::byte*>(view);
+  add_map(f->data_, f->size_);
   return f;
 }
 
 MappedFile::~MappedFile() {
+  if (data_) remove_map(data_);
   if (data_) UnmapViewOfFile(data_);
   if (mapping_) CloseHandle(mapping_);
   if (file_) CloseHandle(file_);
@@ -88,10 +116,12 @@ Result<std::shared_ptr<MappedFile>> MappedFile::open(const std::string& path) {
   void* p = mmap(nullptr, f->size_, PROT_READ, MAP_SHARED, f->fd_, 0);
   if (p == MAP_FAILED) return IoError("cannot mmap " + path + ": " + std::strerror(errno));
   f->data_ = static_cast<const std::byte*>(p);
+  add_map(f->data_, f->size_);
   return f;
 }
 
 MappedFile::~MappedFile() {
+  if (data_) remove_map(data_);
   if (data_) munmap(const_cast<std::byte*>(data_), size_);
   if (fd_ >= 0) ::close(fd_);
 }
@@ -106,5 +136,29 @@ void MappedFile::prefetch(size_t offset, size_t len) const {
 }
 
 #endif
+
+size_t release_file_pages(const void* p, size_t len) {
+#if ENGINE_OS_WINDOWS
+  (void)p;
+  (void)len;
+  return 0;
+#else
+  const auto* b = static_cast<const std::byte*>(p);
+  if (b == nullptr || len == 0 || !inside_map(b, b + len)) return 0;
+  const auto page = static_cast<uintptr_t>(sysconf(_SC_PAGESIZE));
+  const uintptr_t start = (reinterpret_cast<uintptr_t>(b) + page - 1) / page * page;
+  const uintptr_t end = (reinterpret_cast<uintptr_t>(b) + len) / page * page;
+  if (end <= start) return 0;
+  void* a = reinterpret_cast<void*>(start);
+#if ENGINE_OS_MACOS
+  // Darwin ignores MADV_DONTNEED for file pages; MS_INVALIDATE drops them
+  // from this mapping (the mapping is read-only, so nothing is written back).
+  if (msync(a, end - start, MS_INVALIDATE) != 0) return 0;
+#else
+  if (madvise(a, end - start, MADV_DONTNEED) != 0) return 0;
+#endif
+  return end - start;
+#endif
+}
 
 }  // namespace dynacore

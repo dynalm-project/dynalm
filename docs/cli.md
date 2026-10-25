@@ -205,14 +205,14 @@ dynalm run <model> -p <prompt> [options]
 | `--system TEXT` | System message |
 | `--chat` / `--raw` | Use the model's chat template (default) / send the text as is |
 | `--stop TEXT` | Stop when this text appears (repeatable; it is not printed) |
-| `-t, --threads N` | Compute threads (default: physical cores) |
+| `-t, --threads N` | Compute threads (default: physical cores; performance cores on hybrid CPUs) |
 | `-c, --ctx N` | Context / KV cache size in tokens (default 4096) |
 | `--batch N` | Max tokens per forward pass (default 256) |
 | `--kv f16\|f32` | KV cache precision (default f16) |
 | `--int8-decode N` | DynaLM's CPU kernels (`--mode exact` on the CPU): int8 activations for matmuls of ≤ N rows (default 4, 64 on ARM64; 0 = off, making output independent of batching) |
 | `--gpu` / `--cpu` | Use the GPU (the default when it can run the model) / use the CPU. Same as `--backend gpu` / `--backend cpu` |
 | `--backend auto\|gpu\|cpu\|metal\|vulkan\|cuda` | Compute backend. `auto` (default): a GPU built into this binary (CUDA, then Metal, then Vulkan) when it starts and runs the model, else the CPU (the reason is logged). Each GPU needs its build option (`-DENABLE_METAL/VULKAN/CUDA=ON`); see [gpu.md](gpu.md). `DYNACORE_GPU_INDEX=N` picks the N-th GPU of that kind |
-| `--backend cpu` / `ggml-cpu` | The CPU. `cpu` (and `auto` without a GPU) uses ggml's CPU kernels: 8-bit activations as in llama.cpp, about 4× the speed of DynaLM's own CPU kernels, llama.cpp-level accuracy (Qwen2.5-1.5B: mean KL 0.023 against the fp32 reference). Models they cannot run use DynaLM's own kernels. `ggml-cpu`: the fast kernels only, an error if they cannot run the model. For DD-053 accuracy on the CPU use `--mode exact` (DynaLM's own kernels: int8 activations per 32 values for up to 4 rows, 64 on ARM64, with SIMD on AVX2 and on ARM with dot-product instructions; fp32 otherwise). `--backend native-cpu` is not part of this release: it is an error that names `--mode exact` |
+| `--backend cpu` / `ggml-cpu` | The CPU. On CPUs with SME (Apple M4 class), `cpu` (and `auto` without a GPU) uses DynaLM's own CPU kernels (qmm, SME prefill): 1.53× llama.cpp on CPU suite v1, mean KL ≤ 4e-7 against llama.cpp's logits (docs/perf/cpu-suite-v1.md). On other CPUs it uses ggml's CPU kernels: 8-bit activations as in llama.cpp, llama.cpp-level accuracy (Qwen2.5-1.5B: mean KL 0.023 against the fp32 reference). Models they cannot run use DynaLM's own kernels. `ggml-cpu`: the fast kernels only, an error if they cannot run the model. For DD-053 accuracy on the CPU use `--mode exact` (DynaLM's own kernels: int8 activations per 32 values for up to 4 rows, 64 on ARM64, with SIMD on AVX2 and on ARM with dot-product instructions; fp32 otherwise). `--backend native-cpu` is not part of this release: it is an error that names `--mode exact` |
 | `--mode M` | `auto` (default), `performance`, `exact` (DD-053 accuracy on every device, never ggml's 8-bit CPU kernels) or `safe` (fp32 CPU reference kernels only). See [Execution modes and AutoTune](#execution-modes-and-autotune) |
 | `--no-stream` | Print the answer at the end instead of word by word |
 
@@ -337,7 +337,7 @@ Configuration keys and precedence: [configuration.md](configuration.md).
 
 | Mode | What runs |
 |---|---|
-| `auto` (default), `performance` | The fastest validated path: a GPU that runs the model, else ggml's CPU kernels (llama.cpp-level accuracy), else DynaLM's CPU kernels |
+| `auto` (default), `performance` | The fastest validated path: a GPU that runs the model, else the CPU: DynaLM's kernels on CPUs with SME (Apple M4 class), elsewhere ggml's CPU kernels (llama.cpp-level accuracy), else DynaLM's CPU kernels |
 | `exact` | DD-053 accuracy everywhere: the GPU (validated per backend), else DynaLM's CPU kernels; never ggml's 8-bit CPU kernels. `--backend ggml-cpu` with `--mode exact` is an error |
 | `safe` | DynaLM's fp32 CPU reference kernels only: no GPU, no int8. For debugging and unusual hardware. A GPU request (`--gpu`, `--backend metal`, ...) with `--mode safe` is an error |
 

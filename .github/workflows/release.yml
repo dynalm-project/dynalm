@@ -47,7 +47,9 @@ jobs:
           - { name: linux-arm64, os: ubuntu-22.04-arm, preset: linux-release, gcc13: true }
           # Every Apple Silicon package includes Metal (GPU first; it falls back
           # to the CPU on its own when a GPU cannot run a model).
-          - { name: macos-arm64, os: macos-14, preset: macos-release, cmake_args: -DENABLE_METAL=ON }
+          # macos-15: a compiler with the ACLE SME intrinsics (Apple clang 16+), so the
+          # SME CPU tier is built (checked below).
+          - { name: macos-arm64, os: macos-15, preset: macos-release, cmake_args: -DENABLE_METAL=ON }
           # Vulkan GPU builds next to the CPU builds; the installers choose.
           - { name: linux-x86_64-vulkan, os: ubuntu-22.04, preset: linux-release, gcc13: true, vulkan: true, cmake_args: -DENABLE_VULKAN=ON }
           - { name: windows-x86_64-vulkan, os: windows-2022, preset: msvc-release, vulkan: true, cmake_args: -DENABLE_VULKAN=ON }
@@ -102,6 +104,14 @@ jobs:
           # Tag builds: the installed binary must report the tag's version.
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then export DYNALM_EXPECT_VERSION="${GITHUB_REF_NAME#v}"; fi
           bash tools/ci/package.sh ${{ matrix.cmake_args }}
+      - name: SME CPU tier built (macOS arm64)
+        # On Apple M4 class CPUs DynaCore's CPU kernels are the default CPU path,
+        # measured with the SME tier; without it the package would quietly ship a
+        # slower prefill. Stop instead.
+        if: matrix.name == 'macos-arm64'
+        run: |
+          grep -q '^DYNACORE_SME_COMPILES:INTERNAL=1$' build/package/CMakeCache.txt ||
+            { echo "the SME tier did not compile with this toolchain ($(c++ --version | head -1))"; exit 1; }
       - uses: actions/upload-artifact@v4
         with:
           name: dynalm-${{ matrix.name }}

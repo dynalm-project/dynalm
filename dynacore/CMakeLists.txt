@@ -46,8 +46,13 @@ add_library(dynacore STATIC
   cpu/avx2/kernels_avxvnni.cpp
   cpu/neon/kernels_neon.cpp
   cpu/neon/kernels_neon_dot.cpp
+  cpu/qmm/qmm_reference.cpp
+  cpu/qmm/qmm_neon_dot.cpp
+  cpu/qmm/qmm_neon_i8mm.cpp
+  cpu/qmm/qmm_sme.cpp
 )
 target_include_directories(dynacore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
 target_link_libraries(dynacore PUBLIC engine_options)
 target_link_libraries(dynacore PRIVATE ${CMAKE_DL_LIBS})  # GPU driver probe (dlopen)
 if(WIN32)
@@ -79,7 +84,20 @@ endif()
 
 # SIMD tiers: per-file ISA flags only (DD-003).
 if(ENABLE_NEON AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64|ARM64)$" AND NOT CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
-  engine_set_isa(NEONDOT cpu/neon/kernels_neon_dot.cpp)
+  engine_set_isa(NEONDOT cpu/neon/kernels_neon_dot.cpp cpu/qmm/qmm_neon_dot.cpp)
+  engine_set_isa(NEONI8MM cpu/qmm/qmm_neon_i8mm.cpp)
+  # SME needs a compiler that knows the flag and the ACLE SME intrinsics
+  # (Apple clang 16+, LLVM 18+); otherwise the file compiles to its stub.
+  include(CheckCXXSourceCompiles)
+  set(CMAKE_REQUIRED_FLAGS "-march=armv8.6-a+sme")
+  check_cxx_source_compiles("#include <arm_sme.h>
+    __arm_new(\"za\") __arm_locally_streaming void f(float* y) { svbool_t p = svptrue_b32(); svfloat32_t a = svdup_f32(1.0f);
+      svmopa_za32_f32_m(0, p, p, a, a); svst1_hor_za32(0, 0, p, y); }
+    int main() { return 0; }" DYNACORE_SME_COMPILES)
+  unset(CMAKE_REQUIRED_FLAGS)
+  if(DYNACORE_SME_COMPILES)
+    engine_set_isa(SME cpu/qmm/qmm_sme.cpp)
+  endif()
 endif()
 if(ENABLE_AVX2)
   engine_set_isa(AVX2 cpu/avx2/kernels_avx2.cpp)
@@ -97,6 +115,14 @@ if(ENABLE_BENCHMARKS)
     target_link_libraries(bench_${_b} PRIVATE dynacore)
     target_include_directories(bench_${_b} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks)
   endforeach()
+  # CpuDevice::attention at decode shapes vs threads and context.
+  add_executable(bench_attention benchmarks/bench_attention.cpp)
+  target_link_libraries(bench_attention PRIVATE dynacore)
+  target_include_directories(bench_attention PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks)
+  # qmm kernels vs CpuDevice::matmul on transformer shapes.
+  add_executable(bench_qmm benchmarks/bench_qmm.cpp)
+  target_link_libraries(bench_qmm PRIVATE dynacore)
+  target_include_directories(bench_qmm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/benchmarks)
   # Single-thread FFN prefill kernel throughput on a pinned CPU (DynaLM Next).
   add_executable(bench_ffn_kernels benchmarks/bench_ffn_kernels.cpp)
   target_link_libraries(bench_ffn_kernels PRIVATE dynacore)
@@ -114,6 +140,12 @@ if(ENABLE_BENCHMARKS)
   target_link_libraries(test_int_kernels PRIVATE dynacore)
   add_executable(test_int16_prefill tests/test_int16_prefill.cpp)
   target_link_libraries(test_int16_prefill PRIVATE dynacore)
+  # Native quantized matmul kernels (qmm) of every compiled tier vs the reference.
+  add_executable(test_qmm tests/test_qmm.cpp)
+  target_link_libraries(test_qmm PRIVATE dynacore)
+  # CpuDevice attention: the SME prompt-chunk path vs the per-row path.
+  add_executable(test_cpu_attention tests/test_cpu_attention.cpp)
+  target_link_libraries(test_cpu_attention PRIVATE dynacore)
   add_executable(test_thread_pool tests/test_thread_pool.cpp)
   target_link_libraries(test_thread_pool PRIVATE dynacore)
   # GPU device through pinned ggml (docs/gpu-backend.md); skips without a GPU backend.

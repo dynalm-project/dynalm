@@ -1,5 +1,7 @@
 #include "runtime/engine.h"
 
+#include "dynacore/cpu/qmm.h"
+
 #include "dynacore/ir/passes.h"
 #include "dynacore/ir/recording_device.h"
 #include "dynacore/gpu/ggml_device.h"
@@ -175,20 +177,31 @@ void prefault_weights(const TensorRegistry& weights, int64_t weight_bytes, Threa
 }  // namespace
 
 std::string_view execution_mode_name(ExecutionMode m) {
-  return m == ExecutionMode::kCompiled ? "compiled" : "reference";
+  switch (m) {
+    case ExecutionMode::kCompiled: return "compiled";
+    case ExecutionMode::kAuto: return "auto";
+    case ExecutionMode::kReference: break;
+  }
+  return "reference";
 }
 
 Result<ExecutionMode> parse_execution_mode(std::string_view s) {
-  if (s == "reference" || s == "auto") return ExecutionMode::kReference;
+  if (s == "reference") return ExecutionMode::kReference;
+  if (s == "auto") return ExecutionMode::kAuto;
   if (s == "compiled") return ExecutionMode::kCompiled;
-  return InvalidArgument("unknown execution mode '" + std::string(s) + "' (reference, compiled)");
+  return InvalidArgument("unknown execution mode '" + std::string(s) + "' (auto, reference, compiled)");
+}
+
+bool native_cpu_default() {
+  return dynacore::qmm::accelerated() && dynacore::qmm::sme_gemm() != nullptr && KernelPlan::defaults().qmm &&
+         KernelPlan::defaults().sme_min_rows > 0;
 }
 
 Status apply_backend_choice(std::string_view choice, EngineOptions& o) {
   if (choice == "native-cpu") return InvalidArgument(std::string(kNativeCpuRetired));  // `o` unchanged
   o.backend_auto = choice == "auto" || choice == "gpu";
   o.backend_require_gpu = choice == "gpu";
-  o.cpu_ggml = choice == "auto" || choice == "cpu";
+  o.cpu_ggml = (choice == "auto" || choice == "cpu") && !native_cpu_default();
   if (o.backend_auto) {
     o.backend = DeviceKind::kCpu;
     return Status::Ok();
@@ -237,9 +250,13 @@ Result<std::unique_ptr<Engine>> Engine::create_on(EngineOptions opts) {
   // Default threads: every physical core, except for ggml's CPU kernels on a
   // hybrid CPU: they split work evenly and meet at barriers, so efficiency cores
   // hold back the step (M4 Pro, 1.5B decode: 12 threads 81 tok/s, 8 P-cores 138).
-  // DynaCore's pool hands out chunks dynamically and keeps all cores.
+  // The same for DynaCore's qmm kernels: decode matmuls give every thread an
+  // equal share (KernelPlan::gemv_min_chunk_bytes), and CPU suite v1 was
+  // measured on the performance cores. DynaCore's other kernels hand out
+  // chunks dynamically and keep all cores.
   int threads = opts.threads > 0 ? opts.threads : cpu_info().physical_cores;
-  if (opts.threads <= 0 && opts.backend == DeviceKind::kGgmlCpu && cpu_info().performance_cores > 0) {
+  const bool qmm_cpu = opts.backend == DeviceKind::kCpu && dynacore::qmm::accelerated() && KernelPlan::defaults().qmm;
+  if (opts.threads <= 0 && (opts.backend == DeviceKind::kGgmlCpu || qmm_cpu) && cpu_info().performance_cores > 0) {
     threads = cpu_info().performance_cores;
   }
   // A thread count measured by `dynalm autotune --run` on this machine and
@@ -259,8 +276,14 @@ Result<std::unique_ptr<Engine>> Engine::create_on(EngineOptions opts) {
   // is never driven op by op: its steps always go through the recorder.
   const bool segment_device = e->backend_->segment_executor() != nullptr;
   if (segment_device && opts.execution != ExecutionMode::kCompiled) {
-    LOG_INFO("Execution: compiled (required by the {} device)", e->backend_->name());
+    if (opts.execution == ExecutionMode::kReference) LOG_INFO("Execution: compiled (required by the {} device)", e->backend_->name());
     opts.execution = ExecutionMode::kCompiled;
+  }
+  if (opts.execution == ExecutionMode::kAuto) {
+    // The CPU with qmm kernels: compiled (fused regions); otherwise reference.
+    opts.execution = opts.backend == DeviceKind::kCpu && dynacore::qmm::accelerated() && KernelPlan::defaults().qmm
+                         ? ExecutionMode::kCompiled
+                         : ExecutionMode::kReference;
   }
   // Device defaults (explicit settings always win). Solo-prefill steps carry
   // no decode rows, so a larger GPU chunk cannot stall running streams; mixed
@@ -270,7 +293,19 @@ Result<std::unique_ptr<Engine>> Engine::create_on(EngineOptions opts) {
   // its 64-row mixed steps took 11x a decode step (ITL p99 193 ms at 4 users,
   // test/results/perf-diag-20261020).
   const bool gpu_device = segment_device && e->backend_->device().type != dynacore::DeviceType::kCpu;
-  if (opts.scheduler.solo_prefill_chunk < 0) opts.scheduler.solo_prefill_chunk = segment_device ? kGpuSoloPrefillChunk : 0;
+  const bool cpu_sme = !segment_device && opts.backend == DeviceKind::kCpu && dynacore::qmm::sme_gemm() != nullptr &&
+                       KernelPlan::defaults().qmm && KernelPlan::defaults().sme_min_rows > 0;
+  const bool solo_default = opts.scheduler.solo_prefill_chunk < 0;
+  if (solo_default) {
+    opts.scheduler.solo_prefill_chunk = segment_device ? kGpuSoloPrefillChunk : cpu_sme ? kCpuSmeSoloPrefillChunk : 0;
+  }
+  // Prefill bursts with the device's own solo chunk only (an explicit
+  // --solo-prefill-chunk keeps the plain solo semantics).
+  if (cpu_sme && solo_default && opts.device_scheduler_defaults && opts.scheduler.policy == SchedulerPolicy::kBalanced &&
+      opts.scheduler.prefill_burst_max_stall_ms == 0) {
+    opts.scheduler.prefill_burst_max_stall_ms = kCpuSmePrefillBurstStallMs;
+    opts.scheduler.solo_prefill_split = true;
+  }
   if (gpu_device && opts.device_scheduler_defaults && opts.scheduler.policy == SchedulerPolicy::kBalanced) {
     opts.scheduler.prefill_token_budget = kGpuMixedPrefillBudget;
     opts.scheduler.max_prefill_chunk = kGpuMaxPrefillChunk;
@@ -289,7 +324,9 @@ Result<std::unique_ptr<Engine>> Engine::create_on(EngineOptions opts) {
   // +0.04%, mean KL 0.0012). x86: the plan default (4), the measured AVX2 crossover.
   int32_t int8_rows = opts.int8_decode_rows;
 #if defined(__aarch64__) || defined(_M_ARM64)
-  if (int8_rows < 0 && opts.backend == DeviceKind::kCpu) int8_rows = kNeonInt8Rows;
+  if (int8_rows < 0 && opts.backend == DeviceKind::kCpu) {
+    int8_rows = dynacore::qmm::accelerated() && KernelPlan::defaults().qmm ? kQmmInt8Rows : kNeonInt8Rows;
+  }
 #endif
   if (opts.execution == ExecutionMode::kCompiled) {
     auto rec = std::make_unique<dynacore::ir::RecordingDevice>(*e->backend_, dynacore::ir::RecordingDevice::Mode::kDeferred);
@@ -386,6 +423,9 @@ Result<std::unique_ptr<Engine>> Engine::create_on(EngineOptions opts) {
     if (opts.scheduler.spec_k <= 0) opts.scheduler.spec_k = 4;
     LOG_INFO("Speculative decoding: draft model {} ({}), up to {} drafts per stream",
              dc.name.empty() ? dc.architecture : dc.name, e->draft_model_->quantization, opts.scheduler.spec_k);
+  }
+  if (!gpu_device && !segment_device && opts.scheduler.prefix_cache_max_blocks == 0) {
+    opts.scheduler.prefix_cache_max_blocks = std::max<int32_t>(1, e->kv_->num_blocks() / kCpuPrefixCacheShare);
   }
   e->scheduler_ = std::make_unique<Scheduler>(*e->transformer_, *e->kv_, *e->model_->tokenizer, opts.scheduler);
   if (e->drafter_) e->scheduler_->set_draft_model(e->drafter_.get());
