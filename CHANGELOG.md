@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-10-25
+## [0.3.0] - 2026-10-26
 
 DynaLM's own CPU engine (no ggml in the CPU path) and the CPU performance work measured on the
 fixed CPU suite v1 (docs/perf/cpu-suite-v1.md; development measurements and the controlled runs:
