@@ -47,13 +47,17 @@ namespace dynalm {
 //   kCompiled   ops are recorded as DynaCore IR, compiled (canonicalize,
 //               kernel selection, fusion) at every sync point and executed;
 //               any compiler failure runs the recorded ops unchanged.
-enum class ExecutionMode : uint8_t { kReference, kCompiled };
+//   kAuto       (default) compiled on devices that run whole segments (GPUs)
+//               and on the CPU where DynaCore's qmm kernels run (its fused
+//               QKV / gated-MLP regions measured ~9% faster per decode step
+//               on an M4 Pro); reference elsewhere.
+enum class ExecutionMode : uint8_t { kReference, kCompiled, kAuto };
 std::string_view execution_mode_name(ExecutionMode m);
 Result<ExecutionMode> parse_execution_mode(std::string_view s);
 
 struct EngineOptions {
   std::string model_path;
-  ExecutionMode execution = ExecutionMode::kReference;
+  ExecutionMode execution = ExecutionMode::kAuto;
   int threads = 0;              // 0 = physical cores
   int64_t kv_tokens = 0;        // KV capacity in tokens; 0 = auto (auto_kv_tokens)
   DeviceKind backend = DeviceKind::kCpu;
@@ -91,11 +95,17 @@ struct EngineOptions {
 // Applies a device choice from --backend / --cpu / --gpu, `runtime.device` or
 // DYNALM_BACKEND to `o`: "auto" (a GPU when one runs the model, else the
 // CPU), "gpu" (any built-in GPU, never the CPU), "cpu" (ggml's CPU kernels
-// when available, see cpu_ggml), "ggml-cpu" (ggml's, no fallback), or a named
-// GPU ("metal", "vulkan", "cuda"). "native-cpu" is not a public backend in
-// this release (kNativeCpuRetired): DynaCore's CPU kernels run only through
+// when available, see cpu_ggml; DynaCore's where native_cpu_default()),
+// "ggml-cpu" (ggml's, no fallback), or a named GPU ("metal", "vulkan",
+// "cuda"). "native-cpu" is not a public backend in this release
+// (kNativeCpuRetired): elsewhere DynaCore's CPU kernels run through
 // --mode exact / safe and as the CPU fallback (cpu_ggml).
 Status apply_backend_choice(std::string_view choice, EngineOptions& o);
+// True where DynaCore's CPU kernels are the default CPU path ("auto" / "cpu")
+// even with ggml-cpu built in: CPUs with qmm kernels and the SME tier (Apple
+// M4 class), the CPUs CPU suite v1 measured (docs/perf/cpu-suite-v1.md).
+// Other CPUs keep ggml's kernels by default until measured.
+bool native_cpu_default();
 
 // The error for `--backend native-cpu` (and `runtime.device: native-cpu` in a
 // config file written for an earlier version). Never a silent redirect.
@@ -108,6 +118,20 @@ inline constexpr std::string_view kNativeCpuRetired =
 // (SchedulerConfig::solo_prefill_chunk == -1). Chosen by measurement on the
 // Metal backend (docs/gpu-backend.md, section 0); the CPU default stays 0.
 inline constexpr int32_t kGpuSoloPrefillChunk = 256;
+// Solo-prefill chunk on DynaCore's CPU device where the SME panel gemm runs
+// prefill (qmm::sme_gemm): it dequantizes every weight once per step, so a
+// lone prompt runs best in large steps (steps without decode rows only).
+inline constexpr int32_t kCpuSmeSoloPrefillChunk = 512;
+// ...and prefill bursts there (SchedulerConfig::prefill_burst_max_stall_ms),
+// with the solo budget shared by concurrent prompts (solo_prefill_split).
+inline constexpr int32_t kCpuSmePrefillBurstStallMs = 2000;
+// Prefix-cache retention on DynaCore's CPU device when none is configured
+// (SchedulerConfig::prefix_cache_max_blocks == 0): at most 1 / this of the KV
+// pool. The pool is allocated lazily (pages become resident when written), so
+// unbounded retention of finished prompts made the whole pool resident over a
+// long run; blocks the cache gives up return to the free list and are reused
+// first, so resident KV stays near what live requests plus this share need.
+inline constexpr int32_t kCpuPrefixCacheShare = 4;
 // GPU profile of the balanced policy (docs/gpu-backend.md, section 0): on the
 // GPU a forward step pays the full weight read whatever its row count, so the
 // CPU-tuned mixed-step limits (64 prompt tokens, 32 per sequence, DD-079
@@ -132,6 +156,11 @@ inline constexpr int32_t kGpuProtectedPrefillMin = 64;
 // int8 activation rows on DynaCore's ARM64 CPU kernels when not configured
 // (EngineOptions::int8_decode_rows = -1); x86 keeps KernelPlan's 4.
 inline constexpr int32_t kNeonInt8Rows = 64;
+// The same where DynaCore's qmm kernels run (dynacore/cpu/qmm.h, ARM with
+// SDOT): no row limit. qmm computes each row with decode's arithmetic at any
+// batch size (int8 per-32 / int16 per-32 activations), and its gemm beats the
+// fp32 expand GEMM at every prefill size measured (bench_qmm).
+inline constexpr int32_t kQmmInt8Rows = 1 << 30;
 
 struct GenerateParams {
   int32_t max_tokens = 256;

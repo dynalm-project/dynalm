@@ -26,7 +26,7 @@ model:
 
 runtime:
   device: auto               # auto (a built-in GPU that runs the model, else CPU) | cpu | ggml-cpu | metal | vulkan | cuda
-  threads: auto              # auto = physical cores
+  threads: auto              # auto = physical cores (performance cores on hybrid CPUs)
   context_length: 8192       # KV cache tokens; auto = sized from free RAM
   batch_tokens: 256          # max tokens per forward pass
   int8_decode: 4             # int8 activations for matmuls of <= N rows; 0 = off (DD-053)
@@ -80,7 +80,7 @@ The older flat format, with one `key = value` per line using option names, still
 | runtime.context_length | `--ctx` | auto |
 | runtime.batch_tokens | `--batch` | 256 |
 | runtime.int8_decode | `--int8-decode` | 4 |
-| runtime.execution | `--execution` (reference, compiled) | reference |
+| runtime.execution | `--execution` (auto, reference, compiled) | auto: compiled on GPUs and on CPUs with DynaCore's qmm kernels, reference elsewhere |
 | scheduler.max_concurrent_requests | `--max-active` | 64 |
 | scheduler.policy | `--policy` | balanced |
 | kv_cache.dtype | `--kv` (f16, f32, q8_0) | f16 |

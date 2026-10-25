@@ -64,7 +64,7 @@ void usage() {
                "  --step-trace FILE     append the scheduler's per-step and per-request trace (JSON lines)\n"
                "  --batch N             max tokens per forward pass (default: budgets + 1, min 256 and the solo chunk)\n"
                "  --policy P            balanced | latency | throughput (in-process, DD-061)\n"
-               "  --execution MODE      reference (default) | compiled (in-process; DD-072)\n"
+               "  --execution MODE      auto (default: compiled on GPUs and qmm CPUs) | reference | compiled (in-process; DD-072)\n"
                "  --gpu / --cpu         in-process device (default auto: GPU first, else CPU)\n"
                "  --backend B           auto | gpu | cpu | ggml-cpu | metal | vulkan | cuda (in-process)\n"
                "  --mode M              auto | performance | exact | safe (in-process; see dynalm autotune)\n"
@@ -108,7 +108,7 @@ int cmd_benchmark(std::span<const std::string_view> args) {
   double arrival_rate = 0;
   int seed = 1, warmup_requests = 0, prompt_base = 0;
   SchedulerPolicy policy = SchedulerPolicy::kBalanced;
-  ExecutionMode execution = ExecutionMode::kReference;
+  ExecutionMode execution = ExecutionMode::kAuto;
   EngineOptions device;  // --backend / --cpu / --gpu (default auto)
   (void)apply_backend_choice("auto", device);
   TuneMode mode = TuneMode::kAuto;

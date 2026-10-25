@@ -35,6 +35,7 @@
 #include "api/json.h"
 #include "chat_template/chat_template.h"
 #include "diagnostics/doctor.h"
+#include "dynacore/cpu/qmm.h"
 #include "dynacore/gpu/ggml_device.h"
 #include "dynacore/hardware/process_stats.h"
 #include "loader/model_loader.h"
@@ -231,6 +232,59 @@ void test_solo_prefill_never_stalls_decode(DeviceKind dev) {
   (void)solo_steps;
 }
 
+// Prefill bursts (SchedulerConfig::prefill_burst_max_stall_ms): while B's
+// prompt prefills, steps carry no decode rows (A waits) as long as A has not
+// waited for the bound; with a 1 ms bound A is served in mixed steps instead.
+// Either way A's greedy text is what it is alone, and A is never dropped.
+void test_prefill_burst(DeviceKind dev) {
+  const std::string alone = [&] {
+    auto e = make_engine(dev);
+    return gen(*e, kPrompts[0], 120).text;
+  }();
+  for (int32_t bound : {600000, 1}) {
+    EngineOptions o;
+    o.model_path = g_model;
+    o.backend = dev;
+    o.threads = 2;
+    o.kv_tokens = 2048;
+    o.int8_decode_rows = 0;
+    o.scheduler.solo_prefill_chunk = 128;
+    o.scheduler.prefill_burst_max_stall_ms = bound;
+    o.scheduler.trace = true;
+    auto e = Engine::create(o);
+    CHECK(e.ok());
+    CHECK((*e)->scheduler_config().prefill_burst_max_stall_ms == bound);
+    auto a = (*e)->generate_text(kPrompts[0], false, greedy(120));
+    CHECK(a.ok());
+    StreamEvent ev;
+    CHECK((*a)->next(ev, std::chrono::milliseconds(60000)));  // A is decoding
+    std::string text_a = ev.text;
+    auto b = (*e)->generate_text(std::string(900, 'z'), false, greedy(4));  // long prompt
+    CHECK(b.ok());
+    const Out oa = drain(*a), ob = drain(*b);
+    text_a += oa.text;
+    CHECK(oa.finish == StreamFinish::kLength && ob.finish == StreamFinish::kLength);
+    CHECK(text_a == alone);
+    const uint64_t a_id = (*a)->id();
+    int burst_steps = 0, mixed_steps = 0;
+    for (const StepTrace& st : (*e)->take_step_trace()) {
+      bool a_row = false, b_rows = false;
+      for (const StepTraceRow& r : st.rows) {
+        if (r.request_id == a_id && r.decode) a_row = true;
+        if (r.request_id != a_id && !r.decode) b_rows = true;
+      }
+      if (b_rows && !a_row && st.decode_rows == 0) ++burst_steps;
+      if (b_rows && a_row) ++mixed_steps;
+    }
+    if (bound > 1) {
+      CHECK(burst_steps > 0 && mixed_steps == 0);  // B's prompt never shared a step with A's decode rows
+      CHECK((*e)->stats().scheduler.steps_prefill_burst > 0);
+    } else {
+      CHECK(mixed_steps > 0);  // the bound expired at once: A kept decoding next to B's prompt
+    }
+  }
+}
+
 // Speculative decoding in the batch (SchedulerConfig::spec_k): the
 // same greedy text as plain decoding, alone and with several streams in one
 // batch; drafts were scored and some accepted (the tiny model loops, so
@@ -343,8 +397,9 @@ void test_predictive_mixed_budget() {
 // Scheduler profile per device (Engine::create_on): the GPU's mixed-step
 // profile (kGpuMixedPrefillBudget etc.) only on a GPU; the CPU kinds,
 // ggml-cpu included, keep the balanced CPU budgets. The solo-prefill chunk
-// follows the execution model: on for graph devices (GPU and ggml-cpu), off
-// for DynaCore's CPU kernels. Explicit budgets replace the device profile.
+// follows the execution model: on for graph devices (GPU and ggml-cpu); on
+// DynaCore's CPU kernels kCpuSmeSoloPrefillChunk where the SME panel gemm runs
+// prefill, else off. Explicit budgets replace the device profile.
 void test_scheduler_profile(bool gpu_usable, DeviceKind gpu_kind) {
   const SchedulerConfig def;
   auto cpu_budgets = [&](const SchedulerConfig& s) {
@@ -353,7 +408,8 @@ void test_scheduler_profile(bool gpu_usable, DeviceKind gpu_kind) {
            s.decode_protect_predictive == def.decode_protect_predictive;
   };
   CHECK(cpu_budgets(make_engine(DeviceKind::kCpu)->scheduler_config()));
-  CHECK(make_engine(DeviceKind::kCpu)->scheduler_config().solo_prefill_chunk == 0);
+  const bool sme = dynacore::qmm::sme_gemm() != nullptr && KernelPlan::defaults().qmm && KernelPlan::defaults().sme_min_rows > 0;
+  CHECK(make_engine(DeviceKind::kCpu)->scheduler_config().solo_prefill_chunk == (sme ? kCpuSmeSoloPrefillChunk : 0));
   if (ggml_cpu_usable()) {
     const SchedulerConfig s = make_engine(DeviceKind::kGgmlCpu)->scheduler_config();
     CHECK(cpu_budgets(s));
@@ -723,7 +779,8 @@ void test_device_selection(const std::string& dir, bool gpu_usable, DeviceKind g
     o.backend_auto = automatic;
     return Engine::create(o);
   };
-  auto is_gpu = [](const Engine& e) { return e.backend_name().rfind("CPU", 0) != 0; };
+  // By device kind: on the CPU the name can be "compiled/CPU" (--execution auto).
+  auto is_gpu = [](const Engine& e) { return e.device_kind() != DeviceKind::kCpu && e.device_kind() != DeviceKind::kGgmlCpu; };
   {
     auto e = on(g_model, true, DeviceKind::kCpu);  // `backend` is ignored by auto
     CHECK(e.ok());
@@ -747,9 +804,10 @@ void test_device_selection(const std::string& dir, bool gpu_usable, DeviceKind g
     CHECK(apply_backend_choice("auto", o).ok() && o.backend_auto && !o.backend_require_gpu);
     CHECK(apply_backend_choice("metal", o).ok() && !o.backend_auto && o.backend == DeviceKind::kMetal);
     CHECK(!apply_backend_choice("tpu", o).ok());
-    // cpu: ggml's CPU kernels when built in. native-cpu is not a public backend in this
-    // release: a clear error (the same for a config file's runtime.device), never a redirect.
-    CHECK(apply_backend_choice("cpu", o).ok() && o.cpu_ggml && o.backend == DeviceKind::kCpu);
+    // cpu: ggml's CPU kernels when built in, DynaCore's where native_cpu_default(). native-cpu
+    // is not a public backend in this release: a clear error (the same for a config file's
+    // runtime.device), never a redirect.
+    CHECK(apply_backend_choice("cpu", o).ok() && o.cpu_ggml == !native_cpu_default() && o.backend == DeviceKind::kCpu);
     {
       EngineOptions before = o;
       const Status st = apply_backend_choice("native-cpu", o);
@@ -757,7 +815,7 @@ void test_device_selection(const std::string& dir, bool gpu_usable, DeviceKind g
             st.message().find("--mode exact") != std::string::npos);
       CHECK(o.backend == before.backend && o.backend_auto == before.backend_auto && o.cpu_ggml == before.cpu_ggml);
     }
-    CHECK(apply_backend_choice("auto", o).ok() && o.cpu_ggml);
+    CHECK(apply_backend_choice("auto", o).ok() && o.cpu_ggml == !native_cpu_default());
     CHECK(apply_backend_choice("ggml-cpu", o).ok() && o.backend == DeviceKind::kGgmlCpu);
     // cpu, and cpu with --mode exact (DynaCore's kernels, DD-053).
     for (const bool exact : {false, true}) {
@@ -770,7 +828,7 @@ void test_device_selection(const std::string& dir, bool gpu_usable, DeviceKind g
       auto e = Engine::create(c);
       CHECK(e.ok());
       const bool ggml = (*e)->backend_name().find("ggml-CPU") != std::string::npos;
-      CHECK(ggml == (!exact && ggml_cpu_usable()));
+      CHECK(ggml == (!exact && ggml_cpu_usable() && !native_cpu_default()));
       const Out a = gen(**e, kPrompts[0], 8), b = gen(**e, kPrompts[0], 8);
       CHECK(a.finish == StreamFinish::kLength && a.tokens == 8 && a.text == b.text);
     }
@@ -817,7 +875,7 @@ void test_autotune(const std::filesystem::path& dir) {
   {
     EngineOptions o;
     CHECK(apply_backend_choice("auto", o).ok());
-    CHECK(apply_tune_mode(TuneMode::kAuto, o).ok() && o.backend_auto && o.cpu_ggml);
+    CHECK(apply_tune_mode(TuneMode::kAuto, o).ok() && o.backend_auto && o.cpu_ggml == !native_cpu_default());
     CHECK(apply_tune_mode(TuneMode::kExact, o).ok() && o.backend_auto && !o.cpu_ggml);  // GPUs stay, ggml-cpu goes
     CHECK(apply_tune_mode(TuneMode::kSafe, o).ok());
     CHECK(!o.backend_auto && o.backend == DeviceKind::kCpu && !o.cpu_ggml && o.int8_decode_rows == 0);
@@ -1135,6 +1193,9 @@ void test_tokenizer_support(const std::filesystem::path& dir) {
 // is computed exactly once, in order (contiguous positions), and finishes; a
 // lone request afterwards has no mixed steps.
 void test_mixed_step_protection(DeviceKind dev) {
+  // The mixed-step controller itself: prefill bursts (on by default where the
+  // CPU runs prefill on SME) would keep the prompts out of A's steps.
+  set_env("DYNALM_PREFILL_BURST_MS", "0");
   for (const char* predictive : {"1", "0"}) {
     set_env("DYNALM_DECODE_PREDICTIVE", predictive);
     auto e = make_engine(dev, /*prefix_cache=*/false, /*solo=*/-1, /*trace=*/true);
@@ -1182,6 +1243,7 @@ void test_mixed_step_protection(DeviceKind dev) {
     for (const StepTrace& st : e->take_step_trace()) CHECK(!(st.decode_rows > 0 && st.prefill_rows > 0));
   }
   set_env("DYNALM_DECODE_PREDICTIVE", "");
+  set_env("DYNALM_PREFILL_BURST_MS", "");
 }
 
 int main() {
@@ -1222,6 +1284,7 @@ int main() {
     test_cancel_deadline_errors(*e);
     std::printf("  cancellation, deadline, invalid requests; later requests unaffected\n");
     test_solo_prefill_never_stalls_decode(DeviceKind::kCpu);
+    test_prefill_burst(DeviceKind::kCpu);
     std::printf("  solo prefill never stalls a decoding stream (scheduler trace)\n");
     test_mixed_step_protection(DeviceKind::kCpu);
     if (ggml_cpu_usable()) test_mixed_step_protection(DeviceKind::kGgmlCpu);

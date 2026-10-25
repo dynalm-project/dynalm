@@ -10,6 +10,7 @@
 #include "config/config.h"
 #include "dynacore/cpu/cpu_device.h"
 #include "dynacore/device/device_registry.h"
+#include "dynacore/cpu/qmm.h"
 #include "dynacore/gpu/ggml_device.h"
 #include "dynacore/execution/thread_pool.h"
 #include "dynacore/hardware/cpu_info.h"
@@ -19,6 +20,7 @@
 #include "dynacore/version.h"
 #include "registry/model_registry.h"
 #include "runtime/autotune.h"
+#include "runtime/engine.h"
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -178,12 +180,18 @@ DoctorReport collect_doctor_report() {
   r.kernel = std::string(isa_name(isa));
   r.threads = cpu.physical_cores > 0 ? cpu.physical_cores : 1;
   r.ggml_threads = cpu.performance_cores > 0 ? cpu.performance_cores : r.threads;
+  // DynaCore's qmm kernels default to the performance cores too (Engine::create_on).
+  if (dynacore::qmm::accelerated() && KernelPlan::defaults().qmm) r.threads = r.ggml_threads;
   // `--backend auto`: the first built-in GPU with a device (models it cannot
   // run fall back to the CPU), else the CPU (ggml's kernels when built in).
   for (const DoctorReport::GpuBackend& g : r.gpu_backends) {
     if (!g.devices.empty() && r.device.empty()) r.device = g.provider + " GPU (" + g.devices.front() + ")";
   }
-  if (r.device.empty()) r.device = r.ggml_cpu_usable ? "CPU (ggml kernels)" : "CPU (DynaCore kernels, " + r.kernel + ")";
+  if (r.device.empty()) {
+    r.device = r.ggml_cpu_usable && !native_cpu_default() ? "CPU (ggml kernels)"
+                                 : "CPU (DynaCore kernels, " + r.kernel +
+                                       (dynacore::qmm::accelerated() ? std::string(", qmm ") + dynacore::qmm::best_kernels().name : "") + ")";
+  }
 
   r.autotune_cache = tune_cache_path();
   const TuneCache tc = load_tune_cache(r.autotune_cache, &r.autotune_status);
@@ -254,8 +262,16 @@ std::string format_doctor_text(const DoctorReport& r) {
   std::string have, missing;
   for (const auto& [name, on] : r.isa) (on ? have : missing) += (on ? have : missing).empty() ? name : " " + name;
   line("CPU features:", (have.empty() ? "none" : have) + (missing.empty() ? "" : "  (not available: " + missing + ")"));
-  std::string backends = "DynaCore CPU (" + r.kernel + ", --mode exact)";
-  if (r.ggml_cpu) backends += r.ggml_cpu_usable ? ", cpu (ggml kernels)" : ", cpu (ggml kernels: not usable, this CPU lacks AVX2/FMA/F16C)";
+  // The native CPU path: DynaCore's kernels, with the qmm quantized matmuls
+  // where the CPU accelerates them (the default CPU path of a build without
+  // ggml-cpu; --mode exact otherwise).
+  const std::string qmm = dynacore::qmm::accelerated() ? std::string(", qmm ") + dynacore::qmm::best_kernels().name : "";
+  // With ggml-cpu built in, DynaCore's kernels are the default CPU path only
+  // where native_cpu_default() (SME CPUs); elsewhere `cpu` means ggml's.
+  const bool native_default = native_cpu_default();
+  std::string backends = "DynaCore CPU (" + r.kernel + qmm + (r.ggml_cpu ? native_default ? ", default CPU path)" : ", --mode exact)" : ")");
+  const std::string ggml_name = native_default ? ", ggml-cpu (ggml kernels" : ", cpu (ggml kernels";
+  if (r.ggml_cpu) backends += ggml_name + (r.ggml_cpu_usable ? ")" : ": not usable, this CPU lacks AVX2/FMA/F16C)");
   for (const DoctorReport::GpuBackend& g : r.gpu_backends) backends += ", " + g.provider;
   line("Backends:", backends + (r.isa_note.empty() ? "" : "  [" + r.isa_note + "]"));
   line("Default:", r.device + "  (--backend auto)");

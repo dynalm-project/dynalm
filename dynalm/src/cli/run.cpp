@@ -40,7 +40,7 @@ void usage() {
                "  --raw                 use the prompt as-is (no chat template)\n"
                "  --system TEXT         system message (chat mode)\n"
                "  --stop TEXT           stop string (repeatable; never printed)\n"
-               "  -t, --threads N       worker threads (default: physical cores)\n"
+               "  -t, --threads N       worker threads (default: physical cores; P-cores on hybrid CPUs)\n"
                "  -c, --ctx N           KV cache capacity in tokens (default 4096)\n"
                "  --batch N             max tokens per forward pass (default 256)\n"
                "  --kv f16|f32|q8_0     KV cache dtype (default f16; q8_0 halves its memory)\n"
@@ -50,7 +50,7 @@ void usage() {
                "  --backend B           auto (default: GPU first, else CPU) | gpu | cpu | ggml-cpu | metal | vulkan | cuda\n"
                "  --mode M              auto (default) | performance | exact (DD-053 accuracy everywhere)\n"
                "                        | safe (fp32 CPU reference kernels); see dynalm autotune\n"
-               "  --execution MODE      reference (default) | compiled: DynaCore IR + fusion (DD-072)\n"
+               "  --execution MODE      auto (default: compiled on GPUs and qmm CPUs) | reference | compiled: DynaCore IR + fusion (DD-072)\n"
                "  --no-stream           print only the final text\n"
                "sampling (default: greedy; chat: temp 0.8, top-k 40, top-p 0.9, repeat-penalty 1.1):\n"
                "  --temp T              temperature (0 = greedy; also --temperature)\n"
@@ -350,7 +350,7 @@ int cmd_run(std::span<const std::string_view> raw_args) {
   LOG_INFO("Weights: {:.1f} MiB mmapped, KV cache: {:.1f} MiB ({} tokens, {})", lm.weight_bytes / kMiB,
            e.kv_geometry().total_bytes() / kMiB, ctx, dtype_name(opts.kv_dtype));
   if (const auto ps = e.prepack_stats(); ps.tensors > 0 || ps.skipped > 0) {
-    LOG_INFO("Repacked {} K-quant tensors for multi-row decode: {:.1f} MiB extra in {:.0f} ms ({} left unpacked by the "
+    LOG_INFO("Repacked {} quantized tensors for the CPU kernels: {:.1f} MiB in {:.0f} ms ({} left in file layout by the "
              "memory budget)",
              ps.tensors, static_cast<double>(ps.packed_bytes) / kMiB, ps.ms, ps.skipped);
   }

@@ -178,6 +178,18 @@ struct SchedulerConfig {
   // sequences).
   // `--solo-prefill-split` (serve: DYNALM_SOLO_PREFILL_SPLIT).
   bool solo_prefill_split = false;
+  // Prefill bursts (0 = off; the Engine turns it on for DynaCore's CPU device
+  // where the SME panel gemm runs prefill, kCpuSmePrefillBurstStallMs): while
+  // prompts are prefilling, steps carry prompt rows only, with the solo budget
+  // shared as in solo_prefill_split, and decoding streams wait; once one has
+  // waited this long since its last token, the next step is a regular mixed
+  // step. On a CPU every prompt row costs its full share of the matmuls, so
+  // small prompt chunks folded into decode steps stall every one of those
+  // steps and run the prompt at a fraction of the large-chunk rate; bursts
+  // keep decode steps at decode cost and prompts at the large-chunk rate, and
+  // concurrent prompts finish together. `--prefill-burst-ms N`
+  // (DYNALM_PREFILL_BURST_MS).
+  int32_t prefill_burst_max_stall_ms = 0;
   // EXPERIMENTAL (default kFifo): the order in which prompts share the prefill
   // budget of a step. kFifo = priority, then admission order (as always).
   // kShortestRemaining = priority, then fewest prompt tokens still to compute,
@@ -266,6 +278,7 @@ struct SchedulerStats {
   uint64_t steps_solo_prefill = 0;     // steps planned with the solo-prefill chunk and budget
   double forward_solo_prefill_ms = 0;    // forward time of the steps counted in steps_solo_prefill
   double solo_prefill_step_ms_max = 0;   // longest such step (since the scheduler started)
+  uint64_t steps_prefill_burst = 0;  // prompt-only steps while streams waited (prefill_burst_max_stall_ms)
   uint64_t steps_solo_prefill_skipped = 0;  // steps without decode rows that kept the regular chunk
                                             // because several prompts were prefilling (FIFO mode)
   uint64_t steps_prefill_srpt = 0;  // steps planned in shortest-remaining order with >= 2 prompts prefilling
@@ -313,6 +326,7 @@ class Scheduler {
     int64_t arrival_ns = 0;
     int64_t deadline_ns = 0;  // 0 = none
     uint64_t last_step = 0;   // last step this sequence got decode rows (fairness)
+    int64_t last_token_ns = 0;  // when it last produced a token (prefill bursts)
     int32_t cached_blocks = 0;  // full blocks already offered to the prefix cache
     std::unique_ptr<Sampler> sampler;  // null: greedy
     int64_t admit_ns = 0;       // latest admission (prefill aging)
