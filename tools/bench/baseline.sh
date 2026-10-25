@@ -33,10 +33,13 @@ MODELS_DIR=${MODELS_DIR:-$HOME/.dynalm/models}
 THREADS=${THREADS:-$(sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || sysctl -n hw.physicalcpu)}
 CTX=${CTX:-4096}
 MAX_LOAD=${MAX_LOAD:-3}
+# REQUIRE_AC=0: development A/B only (battery or Low Power Mode allowed; still waits for the load
+# limit). The manifest and every start line say so; such runs are never release results.
+REQUIRE_AC=${REQUIRE_AC:-1}
 OUT=""; MODELS="1.5b"; DEVICES="gpu"; ENGINES="dynalm llama ollama"; ROUNDS=3
-SINGLE_PROMPTS=128,512,2048; OUTPUT=128; MULTI_PROMPT=512
-GPU_CONC=4,8,16; CPU_CONC=4,8
-SINGLE_REQ=4; MULTI_MIN=16; MULTI_PER_USER=4
+SINGLE_PROMPTS=${SINGLE_PROMPTS:-128,512,2048}; OUTPUT=128; MULTI_PROMPT=512
+GPU_CONC=${GPU_CONC:-4,8,16}; CPU_CONC=${CPU_CONC:-4,8}
+SINGLE_REQ=${SINGLE_REQ:-4}; MULTI_MIN=${MULTI_MIN:-16}; MULTI_PER_USER=${MULTI_PER_USER:-4}
 # Engine order: random (round 1 shuffled per model/device, seeded by ORDER_SEED; then rotated, logged) or rotate (the old order).
 ORDER=${ORDER:-random}; ORDER_SEED=${ORDER_SEED:-1}
 # Seconds to idle before each model/device block (thermal recovery after the previous block).
@@ -87,6 +90,7 @@ for m in $MODELS; do [[ -s $(model_file "$m") ]] || die "model $m missing: $(mod
   echo "machine: $(sysctl -n machdep.cpu.brand_string), $(($(sysctl -n hw.memsize) / 1073741824)) GiB, $(system_profiler SPDisplaysDataType 2>/dev/null | awk -F': ' '/Total Number of Cores/{print $2" GPU cores"; exit}')"
   echo "os: macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
   echo "threads: $THREADS  ctx per user: $CTX  rounds: $ROUNDS  max load: $MAX_LOAD"
+  ((REQUIRE_AC)) || echo "conditions: NOT controlled (REQUIRE_AC=0, development A/B; not a release result)"
   # Build flags that decide the CPU kernels (DYNALM_BUILD / LLAMA_BUILD: build dirs with a CMakeCache.txt).
   for b in "dynalm:${DYNALM_BUILD:-}" "llama.cpp:${LLAMA_BUILD:-}"; do
     n=${b%%:*}; dir=${b#*:}
@@ -115,8 +119,8 @@ gate() {  # tag
     batt=$(pmset -g batt | head -1)
     mode=$(pmset -g | awk '/ powermode /{print $2}')
     load=$(sysctl -n vm.loadavg | awk '{print $2}')
-    if [[ $batt == *"AC Power"* && $mode == 0 ]] && awk -v l="$load" -v m="$MAX_LOAD" 'BEGIN{exit !(l < m)}'; then
-      echo "$(date +%T) $1 start: AC, powermode $mode, load $load (waited ${waited}s)" >> "$OUT/conditions.log"
+    if { ((!REQUIRE_AC)) || [[ $batt == *"AC Power"* && $mode == 0 ]]; } && awk -v l="$load" -v m="$MAX_LOAD" 'BEGIN{exit !(l < m)}'; then
+      echo "$(date +%T) $1 start: $([[ $batt == *"AC Power"* ]] && echo AC || echo BATTERY), powermode $mode, load $load (waited ${waited}s)$( ((REQUIRE_AC)) || echo ' [uncontrolled]')" >> "$OUT/conditions.log"
       return
     fi
     ((waited % 60 == 0)) && echo "$(date +%T) $1 waiting: $batt | powermode $mode | load $load" | tee -a "$OUT/conditions.log"
@@ -166,7 +170,7 @@ run_one() {  # engine device model round
   local ran="?"
   case $eng in
     dynalm) grep -q "Device: compiled/Metal" "$log" && ran=gpu
-            grep -qE "Device: (compiled/ggml-CPU|CPU)" "$log" && ran=cpu ;;
+            grep -qE "Device: (compiled/ggml-CPU|compiled/CPU|CPU)" "$log" && ran=cpu ;;
     llama) grep -q "MTL0_Mapped model buffer\|MTL0 model buffer" "$log" && ran=gpu
            [[ $ran == "?" ]] && grep -q "CPU_Mapped model buffer\|CPU_REPACK model buffer" "$log" && ! grep -q "using device MTL" "$log" && ran=cpu ;;
   esac
