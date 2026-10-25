@@ -8,6 +8,7 @@
 //     chunk, as llama-perplexity clears its cache; a reused pool hands blocks back
 //     newest first, so attention adds the same cells in another order)
 //   BENCH_TOKENS=1: print the text's token ids instead (tokenizer comparisons)
+//   BENCH_INT8_ROWS=n: native CPU int8 activation row limit (0 = fp32 reference)
 //   BENCH_KLD_BASE=<file>: also write DynaLM's scored log-probabilities in
 //     llama-perplexity's --kl-divergence-base format, so that
 //       llama-perplexity -m <model.gguf> -c <ctx> --kl-divergence-base <file> --kl-divergence
@@ -115,6 +116,14 @@ int main(int argc, char** argv) {
   try {
     auto tf = Transformer::create(c, (*lm)->weights, *dev, ctx, ctx);
     if (!tf.ok()) throw std::runtime_error(tf.status().to_string());
+    // BENCH_INT8_ROWS=n: int8 activation row limit of the native CPU plan, as
+    // the engine sets it (0 = fp32 everywhere, the reference arithmetic).
+    if (const char* ir = std::getenv("BENCH_INT8_ROWS"); ir != nullptr && *ir != '\0') {
+      KernelPlan base = KernelPlan::defaults();
+      base.int8_decode_max_rows = static_cast<int32_t>(std::atol(ir));
+      (*tf)->set_kernel_base(base);
+      std::printf("kernel plan: int8 rows %d, qmm %s\n", base.int8_decode_max_rows, base.qmm ? "on" : "off");
+    }
 
     std::vector<TokenId> tokens = (*lm)->tokenizer->encode(text, /*add_special=*/true, false);
     const TokenId bos = (*lm)->tokenizer->bos();

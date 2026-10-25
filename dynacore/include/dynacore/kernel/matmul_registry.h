@@ -32,6 +32,9 @@ namespace dynacore {
 // Priority order: earlier ids win when several are eligible.
 enum class MatmulKernelId : uint8_t {
   kExternal,              // a registered external kernel (KernelPlan::external_matmul)
+  kQmmGemm,               // native qmm matrix kernel (qmm.h; i8mm), prefill-sized batches
+  kQmmGemv,               // native qmm gemv tiles (qmm.h; SDOT / USDOT), decode-sized batches
+  kSmeGemm,               // SME fp32 panel gemm (qmm.h; exact weights, fp32 activations), prefill-sized batches
   kInt8PrefillX8,         // int8 sub-scaled on the interleaved Q4_K copy above decode sizes (DD-078; fails DD-053, off)
   kInt8SubscaledX8Rows8,  // int8 sub-scaled, interleaved copy, 8-row tiles (experimental, off)
   kInt8SubscaledX8,       // int8 sub-scaled on the interleaved Q4_K copy (DD-077/078)
@@ -109,6 +112,11 @@ struct MatmulCaps {
   bool dot_q16s_x8_q4_rows8 = false, split_act16 = false;
   bool dot_q16_rows = false;
   bool external_eligible = false;  // some registered external kernel accepts this call
+  // qmm (qmm.h): an accelerated tier supports this weight type and k, with
+  // int8 / int16 activations, and has a matrix gemm kernel.
+  bool qmm_int8 = false, qmm_int16 = false, qmm_gemm = false;
+  // SME fp32 panel gemm (qmm::sme_gemm) for this weight type and k.
+  bool sme_f32 = false;
 };
 
 enum class MatmulReject : uint8_t {

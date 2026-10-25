@@ -26,6 +26,7 @@ in this repository.
 | `msvc-release`, `linux-release`, `linux-clang-release`, `macos-release` | release builds with benchmarks |
 | `msvc-asan`, `linux-asan-ubsan`, `linux-tsan` | sanitizers |
 | `core-only` | DynaCore alone (`DYNALM_CORE_ONLY=ON`): proves DynaCore builds without `dynalm/` |
+| `macos-native`, `linux-native` | strict native (`DYNALM_NATIVE_ONLY=ON`): DynaLM's own CPU kernels only; no ggml / llama.cpp code is fetched, built or linked |
 
 ## Options
 
@@ -34,10 +35,11 @@ in this repository.
 | `ENABLE_BENCHMARKS`, `ENABLE_SERVER` | ON | components |
 | `ENABLE_AVX2` / `ENABLE_AVX512` / `ENABLE_AMX` | ON / OFF / OFF | x86-64 kernel tiers (selected at run time; off on other CPUs) |
 | `ENABLE_NEON` | ON | ARM64 kernel tier. Its int8 kernels use the dot-product instructions (built with `+dotprod`, selected at run time when the CPU has them); MSVC and clang-cl builds have no dot-product kernels and run them in fp32 |
+| `DYNALM_NATIVE_ONLY` | OFF | strict native mode: turns every ggml backend off and refuses to configure if one is requested (`ENABLE_GGML_CPU`, `ENABLE_METAL`, `ENABLE_VULKAN`, `ENABLE_CUDA`). Check a build with `tools/ci/check_native.sh <build dir>` |
 | `ENABLE_METAL` | OFF | Metal GPU backend (Apple Silicon); preset `macos-metal` |
 | `ENABLE_VULKAN` | OFF | Vulkan GPU backend (AMD, Intel, NVIDIA, Qualcomm; macOS through MoltenVK). Needs the Vulkan headers, loader, `glslc` and SPIRV-Headers. Presets `linux-vulkan`, `msvc-vulkan`, `macos-vulkan` |
 | `ENABLE_CUDA` | OFF | CUDA GPU backend (NVIDIA). Needs the CUDA toolkit; `CMAKE_CUDA_ARCHITECTURES` picks GPU generations. Presets `linux-cuda`, `msvc-cuda` |
-| `ENABLE_GGML_CPU` | ON (OFF with CMake < 3.28 or MSVC on ARM64) | ggml's CPU kernels as the default CPU path (`--cpu`): about 4× faster, llama.cpp-level accuracy. GPU builds always include them. OFF: the CPU uses DynaLM's native kernels only, and no ggml is fetched. On x86-64 they need AVX2, FMA and F16C (otherwise the native kernels run) |
+| `ENABLE_GGML_CPU` | ON (OFF with CMake < 3.28 or MSVC on ARM64) | ggml's CPU kernels as the default CPU path (`--cpu`) on CPUs without SME (on SME CPUs, Apple M4 class, DynaLM's own kernels are the default and ggml's stay available as `--backend ggml-cpu`): llama.cpp-level accuracy. GPU builds always include them. OFF: the CPU uses DynaLM's native kernels only, and no ggml is fetched. On x86-64 they need AVX2, FMA and F16C (otherwise the native kernels run) |
 | `DYNALM_GGML_NATIVE` | OFF | build ggml's CPU kernels for this machine's CPU only (as llama.cpp does by default): faster locally, not portable. Keep OFF for packages. On Linux / Windows ARM64 the portable build targets ARMv8.0, without ggml's dot-product and repacked kernels (they are chosen at compile time); ON adds them for the build machine |
 | `ENABLE_HIP` | OFF | not implemented (configure error); use `ENABLE_VULKAN` for AMD GPUs |
 
@@ -64,6 +66,9 @@ the CPU is slower than on other ARM64 systems.
   empty prefix, and runs these checks on the installed binaries.
 - The `core-only` preset builds DynaCore without `dynalm/`, so any dependency of DynaCore on
   DynaLM fails to compile; the CI job `boundary` runs it.
+- `tools/ci/check_native.sh <build dir>` proves a strict native build (`macos-native`,
+  `linux-native`) has no ggml / llama.cpp code: cache options, no fetched sources or built
+  libraries, no linked library and no ggml / llama C symbol in `dynalm` / `dynacorec`.
 
 ## Test executables
 

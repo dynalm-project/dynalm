@@ -1,5 +1,7 @@
 #include "dynacore/ir/passes.h"
 
+#include "dynacore/cpu/qmm.h"
+
 #include <algorithm>
 #include <map>
 #include <set>
@@ -136,6 +138,8 @@ CostModel CostModel::from(const KernelPlan& plan, int32_t threads) {
   cm.threads = threads;
   cm.int8_max_rows = plan.int8_decode_max_rows;
   cm.expand_min_rows = plan.expand_min_rows;
+  cm.qmm = plan.qmm && qmm::accelerated();
+  cm.qmm_gemm_min_rows = plan.qmm_gemm_min_rows;
   return cm;
 }
 
@@ -162,7 +166,14 @@ void select_kernels(Graph& g, const CostModel& cm) {
       const int64_t k = x.shape[1].known() ? x.shape[1].size : 0;
       const std::string dt(dtype_name(w.dtype));
       const int64_t int8_rows = op.int_attr("int8_rows", cm.int8_max_rows);
-      if (w.quantized() && m <= int8_rows && k % 32 == 0) op.kernel = "cpu.int8_dot." + dt;
+      const int64_t int16_rows = op.int_attr("int16_rows", 0);
+      // As CpuDevice selects (matmul_registry.cpp): qmm first, with the
+      // activation precision the op's plan allows.
+      const bool qmm_ok = cm.qmm && w.quantized() && qmm::supports(w.dtype) && k % 32 == 0;
+      const std::string shape = m >= cm.qmm_gemm_min_rows ? "cpu.qmm_gemm" : "cpu.qmm_gemv";
+      if (qmm_ok && int8_rows > 0 && m <= int8_rows) op.kernel = shape + "." + dt;
+      else if (qmm_ok && int8_rows <= 0 && int16_rows > 0 && m <= int16_rows) op.kernel = shape + "16." + dt;
+      else if (w.quantized() && m <= int8_rows && k % 32 == 0) op.kernel = "cpu.int8_dot." + dt;
       else if (m >= cm.expand_min_rows && w.dtype != DType::kF32) op.kernel = "cpu.panel_gemm." + dt;
       else op.kernel = "cpu.fused_dot." + dt;
     } else if (op.kind == OpKind::kGqa) {
@@ -192,7 +203,7 @@ ExecPlan plan_execution(Graph& g, const FusionOptions& opts, const CostModel& cm
   // DD-072), so those stay separate.
   auto decode_shaped = [&](int32_t j) {
     const Op& o = g.op(j);
-    if (!o.kernel.empty()) return o.kernel.rfind("cpu.int8_dot.", 0) == 0;
+    if (!o.kernel.empty()) return o.kernel.rfind("cpu.int8_dot.", 0) == 0 || o.kernel.rfind("cpu.qmm_gemv", 0) == 0;
     return rows_of(g, o) <= o.int_attr("int8_rows", cm.int8_max_rows);
   };
   while (i < nops) {

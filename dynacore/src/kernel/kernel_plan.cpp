@@ -32,6 +32,9 @@ const KernelPlan& KernelPlan::defaults() {
     if (const char* c = env_value("DYNACORE_MATMUL_CHUNKS")) {
       p.matmul_chunks_per_thread = static_cast<int32_t>(std::max<long>(1, std::strtol(c, nullptr, 10)));
     }
+    if (const char* gc = env_value("DYNACORE_GEMV_CHUNK_KB")) {
+      p.gemv_min_chunk_bytes = std::max<long>(0, std::strtol(gc, nullptr, 10)) * 1024;
+    }
     if (const char* sb = env_value("DYNACORE_INT8_SUPERBLOCK")) {
       p.int8_superblock_min_rows = static_cast<int32_t>(std::max<long>(0, std::strtol(sb, nullptr, 10)));
     }
@@ -61,8 +64,22 @@ const KernelPlan& KernelPlan::defaults() {
         std::fprintf(stderr, "dynacore: ignoring DYNACORE_MATMUL_DISABLE: %s\n", st.message().c_str());
       }
     }
+    if (const char* q = env_value("DYNACORE_QMM")) p.qmm = std::strtol(q, nullptr, 10) != 0;
+    if (const char* qg = env_value("DYNACORE_QMM_GEMM_ROWS")) {
+      p.qmm_gemm_min_rows = static_cast<int32_t>(std::max<long>(1, std::strtol(qg, nullptr, 10)));
+    }
+    if (const char* sr = env_value("DYNACORE_SME_ROWS")) {
+      p.sme_min_rows = static_cast<int32_t>(std::max<long>(0, std::strtol(sr, nullptr, 10)));
+    }
+    if (const char* sa = env_value("DYNACORE_SME_ATTN_ROWS")) {
+      p.sme_attention_min_rows = static_cast<int32_t>(std::max<long>(0, std::strtol(sa, nullptr, 10)));
+    }
+    if (const char* d8 = env_value("DYNACORE_INT8_FFN_DOWN")) p.int8_ffn_down = std::strtol(d8, nullptr, 10) != 0;
     if (const char* d = env_value("DYNACORE_INT16_FFN_DOWN")) p.int16_ffn_down = std::strtol(d, nullptr, 10) != 0;
     if (const char* g = env_value("DYNACORE_ATTN_GROUPED")) p.grouped_attention = std::strtol(g, nullptr, 10) != 0;
+    if (const char* ac = env_value("DYNACORE_ATTN_CHUNK")) {
+      p.attention_chunk = static_cast<int32_t>(std::max<long>(16, std::strtol(ac, nullptr, 10)));
+    }
     if (const char* kc = env_value("DYNACORE_GEMM_KC")) {
       const long v = std::strtol(kc, nullptr, 10);
       p.gemm_k_block = v > 0 ? static_cast<int32_t>(v / 256 * 256) : 0;

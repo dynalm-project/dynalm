@@ -11,6 +11,7 @@
 
 #include "dynacore/device/device.h"
 #include "dynacore/cpu/cpu_kernels.h"
+#include "dynacore/cpu/qmm.h"
 #include "dynacore/kernel/matmul_registry.h"
 #include "dynacore/quantization/repack.h"
 #include "dynacore/hardware/isa.h"
@@ -108,6 +109,45 @@ class CpuDevice final : public Device {
   std::vector<ActBlockQ16> act_q16_;  // int16 activations (DD-076)
   std::vector<ActBlockQ16S> act_q16s_;  // split-byte int16 activations (int16_split_prefill_x8)
   std::vector<ExternalMatmulKernel> external_;
+  // Native quantized matmul tier (qmm.h); null where only the scalar
+  // reference exists (it is slower than the int8 / fp32 paths here).
+  const qmm::Kernels* qmm_ = nullptr;
+  std::vector<qmm::ActBuffer> qmm_acts_;  // quantized activations (scheduler thread only)
+  // SME fp32 panel gemm (qmm.h) for prefill-sized batches; null without SME.
+  const qmm::SmeGemm* sme_ = nullptr;
+  std::vector<float> sme_x_;  // activation panels of the current sme_matmul (scheduler thread only)
+  // Every job through the SME panel gemm in one parallel region: activation
+  // panels packed once per distinct x, each weight panel dequantized once and
+  // multiplied with all of them.
+  void sme_matmul(std::span<const MatmulJob> jobs);
+  // Prompt-chunk attention on the SME tiles (flash attention: 32 query rows x
+  // the group's heads against 128-key blocks, online softmax), for runs of
+  // consecutive positions of one sequence [begin, end) of the batch rows.
+  // K/V are converted into fp32 panels once per call (per slab of KV heads,
+  // at most kSmeAttnPanelBytes at a time) and shared by every query block.
+  struct SmeRun {
+    size_t begin, end;
+  };
+  void attention_sme(const AttentionParams& p, std::span<const SmeRun> runs);
+  std::vector<float> sme_kv_panels_;  // scheduler thread only
+  // The per-row attention path for the rows in `sel` (empty: every row).
+  void attention_rows(const AttentionParams& p, std::span<const size_t> sel);
+  // Packed (4-row interleaved) copies made by prepack_weight for the qmm
+  // kernels, by weight data pointer; once a weight is packed every qmm call
+  // reads the copy (rows past n / 4 * 4 the original), never the original.
+  struct QmmPacked {
+    std::vector<std::byte> data;
+    int64_t n = 0, k = 0;
+  };
+  std::unordered_map<const void*, QmmPacked> qmm_packed_;
+  const std::byte* find_qmm_packed(const void* w, int64_t n, int64_t k) const;
+  // Quantizes x (rows may be strided) into buf for the qmm kernels.
+  void qmm_quantize(qmm::ActBuffer& buf, const TensorView& x, qmm::ActMode mode, bool paired);
+  // y[.., n0..n1) for one weight (no threading; the caller partitions n).
+  // `packed`: the weight's packed copy (find_qmm_packed), or null. Resolved
+  // once per matmul by the caller, never per work item.
+  void qmm_columns(const qmm::Acts& a, bool gemm, const TensorView& w, const std::byte* packed, const TensorView& y,
+                   const float* bias, int64_t n0, int64_t n1) const;
   // True when this tier has SIMD integer-dot kernels; the generic tier's are
   // reference implementations, slower than its fused fp32 path.
   bool int8_accelerated_ = false;  // split-K attention partials (scheduler thread only)

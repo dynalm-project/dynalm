@@ -15,6 +15,15 @@ using Acc = MatmulAccuracy;
 constexpr MatmulKernelDesc kKernels[] = {
     {Id::kExternal, "external", "any (provider)", "provider predicate", "provider", "provider", "provider", Acc::kExternal,
      false, "DynaLM Next extension point; KernelPlan::external_matmul"},
+    {Id::kQmmGemm, "qmm_gemm", "Q4_0/1, Q5_0/1, Q8_0, IQ4_NL, Q3_K-Q6_K, IQ4_XS", ">= qmm_gemm_min_rows, <= the op's int8 / int16 rows",
+     "NEON i8mm", "original (unpacked per 4-row group)", "int8 per-32 / int16 per-32", Acc::kValidated, true,
+     "qmm.h: activation arithmetic of int8_per32 (DD-053) / int16_rows (DD-076); test_qmm"},
+    {Id::kQmmGemv, "qmm_gemv", "Q4_0/1, Q5_0/1, Q8_0, IQ4_NL, Q3_K-Q6_K, IQ4_XS", "<= the op's int8 / int16 rows",
+     "NEON SDOT (int16: i8mm USDOT)", "original", "int8 per-32 / int16 per-32", Acc::kValidated, true,
+     "qmm.h: activation arithmetic of int8_per32 (DD-053) / int16_rows (DD-076); test_qmm"},
+    {Id::kSmeGemm, "sme_f32_gemm", "Q4_0/1, Q5_0/1, Q8_0, IQ4_NL, Q3_K-Q6_K, IQ4_XS", ">= sme_min_rows",
+     "SME (FMOPA, streaming mode)", "fp32 panels dequantized per call (packed copy where present)", "fp32",
+     Acc::kReference, true, "qmm.h: exact weights, fp32 activations; test_qmm vs a double-precision product"},
     {Id::kInt8PrefillX8, "int8_prefill_x8", "Q4_K", "above decode rows, <= q4_repack_max_rows; N >= q4_repack_min_out",
      "AVX2", "interleaved Q4_Kx8", "int8 sub-scaled", Acc::kFailsDd053, false,
      "DD-078: Qwen3-4B prefill perplexity +2.9-3.4%"},
@@ -287,6 +296,49 @@ MatmulSelection select_matmul(const MatmulShape& s, const KernelPlan& p, const M
     sel.reject(Id::kExternal, MatmulReject::kNoKernel);
   } else if (sel.allowed(Id::kExternal)) {
     return sel.pick(Id::kExternal, MatmulActFormat::kF32, false);
+  }
+
+  // SME fp32 panel gemm (qmm.h): fp32 activations, so no op-level precision
+  // rule limits it; only the batch size.
+  if (c.sme_f32 && p.sme_min_rows > 0) {
+    if (m < p.sme_min_rows) {
+      sel.reject(Id::kSmeGemm, MatmulReject::kRows);
+    } else if (sel.allowed(Id::kSmeGemm)) {
+      return sel.pick(Id::kSmeGemm, MatmulActFormat::kF32, false);
+    }
+  } else {
+    sel.reject(Id::kSmeGemm, p.sme_min_rows > 0 ? MatmulReject::kNoKernel : MatmulReject::kNotEnabled);
+  }
+
+  // Native qmm kernels (qmm.h): the activation precision the op allows.
+  {
+    MatmulReject why = MatmulReject::kNotEnabled;
+    MatmulActFormat act = MatmulActFormat::kF32;
+    if (!p.qmm) {
+      why = MatmulReject::kNotEnabled;
+    } else if (p.int8_decode_max_rows > 0) {
+      // The op's int8 row limit applies as to every int8 kernel (the engine
+      // lifts it on CPUs with qmm kernels: their per-row arithmetic does not
+      // depend on the batch).
+      act = c.qmm_int8 && m <= p.int8_decode_max_rows ? MatmulActFormat::kInt8Per32 : MatmulActFormat::kF32;
+      why = c.qmm_int8 ? MatmulReject::kRows : MatmulReject::kNoKernel;
+    } else if (p.int16_decode_max_rows > 0) {
+      act = c.qmm_int16 && m <= p.int16_decode_max_rows ? MatmulActFormat::kInt16 : MatmulActFormat::kF32;
+      why = c.qmm_int16 ? MatmulReject::kRows : MatmulReject::kNoKernel;
+    }
+    if (act == MatmulActFormat::kF32) {
+      sel.reject(Id::kQmmGemm, why);
+      sel.reject(Id::kQmmGemv, why);
+    } else {
+      if (m < p.qmm_gemm_min_rows) {
+        sel.reject(Id::kQmmGemm, MatmulReject::kRows);
+      } else if (!c.qmm_gemm) {
+        sel.reject(Id::kQmmGemm, MatmulReject::kNoKernel);
+      } else if (sel.allowed(Id::kQmmGemm)) {
+        return sel.pick(Id::kQmmGemm, act, false);
+      }
+      if (sel.allowed(Id::kQmmGemv)) return sel.pick(Id::kQmmGemv, act, false);
+    }
   }
 
   if (select_int8(s, c, sel)) return sel.sel;

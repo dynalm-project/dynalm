@@ -57,6 +57,16 @@
       }
     },
     {
+      "name": "linux-native",
+      "inherits": "base",
+      "displayName": "Linux, strict native (no ggml): DynaCore CPU",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "DYNALM_NATIVE_ONLY": "ON",
+        "ENABLE_GGML_CPU": "OFF"
+      }
+    },
+    {
       "name": "linux-debug",
       "inherits": "base",
       "cacheVariables": {
@@ -102,6 +112,21 @@
       },
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "macos-native",
+      "inherits": "base",
+      "displayName": "macOS, strict native (no ggml): DynaCore CPU",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "DYNALM_NATIVE_ONLY": "ON",
+        "ENABLE_GGML_CPU": "OFF"
       }
     },
     {
@@ -222,6 +247,10 @@
       "configurePreset": "linux-release"
     },
     {
+      "name": "linux-native",
+      "configurePreset": "linux-native"
+    },
+    {
       "name": "linux-asan-ubsan",
       "configurePreset": "linux-asan-ubsan"
     },
@@ -236,6 +265,10 @@
     {
       "name": "macos-release",
       "configurePreset": "macos-release"
+    },
+    {
+      "name": "macos-native",
+      "configurePreset": "macos-native"
     },
     {
       "name": "macos-metal",

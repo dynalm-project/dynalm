@@ -13,9 +13,14 @@
 #include <tuple>
 #include <vector>
 
+#if defined(__ARM_NEON) && defined(__aarch64__)
+#include <arm_neon.h>
+#endif
+
 #include "dynacore/base/fast_exp.h"
 #include "dynacore/base/timer.h"
 #include "dynacore/hardware/cpu_info.h"
+#include "dynacore/memory/mapped_file.h"
 #include "dynacore/quantization/quant_formats.h"
 #include "dynacore/tensor/fp16.h"
 
@@ -97,7 +102,25 @@ size_t grain_for(size_t n, int threads, size_t min_grain, int32_t chunks_per_thr
   return std::max(min_grain, n / (static_cast<size_t>(threads) * static_cast<size_t>(chunks_per_thread)));
 }
 
-inline float silu(float x) { return x / (1.0f + std::exp(-x)); }
+// Grain for a decode-shaped matmul (KernelPlan::gemv_min_chunk_bytes): the
+// same number of chunks for every thread, as many as fit min_bytes of weights
+// each (at least 1, at most chunks_per_thread). A chunk count just above the
+// thread count would leave some threads with twice the work of the others.
+size_t gemv_grain(size_t n, size_t item_bytes, int threads, int32_t chunks_per_thread, int64_t min_bytes) {
+  if (min_bytes <= 0 || item_bytes == 0) return grain_for(n, threads, 1, chunks_per_thread);
+  const auto t = static_cast<size_t>(std::max(threads, 1));
+  const size_t per_thread =
+      std::clamp<size_t>(n * item_bytes / t / static_cast<size_t>(min_bytes), 1, static_cast<size_t>(std::max(chunks_per_thread, 1)));
+  return std::max<size_t>(1, (n + t * per_thread - 1) / (t * per_thread));
+}
+
+// x * sigmoid(x) with e = e^-|x| from exp_nonpos (no libm call, so loops of
+// it vectorize; relative error ~1e-7): x / (1 + e) for x >= 0, x e / (1 + e)
+// below.
+inline float silu(float x) {
+  const float e = exp_nonpos(-std::fabs(x));
+  return x * (x >= 0.0f ? 1.0f : e) / (1.0f + e);
+}
 inline float gelu(float x) { return 0.5f * x * (1.0f + std::erf(x * 0.70710678118654752f)); }
 inline float gelu_tanh(float x) {
   constexpr float kC = 0.7978845608028654f;  // sqrt(2/pi)
@@ -118,6 +141,66 @@ inline float apply_act(Activation a, float x) {
 CpuDevice::CpuDevice(ThreadPool& pool, CpuIsa isa)
     : pool_(pool), k_(make_cpu_kernels(isa)), name_("CPU/" + std::string(isa_name(k_.isa))) {
   int8_accelerated_ = k_.int8_simd;  // AVX2, or NEON with the dot-product instructions
+  // qmm only where a SIMD tier exists (the scalar reference is for tests);
+  // DYNACORE_ISA=generic keeps the portable kernels everywhere.
+  if (k_.isa != CpuIsa::kGeneric && qmm::accelerated()) qmm_ = &qmm::best_kernels();
+  if (qmm_ != nullptr) name_ += std::string("+qmm/") + qmm_->name;
+  if (qmm_ != nullptr) sme_ = qmm::sme_gemm();
+  if (sme_ != nullptr) name_ += std::string("+") + sme_->name;
+}
+
+void CpuDevice::qmm_quantize(qmm::ActBuffer& buf, const TensorView& x, qmm::ActMode mode, bool paired) {
+  const int64_t m = rows(x), k = cols(x);
+  buf.prepare(mode, m, k, paired);
+  const float* xp = x.data_as<const float>();
+  const int64_t xs = x.rank() == 1 ? k : x.stride(0) / static_cast<int64_t>(sizeof(float));
+  if (m >= 16) {
+    pool_.parallel_for(static_cast<size_t>(m), 4, [&](size_t b, size_t e) {
+      buf.quantize_rows(xp, xs, static_cast<int64_t>(b), static_cast<int64_t>(e), *qmm_);
+    });
+  } else {
+    buf.quantize_rows(xp, xs, 0, m, *qmm_);
+  }
+}
+
+const std::byte* CpuDevice::find_qmm_packed(const void* w, int64_t n, int64_t k) const {
+  const auto it = qmm_packed_.find(w);
+  return it != qmm_packed_.end() && it->second.n == n && it->second.k == k ? it->second.data.data() : nullptr;
+}
+
+void CpuDevice::qmm_columns(const qmm::Acts& a, bool gemm, const TensorView& w, const std::byte* packed, const TensorView& y,
+                            const float* bias, int64_t n0, int64_t n1) const {
+  const DType wt = w.dtype();
+  const int64_t rb = dtype_row_bytes(wt, a.k);
+  float* yp = y.data_as<float>();
+  const int64_t ys = y.rank() == 1 ? cols(y) : y.stride(0) / static_cast<int64_t>(sizeof(float));
+  // Packed copy: whole 4-row groups of [n0, n1) from it (n0 is a multiple of
+  // 16 here), the rows past the last group from the original.
+  if (const std::byte* pk = packed; pk != nullptr) {
+    const int64_t g0 = n0 / 4, g1 = std::min(n1, rows(w) / 4 * 4) / 4;
+    if (g1 > g0) {
+      if (gemm && qmm_->gemm_packed != nullptr) {
+        thread_local qmm::GemmScratch scratch;
+        qmm_->gemm_packed(wt, pk, a.k, g0, g1, a, yp, ys, bias, scratch);
+      } else {
+        for (int64_t r0 = 0; r0 < a.m; r0 += qmm::kGemvMaxRows) {
+          qmm_->gemv_packed(wt, pk, a.k, g0, g1, a, r0, static_cast<int>(std::min<int64_t>(qmm::kGemvMaxRows, a.m - r0)), yp, ys,
+                            bias);
+        }
+      }
+      n0 = 4 * g1;
+    }
+    if (n0 >= n1) return;
+  }
+  if (gemm) {
+    thread_local qmm::GemmScratch scratch;
+    qmm_->gemm(wt, w.data(), rb, n0, n1, a, yp, ys, bias, scratch);
+    return;
+  }
+  for (int64_t r0 = 0; r0 < a.m; r0 += qmm::kGemvMaxRows) {
+    qmm_->gemv(wt, w.data(), rb, n0, n1, a, r0, static_cast<int>(std::min<int64_t>(qmm::kGemvMaxRows, a.m - r0)), yp, ys,
+               bias);
+  }
 }
 
 Result<std::shared_ptr<Storage>> CpuDevice::allocate(size_t bytes) { return Storage::allocate_host(bytes); }
@@ -188,6 +271,47 @@ bool CpuDevice::prepack_allowed(int64_t bytes) {
 }
 
 void CpuDevice::prepack_weight(const TensorView& w, bool int16_activations) {
+  // qmm: the packed (4-row interleaved) copy for its decode kernels where the
+  // format has one; the other qmm formats read the original layout and need
+  // no copy. DYNACORE_QMM_PACK=0 keeps every weight in its file layout.
+  if (qmm_ != nullptr && KernelPlan::defaults().qmm && qmm::supports(w.dtype())) {
+    static const bool pack_on = [] {
+      const char* v = std::getenv("DYNACORE_QMM_PACK");
+      return !(v != nullptr && v[0] == '0');
+    }();
+    const int64_t n = rows(w), k = cols(w);
+    if (!pack_on || qmm_->gemv_packed == nullptr || !qmm::packable(w.dtype(), k) || n < 4 || qmm_packed_.count(w.data()) != 0) {
+      return;
+    }
+    const auto bytes = static_cast<int64_t>(qmm::packed_bytes(w.dtype(), n, k));
+    if (!prepack_allowed(bytes)) return;
+    const int64_t t0 = now_ns();
+    QmmPacked p;
+    p.n = n;
+    p.k = k;
+    p.data.resize(static_cast<size_t>(bytes));
+    const int64_t groups = n / 4, rb = dtype_row_bytes(w.dtype(), k);
+    pool_.parallel_for(static_cast<size_t>(groups), 16, [&](size_t begin, size_t end) {
+      qmm::pack_groups(w.dtype(), w.data(), rb, k, static_cast<int64_t>(begin), static_cast<int64_t>(end), p.data.data());
+    });
+    ++prepack_stats_.tensors;
+    prepack_stats_.source_bytes += n * rb;
+    prepack_stats_.packed_bytes += bytes;
+    prepack_stats_.ms += static_cast<double>(now_ns() - t0) * 1e-6;
+    qmm_packed_.emplace(w.data(), std::move(p));
+    // The qmm kernels read only the packed copy from here on, so the file
+    // pages of the original stop counting toward resident memory (they fault
+    // back in from the file if another path reads them).
+    // DYNACORE_QMM_RELEASE_SOURCE=0 keeps them resident.
+    static const bool release_on = [] {
+      const char* v = std::getenv("DYNACORE_QMM_RELEASE_SOURCE");
+      return !(v != nullptr && v[0] == '0');
+    }();
+    if (release_on) {
+      prepack_stats_.released_bytes += static_cast<int64_t>(release_file_pages(w.data(), static_cast<size_t>(n * rb)));
+    }
+    return;
+  }
   if (!int8_accelerated_ || KernelPlan::defaults().q4_repack_min_rows <= 0) return;
   const int64_t n = rows(w), k = cols(w);
   if (n % 8 != 0 || k % 256 != 0) return;
@@ -369,26 +493,83 @@ void CpuDevice::matmul_many(std::span<const MatmulJob> jobs) {
     matmul(jobs[0].x, jobs[0].w, jobs[0].bias, jobs[0].y);
     return;
   }
+  if (sme_ != nullptr) {
+    // Prefill-sized jobs on the SME panel gemm (one region for all of them);
+    // the rest below.
+    thread_local std::vector<MatmulJob> sme_jobs, rest;
+    sme_jobs.clear();
+    rest.clear();
+    for (const MatmulJob& j : jobs) {
+      const int64_t m = rows(j.x), k = cols(j.x);
+      const MatmulShape shape{m, rows(j.w), k, j.w.dtype(), true};
+      const MatmulSelection sel = select_matmul(shape, plan_, matmul_caps(j.w.dtype(), j.w.data(), rows(j.w), k, m));
+      if (sel.id == MatmulKernelId::kSmeGemm) {
+        record_matmul(sel.id, shape, -1);
+        sme_jobs.push_back(j);
+      } else {
+        rest.push_back(j);
+      }
+    }
+    if (!sme_jobs.empty()) {
+      const std::vector<MatmulJob> others = rest;  // the recursive call below reuses the thread_locals
+      sme_matmul(sme_jobs);
+      if (!others.empty()) matmul_many(others);
+      return;
+    }
+  }
   constexpr int64_t kChunk = 16;
-  enum class Path : uint8_t { kInt8, kFused, kPanel };
+  enum class Path : uint8_t { kInt8, kFused, kPanel, kQmm };
   struct JobPlan {
     Path path;
-    int64_t act_offset;       // into act_q8_ (int8 path)
+    int64_t act_offset;       // into act_q8_ (int8 path); qmm: index into qmm_acts_
     bool shares_act = false;  // reuses an earlier job's quantized activations
     Int8Kernel int8{};
+    bool qmm_gemm = false;
+    qmm::ActMode qmm_mode = qmm::ActMode::kInt8;
+    const std::byte* qmm_packed = nullptr;
   };
   thread_local std::vector<JobPlan> plans;
   thread_local std::vector<size_t> first_chunk;  // prefix sums of per-job chunk counts
   plans.clear();
   first_chunk.assign(1, 0);
   int64_t act_blocks = 0;
+  size_t qmm_buffers = 0;
+  bool decode_shaped = true;  // every job has at most qmm::kGemvMaxRows rows
+  size_t weight_bytes = 0;
   for (const MatmulJob& j : jobs) {
     const int64_t m = rows(j.x), k = cols(j.x);
     const DType wt = j.w.dtype();
+    decode_shaped = decode_shaped && m <= qmm::kGemvMaxRows;
+    weight_bytes += static_cast<size_t>(dtype_row_bytes(wt, k) * rows(j.w));
     // Rows may be strided (MoE slices of a wider buffer): quantization works
     // row by row and the GEMM tile takes a row stride, so neither needs dense x.
     JobPlan p{Path::kFused, 0, false};
     const MatmulShape shape{m, rows(j.w), k, wt, true};
+    if (qmm_ != nullptr) {
+      const MatmulSelection sq = select_matmul(shape, plan_, matmul_caps(wt, j.w.data(), rows(j.w), k, m));
+      if (sq.id == MatmulKernelId::kQmmGemm || sq.id == MatmulKernelId::kQmmGemv) {
+        record_matmul(sq.id, shape, -1);
+        p.path = Path::kQmm;
+        p.qmm_gemm = sq.id == MatmulKernelId::kQmmGemm;
+        p.qmm_mode = sq.act == MatmulActFormat::kInt16 ? qmm::ActMode::kInt16 : qmm::ActMode::kInt8;
+        p.qmm_packed = find_qmm_packed(j.w.data(), rows(j.w), k);
+        // Jobs reading the same activations (Q/K/V, gate/up) share one buffer.
+        for (size_t prev = 0; prev < plans.size(); ++prev) {
+          const MatmulJob& pj = jobs[prev];
+          if (plans[prev].path == Path::kQmm && !plans[prev].shares_act && plans[prev].qmm_mode == p.qmm_mode &&
+              plans[prev].qmm_gemm == p.qmm_gemm && pj.x.data() == j.x.data() && rows(pj.x) == m && cols(pj.x) == k &&
+              pj.x.stride(0) == j.x.stride(0)) {
+            p.act_offset = plans[prev].act_offset;
+            p.shares_act = true;
+            break;
+          }
+        }
+        if (!p.shares_act) p.act_offset = static_cast<int64_t>(qmm_buffers++);
+        plans.push_back(p);
+        first_chunk.push_back(first_chunk.back() + static_cast<size_t>((rows(j.w) + kChunk - 1) / kChunk));
+        continue;
+      }
+    }
     const MatmulSelection s8 = select_matmul_int8(shape, plan_, matmul_caps(wt, j.w.data(), rows(j.w), k, m));
     const Int8Kernel ik8 = int8_from(s8, wt, j.w.data(), rows(j.w), k, m);
     record_matmul(ik8.dot != nullptr ? s8.id
@@ -416,7 +597,12 @@ void CpuDevice::matmul_many(std::span<const MatmulJob> jobs) {
     plans.push_back(p);
     first_chunk.push_back(first_chunk.back() + static_cast<size_t>((rows(j.w) + kChunk - 1) / kChunk));
   }
-  // Quantize the int8 jobs' activations once, before the region.
+  // Quantize the int8 and qmm jobs' activations once, before the region.
+  if (qmm_acts_.size() < qmm_buffers) qmm_acts_.resize(qmm_buffers);
+  for (size_t ji = 0; ji < jobs.size(); ++ji) {
+    if (plans[ji].path != Path::kQmm || plans[ji].shares_act) continue;
+    qmm_quantize(qmm_acts_[static_cast<size_t>(plans[ji].act_offset)], jobs[ji].x, plans[ji].qmm_mode, plans[ji].qmm_gemm);
+  }
   act_q8_.resize(static_cast<size_t>(act_blocks));
   for (size_t ji = 0; ji < jobs.size(); ++ji) {
     if (plans[ji].path != Path::kInt8 || plans[ji].shares_act) continue;
@@ -429,7 +615,10 @@ void CpuDevice::matmul_many(std::span<const MatmulJob> jobs) {
   const std::vector<size_t>& offsets = first_chunk;  // read by the workers below
   const std::vector<JobPlan>& job_plans = plans;
   const ActBlockQ8* act = act_q8_.data();
-  pool_.parallel_for(total, grain_for(total, pool_.size(), 1, plan_.matmul_chunks_per_thread), [&](size_t begin, size_t end) {
+  const size_t grain = decode_shaped ? gemv_grain(total, weight_bytes / std::max<size_t>(total, 1), pool_.size(),
+                                                  plan_.matmul_chunks_per_thread, plan_.gemv_min_chunk_bytes)
+                                     : grain_for(total, pool_.size(), 1, plan_.matmul_chunks_per_thread);
+  pool_.parallel_for(total, grain, [&](size_t begin, size_t end) {
     thread_local std::vector<float> panel;
     for (size_t c = begin; c < end; ++c) {
       const size_t ji = static_cast<size_t>(std::upper_bound(offsets.begin(), offsets.end(), c) - offsets.begin()) - 1;
@@ -440,6 +629,12 @@ void CpuDevice::matmul_many(std::span<const MatmulJob> jobs) {
       const auto* wbase = static_cast<const std::byte*>(j.w.data());
       const int64_t n0 = static_cast<int64_t>(c - offsets[ji]) * kChunk, n1 = std::min(n, n0 + kChunk);
       switch (job_plans[ji].path) {
+        case Path::kQmm: {
+          // Chunks start at multiples of kChunk (16): whole qmm row groups.
+          qmm_columns(qmm_acts_[static_cast<size_t>(job_plans[ji].act_offset)].acts(), job_plans[ji].qmm_gemm, j.w,
+                      job_plans[ji].qmm_packed, j.y, nullptr, n0, n1);
+          break;
+        }
         case Path::kInt8: {
           // Chunks start at multiples of kChunk (16), so packed groups align.
           int8_rows(job_plans[ji].int8, wbase, w_row_bytes, act + job_plans[ji].act_offset, m, k, n0, n1, j.y,
@@ -503,7 +698,98 @@ MatmulCaps CpuDevice::matmul_caps(DType wt, const void* w, int64_t n, int64_t k,
   c.dot_q16s_x8_q4_rows8 = k_.dot_q16s_x8_q4_K_rows8 != nullptr;
   c.split_act16 = k_.split_act16 != nullptr;
   c.dot_q16_rows = k_.dot_q16_rows_for(wt) != nullptr;
+  if (qmm_ != nullptr && qmm::supports(wt) && k % qmm::kBlock == 0) {
+    c.qmm_int8 = true;
+    c.qmm_int16 = qmm_->int16;
+    c.qmm_gemm = qmm_->gemm != nullptr;
+    c.sme_f32 = sme_ != nullptr;
+  }
   return c;
+}
+
+void CpuDevice::sme_matmul(std::span<const MatmulJob> jobs) {
+  constexpr int64_t P = qmm::kSmePanel;
+  // Activation panels: one set per distinct x (Q/K/V and gate/up share theirs).
+  thread_local std::vector<size_t> x_of;    // per job: index of its x in xs
+  thread_local std::vector<size_t> x_base;  // per distinct x: offset into sme_x_
+  thread_local std::vector<size_t> xs;      // per distinct x: its first job
+  x_of.assign(jobs.size(), 0);
+  x_base.clear();
+  xs.clear();
+  size_t floats = 0;
+  for (size_t ji = 0; ji < jobs.size(); ++ji) {
+    const MatmulJob& j = jobs[ji];
+    size_t found = xs.size();
+    for (size_t q = 0; q < xs.size(); ++q) {
+      const MatmulJob& o = jobs[xs[q]];
+      if (o.x.data() == j.x.data() && rows(o.x) == rows(j.x) && cols(o.x) == cols(j.x) && o.x.stride(0) == j.x.stride(0)) {
+        found = q;
+        break;
+      }
+    }
+    if (found == xs.size()) {
+      xs.push_back(ji);
+      x_base.push_back(floats);
+      floats += static_cast<size_t>((rows(j.x) + P - 1) / P * P * cols(j.x));
+    }
+    x_of[ji] = found;
+  }
+  if (sme_x_.size() < floats) sme_x_.resize(floats);
+  // The workers read the caller's vectors through these (a thread_local named
+  // inside the lambdas would be the worker's own, empty, instance).
+  const std::vector<size_t>& job_x = x_of;
+  const std::vector<size_t>& base = x_base;
+  const std::vector<size_t>& first_job = xs;
+  // Pack: one work item per (distinct x, 32-row panel).
+  thread_local std::vector<size_t> pack_first;
+  pack_first.assign(1, 0);
+  for (size_t q : xs) pack_first.push_back(pack_first.back() + static_cast<size_t>((rows(jobs[q].x) + P - 1) / P));
+  const std::vector<size_t>& pack_items = pack_first;
+  pool_.parallel_for(pack_items.back(), 1, [&](size_t begin, size_t end) {
+    for (size_t it = begin; it < end; ++it) {
+      const size_t q = static_cast<size_t>(std::upper_bound(pack_items.begin(), pack_items.end(), it) - pack_items.begin()) - 1;
+      const TensorView& x = jobs[first_job[q]].x;
+      const int64_t m0 = static_cast<int64_t>(it - pack_items[q]) * P, k = cols(x);
+      sme_->pack_x(x.data_as<const float>(), x.stride(0) / static_cast<int64_t>(sizeof(float)), rows(x), k, m0,
+                   sme_x_.data() + base[q] + static_cast<size_t>(m0 * k));
+    }
+  });
+  // Multiply: one work item per (job, 32-column weight panel).
+  thread_local std::vector<size_t> first;
+  thread_local std::vector<const std::byte*> packed;
+  first.assign(1, 0);
+  packed.assign(jobs.size(), nullptr);
+  for (size_t ji = 0; ji < jobs.size(); ++ji) {
+    const MatmulJob& j = jobs[ji];
+    packed[ji] = find_qmm_packed(j.w.data(), rows(j.w), cols(j.w));
+    first.push_back(first.back() + static_cast<size_t>((rows(j.w) + P - 1) / P));
+  }
+  const std::vector<size_t>& items = first;
+  const std::vector<const std::byte*>& job_packed = packed;
+  pool_.parallel_for(items.back(), 1, [&](size_t begin, size_t end) {
+    thread_local std::vector<float> wp;  // this worker's weight panel
+    for (size_t it = begin; it < end; ++it) {
+      const size_t ji = static_cast<size_t>(std::upper_bound(items.begin(), items.end(), it) - items.begin()) - 1;
+      const MatmulJob& j = jobs[ji];
+      const int64_t m = rows(j.x), k = cols(j.x), n = rows(j.w), n0 = static_cast<int64_t>(it - items[ji]) * P;
+      const int cols_here = static_cast<int>(std::min<int64_t>(P, n - n0));
+      if (wp.size() < static_cast<size_t>(k * P)) wp.resize(static_cast<size_t>(k * P));
+      qmm::weight_panel_f32(j.w.dtype(), j.w.data(), dtype_row_bytes(j.w.dtype(), k), job_packed[ji], n, k, n0, wp.data());
+      const float* xp = sme_x_.data() + base[job_x[ji]];
+      float* y = j.y.data_as<float>();
+      const int64_t ys = j.y.stride(0) / static_cast<int64_t>(sizeof(float));
+      for (int64_t m0 = 0; m0 < m; m0 += P) {
+        sme_->block(xp + m0 * k, wp.data(), k, y + m0 * ys + n0, ys, static_cast<int>(std::min<int64_t>(P, m - m0)), cols_here);
+      }
+      if (j.bias != nullptr) {
+        const float* b = j.bias->data_as<const float>() + n0;
+        for (int64_t r = 0; r < m; ++r) {
+          float* yr = y + r * ys + n0;
+          for (int c = 0; c < cols_here; ++c) yr[c] += b[c];
+        }
+      }
+    }
+  });
 }
 
 int CpuDevice::external_for(const MatmulShape& s, const void* w) const {
@@ -606,6 +892,30 @@ void CpuDevice::run_matmul(const MatmulSelection& sel, int ext, const TensorView
   switch (sel.id) {
     case MatmulKernelId::kExternal: {
       external_[static_cast<size_t>(ext)].run(x, w, bias, y);
+      return;
+    }
+    case MatmulKernelId::kSmeGemm: {
+      const MatmulJob job{x, w, y, bias};
+      sme_matmul(std::span<const MatmulJob>(&job, 1));
+      return;
+    }
+    case MatmulKernelId::kQmmGemm:
+    case MatmulKernelId::kQmmGemv: {
+      const bool gemm = sel.id == MatmulKernelId::kQmmGemm;
+      const qmm::ActMode mode = sel.act == MatmulActFormat::kInt16 ? qmm::ActMode::kInt16 : qmm::ActMode::kInt8;
+      if (qmm_acts_.empty()) qmm_acts_.resize(1);
+      qmm_quantize(qmm_acts_[0], x, mode, gemm);
+      const qmm::Acts& a = qmm_acts_[0].acts();
+      // Work items of 16 output rows (4 qmm row groups).
+      constexpr int64_t kUnit = 16;
+      const auto items = static_cast<size_t>((n + kUnit - 1) / kUnit);
+      const std::byte* packed = find_qmm_packed(w.data(), n, k);
+      const size_t grain = gemm ? grain_for(items, pool_.size(), 1, plan_.matmul_chunks_per_thread)
+                                : gemv_grain(items, static_cast<size_t>(kUnit * dtype_row_bytes(w.dtype(), k)), pool_.size(),
+                                             plan_.matmul_chunks_per_thread, plan_.gemv_min_chunk_bytes);
+      pool_.parallel_for(items, grain, [&](size_t begin, size_t end) {
+        qmm_columns(a, gemm, w, packed, y, b, static_cast<int64_t>(begin) * kUnit, std::min<int64_t>(n, static_cast<int64_t>(end) * kUnit));
+      });
       return;
     }
     case MatmulKernelId::kInt8PrefillX8:
@@ -837,12 +1147,25 @@ void CpuDevice::run_matmul(const MatmulSelection& sel, int ext, const TensorView
 void CpuDevice::rms_norm(const TensorView& x, const TensorView& weight, float eps, const TensorView& y) {
   const int64_t m = rows(x), d = cols(x);
   const float* wv = weight.data_as<const float>();
-  pool_.parallel_for(static_cast<size_t>(m), 1, [&](size_t begin, size_t end) {
+  // Several short rows per task (per-head q/k norms are rows of head_dim).
+  const auto grain = static_cast<size_t>(std::max<int64_t>(1, 8192 / std::max<int64_t>(d, 1)));
+  pool_.parallel_for(static_cast<size_t>(m), grain, [&](size_t begin, size_t end) {
     for (size_t r = begin; r < end; ++r) {
       const float* xr = row_ptr<const float>(x, static_cast<int64_t>(r));
       float* yr = row_ptr<float>(y, static_cast<int64_t>(r));
       double ss = 0;  // double: long rows of large activations
-      for (int64_t i = 0; i < d; ++i) ss += static_cast<double>(xr[i]) * xr[i];
+      int64_t i0 = 0;
+#if defined(__aarch64__)
+      float64x2_t s0 = vdupq_n_f64(0), s1 = vdupq_n_f64(0);
+      for (; i0 + 4 <= d; i0 += 4) {
+        const float32x4_t v = vld1q_f32(xr + i0);
+        const float64x2_t lo = vcvt_f64_f32(vget_low_f32(v)), hi = vcvt_high_f64_f32(v);
+        s0 = vfmaq_f64(s0, lo, lo);
+        s1 = vfmaq_f64(s1, hi, hi);
+      }
+      ss = vaddvq_f64(vaddq_f64(s0, s1));
+#endif
+      for (; i0 < d; ++i0) ss += static_cast<double>(xr[i0]) * xr[i0];
       const float inv = static_cast<float>(1.0 / std::sqrt(ss / static_cast<double>(d) + eps));
       for (int64_t i = 0; i < d; ++i) yr[i] = xr[i] * inv * wv[i];
     }
@@ -908,29 +1231,35 @@ void CpuDevice::rope(const TensorView& x, int32_t num_heads, int32_t head_dim, s
 
 void CpuDevice::kv_store(const TensorView& k, const TensorView& v, std::span<const int32_t> positions,
                           std::span<const int32_t> row_seq, std::span<const KvLayerView> kv_views) {
-  for (size_t r = 0; r < positions.size(); ++r) {
-    const KvLayerView& kv = kv_views[static_cast<size_t>(row_seq[r])];
-    const KvGeometry& g = *kv.geom;
-    const float* kr = row_ptr<const float>(k, static_cast<int64_t>(r));
-    const float* vr = row_ptr<const float>(v, static_cast<int64_t>(r));
-    for (int32_t h = 0; h < g.num_kv_heads; ++h) {
-      const int64_t ko = kv.k_offset(positions[r], h), vo = kv.v_offset(positions[r], h);
-      const float* ks = kr + static_cast<int64_t>(h) * g.head_dim;
-      const float* vs = vr + static_cast<int64_t>(h) * g.head_dim_v;
-      if (g.dtype == DType::kF16) {
-        auto* kd = static_cast<uint16_t*>(kv.k) + ko;
-        auto* vd = static_cast<uint16_t*>(kv.v) + vo;
-        for (int32_t i = 0; i < g.head_dim; ++i) kd[i] = fp32_to_fp16(ks[i]);
-        for (int32_t i = 0; i < g.head_dim_v; ++i) vd[i] = fp32_to_fp16(vs[i]);
-      } else if (g.dtype == DType::kQ8_0) {  // DD-074
-        quant::quantize_q8_0(ks, static_cast<quant::BlockQ8_0*>(kv.k_at(ko)), g.head_dim / quant::kQK);
-        quant::quantize_q8_0(vs, static_cast<quant::BlockQ8_0*>(kv.v_at(vo)), g.head_dim_v / quant::kQK);
-      } else {
-        std::memcpy(static_cast<float*>(kv.k) + ko, ks, sizeof(float) * static_cast<size_t>(g.head_dim));
-        std::memcpy(static_cast<float*>(kv.v) + vo, vs, sizeof(float) * static_cast<size_t>(g.head_dim_v));
+  // Rows write disjoint KV slots (one position each), so prompt chunks split
+  // across the pool; decode rows stay on the calling thread.
+  const size_t nrows = positions.size();
+  const size_t grain = nrows >= 64 ? 16 : nrows;
+  pool_.parallel_for(nrows, std::max<size_t>(1, grain), [&](size_t begin, size_t end) {
+    for (size_t r = begin; r < end; ++r) {
+      const KvLayerView& kv = kv_views[static_cast<size_t>(row_seq[r])];
+      const KvGeometry& g = *kv.geom;
+      const float* kr = row_ptr<const float>(k, static_cast<int64_t>(r));
+      const float* vr = row_ptr<const float>(v, static_cast<int64_t>(r));
+      for (int32_t h = 0; h < g.num_kv_heads; ++h) {
+        const int64_t ko = kv.k_offset(positions[r], h), vo = kv.v_offset(positions[r], h);
+        const float* ks = kr + static_cast<int64_t>(h) * g.head_dim;
+        const float* vs = vr + static_cast<int64_t>(h) * g.head_dim_v;
+        if (g.dtype == DType::kF16) {
+          auto* kd = static_cast<uint16_t*>(kv.k) + ko;
+          auto* vd = static_cast<uint16_t*>(kv.v) + vo;
+          for (int32_t i = 0; i < g.head_dim; ++i) kd[i] = fp32_to_fp16(ks[i]);
+          for (int32_t i = 0; i < g.head_dim_v; ++i) vd[i] = fp32_to_fp16(vs[i]);
+        } else if (g.dtype == DType::kQ8_0) {  // DD-074
+          quant::quantize_q8_0(ks, static_cast<quant::BlockQ8_0*>(kv.k_at(ko)), g.head_dim / quant::kQK);
+          quant::quantize_q8_0(vs, static_cast<quant::BlockQ8_0*>(kv.v_at(vo)), g.head_dim_v / quant::kQK);
+        } else {
+          std::memcpy(static_cast<float*>(kv.k) + ko, ks, sizeof(float) * static_cast<size_t>(g.head_dim));
+          std::memcpy(static_cast<float*>(kv.v) + vo, vs, sizeof(float) * static_cast<size_t>(g.head_dim_v));
+        }
       }
     }
-  }
+  });
 }
 
 // Unnormalized attention over key positions [t0, t1) of one (row, head):
@@ -966,13 +1295,22 @@ void CpuDevice::attend_group(const AttentionParams& p, size_t r, int32_t kvh, in
   // one per head).
   // q8_0 KV (DD-074) is always converted: there are no q8 attention kernels.
   const bool q8 = g.dtype == DType::kQ8_0;
-  const bool convert = !f32 && (group > 1 || q8);
+  // fp16 KV with grouped kernels that read fp16 directly: no conversion.
+  const bool f16_heads = !f32 && !q8 && group > 1 && plan_.grouped_attention && k_.attn_scores_heads_f16 != nullptr &&
+                         k_.attn_accum_heads_f16 != nullptr;
+  const bool convert = !f32 && !f16_heads && (group > 1 || q8);
   const DequantFn to_f32 = k_.dequant_for(q8 ? DType::kQ8_0 : DType::kF16);
   thread_local std::vector<float> kv_f32;
   if (convert) kv_f32.resize(static_cast<size_t>(bs) * std::max(hd, hdv));
   for (int64_t t = t0; t < t1;) {
     const int64_t n = std::min<int64_t>(t1 - t, bs - t % bs);
     const int64_t off = kv.k_offset(t, kvh);
+    if (f16_heads) {
+      k_.attn_scores_heads_f16(static_cast<const uint16_t*>(kv.k_at(off)), n, hd, q0, group, p.scale,
+                               scores.data() + static_cast<size_t>(t - t0), static_cast<int64_t>(len));
+      t += n;
+      continue;
+    }
     if (convert) to_f32(kv.k_at(off), kv_f32.data(), n * hd);
     if ((f32 || convert) && group > 1 && plan_.grouped_attention) {  // all heads per k load (DD-066)
       k_.attn_scores_heads_f32(convert ? kv_f32.data() : static_cast<const float*>(kv.k) + off, n, hd, q0, group,
@@ -1008,7 +1346,7 @@ void CpuDevice::attend_group(const AttentionParams& p, size_t r, int32_t kvh, in
     const int64_t n = std::min<int64_t>(t1 - t, bs - t % bs);
     const int64_t off = kv.v_offset(t, kvh);
     if (convert) to_f32(kv.v_at(off), kv_f32.data(), n * hdv);
-    if ((f32 || convert) && group > 1 && plan_.grouped_attention) {  // all heads per v load (DD-066)
+    if ((f32 || convert || f16_heads) && group > 1 && plan_.grouped_attention) {  // all heads per v load (DD-066)
       for (int32_t gi = 0; gi < group; ++gi) {
         const float* s = scores.data() + static_cast<size_t>(gi) * len + static_cast<size_t>(t - t0);
         float* wg = w.data() + static_cast<size_t>(gi) * static_cast<size_t>(bs);
@@ -1016,8 +1354,12 @@ void CpuDevice::attend_group(const AttentionParams& p, size_t r, int32_t kvh, in
         for (int64_t j = 0; j < n; ++j) wg[j] = exp_nonpos(s[j] - m);  // vectorizes
         for (int64_t j = 0; j < n; ++j) sum_out[gi] += wg[j];
       }
-      k_.attn_accum_heads_f32(convert ? kv_f32.data() : static_cast<const float*>(kv.v) + off, n, hdv, w.data(), group,
-                              bs, acc);
+      if (f16_heads) {
+        k_.attn_accum_heads_f16(static_cast<const uint16_t*>(kv.v_at(off)), n, hdv, w.data(), group, bs, acc);
+      } else {
+        k_.attn_accum_heads_f32(convert ? kv_f32.data() : static_cast<const float*>(kv.v) + off, n, hdv, w.data(), group,
+                                bs, acc);
+      }
       t += n;
       continue;
     }
@@ -1038,22 +1380,327 @@ void CpuDevice::attend_group(const AttentionParams& p, size_t r, int32_t kvh, in
 }
 
 void CpuDevice::attention(const AttentionParams& p) {
+  const KvGeometry& g0 = *p.kv.front().geom;
+  const size_t m = p.positions.size();
+  if (sme_ != nullptr && plan_.sme_attention_min_rows > 0 && m >= static_cast<size_t>(plan_.sme_attention_min_rows) &&
+      g0.head_dim_v % qmm::kSmePanel == 0 && (p.num_heads / g0.num_kv_heads) * qmm::kSmePanel <= 2048) {
+    // Prompt chunks (runs of consecutive positions of one sequence) through
+    // the SME tiles; every other row through the per-row path below.
+    thread_local std::vector<SmeRun> runs;
+    thread_local std::vector<size_t> rest;
+    runs.clear();
+    rest.clear();
+    for (size_t r = 0; r < m;) {
+      size_t e = r + 1;
+      while (e < m && p.row_seq[e] == p.row_seq[r] && p.positions[e] == p.positions[e - 1] + 1) ++e;
+      if (e - r >= static_cast<size_t>(plan_.sme_attention_min_rows)) {
+        runs.push_back({r, e});
+      } else {
+        for (size_t i = r; i < e; ++i) rest.push_back(i);
+      }
+      r = e;
+    }
+    if (!runs.empty()) {
+      const std::vector<SmeRun> run_list = runs;
+      const std::vector<size_t> rest_rows = rest;
+      attention_sme(p, run_list);
+      if (!rest_rows.empty()) attention_rows(p, rest_rows);
+      return;
+    }
+  }
+  attention_rows(p, {});
+}
+
+namespace {
+
+// panel[d * kSmePanel + j] = src[j * dim + d] for j < n rows of `dim` floats
+// (panel already offset to the first row's column).
+void transpose_into_panel(const float* src, int64_t n, int32_t dim, float* panel) {
+  constexpr int64_t P = qmm::kSmePanel;
+  int64_t j = 0;
+#if defined(__ARM_NEON) && defined(__aarch64__)
+  for (; j + 4 <= n; j += 4) {
+    int32_t d = 0;
+    for (; d + 4 <= dim; d += 4) {
+      const float32x4_t r0 = vld1q_f32(src + (j + 0) * dim + d), r1 = vld1q_f32(src + (j + 1) * dim + d);
+      const float32x4_t r2 = vld1q_f32(src + (j + 2) * dim + d), r3 = vld1q_f32(src + (j + 3) * dim + d);
+      const float32x4_t t0 = vtrn1q_f32(r0, r1), t1 = vtrn2q_f32(r0, r1), t2 = vtrn1q_f32(r2, r3), t3 = vtrn2q_f32(r2, r3);
+      const float64x2_t u0 = vreinterpretq_f64_f32(t0), u1 = vreinterpretq_f64_f32(t1);
+      const float64x2_t u2 = vreinterpretq_f64_f32(t2), u3 = vreinterpretq_f64_f32(t3);
+      vst1q_f32(panel + (d + 0) * P + j, vreinterpretq_f32_f64(vtrn1q_f64(u0, u2)));
+      vst1q_f32(panel + (d + 1) * P + j, vreinterpretq_f32_f64(vtrn1q_f64(u1, u3)));
+      vst1q_f32(panel + (d + 2) * P + j, vreinterpretq_f32_f64(vtrn2q_f64(u0, u2)));
+      vst1q_f32(panel + (d + 3) * P + j, vreinterpretq_f32_f64(vtrn2q_f64(u1, u3)));
+    }
+    for (; d < dim; ++d) {
+      for (int64_t q = 0; q < 4; ++q) panel[d * P + j + q] = src[(j + q) * dim + d];
+    }
+  }
+#endif
+  for (; j < n; ++j) {
+    for (int32_t d = 0; d < dim; ++d) panel[d * P + j] = src[j * dim + d];
+  }
+}
+
+}  // namespace
+
+void CpuDevice::attention_sme(const AttentionParams& p, std::span<const SmeRun> runs) {
+  constexpr int64_t P = qmm::kSmePanel;
+  constexpr int64_t KB = 4 * P;  // keys per softmax step (one O round trip through ZA per step)
+  // Upper bound for the shared K/V panels of one slab of KV heads (one head
+  // per slab can exceed it at very long contexts).
+  constexpr size_t kPanelBytes = size_t{32} << 20;
+  const KvGeometry& g = *p.kv.front().geom;
+  const int32_t hd = g.head_dim, hdv = g.head_dim_v, nkv = g.num_kv_heads, group = p.num_heads / nkv;
+  const bool q8 = g.dtype == DType::kQ8_0, f32 = g.dtype == DType::kF32;
+  const DequantFn to_f32 = k_.dequant_for(q8 ? DType::kQ8_0 : DType::kF16);
+  // Keys each run reads: [klo, khi), panels of nblk 32-key blocks.
+  struct RunKeys {
+    int64_t klo, khi, nblk;
+    size_t offset;  // of this run's panels in the slab, for KV head 0 of the slab
+  };
+  std::vector<RunKeys> rk(runs.size());
+  size_t per_head = 0;  // floats of every run's panels for one KV head
+  for (size_t ri = 0; ri < runs.size(); ++ri) {
+    const int64_t first = p.positions[runs[ri].begin], last = p.positions[runs[ri].end - 1];
+    RunKeys& k = rk[ri];
+    k.klo = p.sliding_window > 0 ? std::max<int64_t>(0, first - p.sliding_window + 1) : 0;
+    k.khi = last + 1;
+    k.nblk = (k.khi - k.klo + P - 1) / P;
+    k.offset = per_head;
+    per_head += static_cast<size_t>(k.nblk * P) * static_cast<size_t>(hd + hdv);
+  }
+  const int32_t slab = static_cast<int32_t>(std::clamp<size_t>(kPanelBytes / (per_head * sizeof(float) + 1), 1, static_cast<size_t>(nkv)));
+  sme_kv_panels_.resize(per_head * static_cast<size_t>(slab));
+  float* panels = sme_kv_panels_.data();
+  // Layout per (KV head of the slab, run): K blocks kp[blk][d * 32 + j], then
+  // V by 32-dim chunk vp[c][key][32] (keys contiguous for the PV product).
+  auto k_panel = [&](int32_t hs, size_t ri, int64_t blk) {
+    return panels + static_cast<size_t>(hs) * per_head + rk[ri].offset + static_cast<size_t>(blk * P * hd);
+  };
+  auto v_panel = [&](int32_t hs, size_t ri, int32_t c) {
+    return panels + static_cast<size_t>(hs) * per_head + rk[ri].offset + static_cast<size_t>(rk[ri].nblk * P * hd) +
+           static_cast<size_t>(c) * static_cast<size_t>(rk[ri].nblk * P * P);
+  };
+
+  struct Unit {
+    size_t run;
+    int32_t kvh;
+    int64_t a;  // first row of the block, relative to the run
+  };
+  struct Fill {
+    size_t run;
+    int32_t kvh;
+    int64_t blk;
+  };
+  std::vector<Unit> units;
+  std::vector<Fill> fills;
+  for (int32_t h0 = 0; h0 < nkv; h0 += slab) {
+    const int32_t h1 = std::min(nkv, h0 + slab);
+    // Pass 1: K/V of the slab's heads into the panels, one task per 32-key block.
+    fills.clear();
+    for (size_t ri = 0; ri < runs.size(); ++ri) {
+      for (int32_t h = h0; h < h1; ++h) {
+        for (int64_t blk = 0; blk < rk[ri].nblk; ++blk) fills.push_back({ri, h, blk});
+      }
+    }
+    pool_.parallel_for(fills.size(), 4, [&](size_t begin, size_t end) {
+      thread_local std::vector<float> kv_row;
+      kv_row.resize(static_cast<size_t>(g.block_size) * std::max(hd, hdv));
+      for (size_t fi = begin; fi < end; ++fi) {
+        const Fill& f = fills[fi];
+        const KvLayerView& kv = p.kv[static_cast<size_t>(p.row_seq[runs[f.run].begin])];
+        const int32_t hs = f.kvh - h0;
+        const int64_t t0 = rk[f.run].klo + f.blk * P, nk = std::min<int64_t>(P, rk[f.run].khi - t0);
+        float* kp = k_panel(hs, f.run, f.blk);
+        for (int64_t t = t0; t < t0 + nk;) {
+          const int64_t n = std::min<int64_t>(t0 + nk - t, g.block_size - t % g.block_size);
+          const int64_t ko = kv.k_offset(t, f.kvh), vo = kv.v_offset(t, f.kvh);
+          const float* kr = f32 ? static_cast<const float*>(kv.k) + ko : kv_row.data();
+          if (!f32) to_f32(kv.k_at(ko), kv_row.data(), n * hd);
+          transpose_into_panel(kr, n, hd, kp + (t - t0));
+          const float* vr = f32 ? static_cast<const float*>(kv.v) + vo : kv_row.data();
+          if (!f32) to_f32(kv.v_at(vo), kv_row.data(), n * hdv);
+          for (int32_t c = 0; c < hdv / P; ++c) {
+            float* vp = v_panel(hs, f.run, c) + (t - rk[f.run].klo) * P;
+            for (int64_t j = 0; j < n; ++j) std::memcpy(vp + j * P, vr + j * hdv + c * P, P * sizeof(float));
+          }
+          t += n;
+        }
+        for (int64_t j = nk; j < P; ++j) {  // padding keys: zero (and masked)
+          for (int32_t d = 0; d < hd; ++d) kp[d * P + j] = 0.0f;
+          for (int32_t c = 0; c < hdv / P; ++c) std::fill_n(v_panel(hs, f.run, c) + (t0 - rk[f.run].klo + j) * P, P, 0.0f);
+        }
+      }
+    });
+
+    // Pass 2: (run, KV head, block of 32 query rows), the longest contexts first.
+    units.clear();
+    for (size_t ri = 0; ri < runs.size(); ++ri) {
+      const int64_t len = static_cast<int64_t>(runs[ri].end - runs[ri].begin);
+      for (int64_t a = 0; a < len; a += P) {
+        for (int32_t h = h0; h < h1; ++h) units.push_back({ri, h, a});
+      }
+    }
+    std::stable_sort(units.begin(), units.end(), [&](const Unit& x, const Unit& y) {
+      return p.positions[runs[x.run].begin + static_cast<size_t>(x.a)] > p.positions[runs[y.run].begin + static_cast<size_t>(y.a)];
+    });
+    pool_.parallel_for(units.size(), 1, [&](size_t begin, size_t end) {
+      thread_local std::vector<float> qp, st, o, mrow, lrow;
+      qp.resize(static_cast<size_t>(group) * hd * P);
+      st.resize(static_cast<size_t>(KB * P));
+      o.resize(static_cast<size_t>(group) * P * hdv);
+      mrow.resize(static_cast<size_t>(group) * P);
+      lrow.resize(static_cast<size_t>(group) * P);
+      for (size_t wi = begin; wi < end; ++wi) {
+        const Unit& u = units[wi];
+        const RunKeys& keys = rk[u.run];
+        const int32_t hs = u.kvh - h0;
+        const size_t r0 = runs[u.run].begin + static_cast<size_t>(u.a);
+        const int rows = static_cast<int>(std::min<int64_t>(P, static_cast<int64_t>(runs[u.run].end - r0)));
+        const int64_t pos0 = p.positions[r0], pos1 = p.positions[r0 + static_cast<size_t>(rows) - 1];
+        // Q panels, one per head of the group: qp[gi][d * 32 + i], pre-scaled.
+        for (int32_t gi = 0; gi < group; ++gi) {
+          float* qg = qp.data() + static_cast<size_t>(gi) * hd * P;
+          for (int i = 0; i < P; ++i) {
+            if (i < rows) {
+              const float* q = row_ptr<const float>(p.q, static_cast<int64_t>(r0) + i) + (static_cast<int64_t>(u.kvh) * group + gi) * hd;
+              for (int32_t d = 0; d < hd; ++d) qg[d * P + i] = q[d] * p.scale;
+            } else {
+              for (int32_t d = 0; d < hd; ++d) qg[d * P + i] = 0.0f;
+            }
+          }
+        }
+        std::fill(o.begin(), o.end(), 0.0f);
+        std::fill(mrow.begin(), mrow.end(), -INFINITY);
+        std::fill(lrow.begin(), lrow.end(), 0.0f);
+        // This block's keys, from the panel block holding its first key.
+        const int64_t lo = p.sliding_window > 0 ? std::max<int64_t>(keys.klo, pos0 - p.sliding_window + 1) : 0;
+        const int64_t hi = pos1 + 1;
+        for (int64_t t0 = keys.klo + (lo - keys.klo) / P * P; t0 < hi; t0 += KB) {
+          const int64_t nk = std::min<int64_t>(KB, hi - t0);
+          const int nsub = static_cast<int>((nk + P - 1) / P);  // 32-key blocks in this step
+          const int64_t depth = nsub * P;
+          const int64_t blk0 = (t0 - keys.klo) / P;
+          for (int32_t gi = 0; gi < group; ++gi) {
+            // S^T[j][i] = k_j . q_i for the step's keys (keys as rows: the k-major P panel of PV).
+            const float* qg = qp.data() + static_cast<size_t>(gi) * hd * P;
+            for (int b = 0; b < nsub; ++b) sme_->block(k_panel(hs, u.run, blk0 + b), qg, hd, st.data() + b * P * P, P, P, P);
+            float* mg = mrow.data() + static_cast<size_t>(gi) * P;
+            float* lg = lrow.data() + static_cast<size_t>(gi) * P;
+            // Online softmax over this step, lane i = query row i: every inner
+            // loop runs over the 32 contiguous rows (vectorizes).
+            int32_t jlo[P], jhi[P];
+            for (int i = 0; i < P; ++i) {
+              const int64_t qpos = pos0 + i;
+              jhi[i] = i < rows ? static_cast<int32_t>(std::clamp<int64_t>(qpos - t0 + 1, 0, nk)) : 0;
+              jlo[i] = p.sliding_window > 0 ? static_cast<int32_t>(std::clamp<int64_t>(qpos - p.sliding_window + 1 - t0, 0, depth)) : 0;
+            }
+            if (p.softcap > 0) {
+              for (int64_t j = 0; j < depth * P; ++j) st[static_cast<size_t>(j)] = p.softcap * std::tanh(st[static_cast<size_t>(j)] / p.softcap);
+            }
+            float mx[P], sum[P], base[P], alpha[P];
+            for (int i = 0; i < P; ++i) {
+              mx[i] = mg[i];
+              sum[i] = 0.0f;
+            }
+            // Every key of the step precedes every query row and no window:
+            // nothing to mask (rows past `rows` are never stored).
+            const bool full = p.sliding_window <= 0 && t0 + depth <= pos0 + 1;
+            if (full) {
+              for (int64_t j = 0; j < depth; ++j) {
+                const float* srow = st.data() + j * P;
+                for (int i = 0; i < P; ++i) mx[i] = std::max(mx[i], srow[i]);
+              }
+            } else {
+              for (int64_t j = 0; j < depth; ++j) {
+                float* srow = st.data() + j * P;
+                const auto jj = static_cast<int32_t>(j);
+                for (int i = 0; i < P; ++i) {
+                  const float v = jj >= jlo[i] && jj < jhi[i] ? srow[i] : -INFINITY;
+                  srow[i] = v;
+                  mx[i] = std::max(mx[i], v);
+                }
+              }
+            }
+            bool rescale = false;
+            for (int i = 0; i < P; ++i) {
+              // No valid key yet: weights 0, nothing to rescale.
+              base[i] = mx[i] == -INFINITY ? 0.0f : mx[i];
+              alpha[i] = mx[i] == -INFINITY ? 1.0f : mg[i] == -INFINITY ? 0.0f : exp_nonpos(mg[i] - mx[i]);
+              rescale |= alpha[i] != 1.0f;
+            }
+            if (full) {
+              for (int64_t j = 0; j < depth; ++j) {
+                float* srow = st.data() + j * P;
+                for (int i = 0; i < P; ++i) {
+                  const float e = exp_nonpos(srow[i] - base[i]);
+                  srow[i] = e;
+                  sum[i] += e;
+                }
+              }
+            } else {
+              for (int64_t j = 0; j < depth; ++j) {
+                float* srow = st.data() + j * P;
+                for (int i = 0; i < P; ++i) {
+                  const float v = srow[i];
+                  const float e = v == -INFINITY ? 0.0f : exp_nonpos(v - base[i]);
+                  srow[i] = e;
+                  sum[i] += e;
+                }
+              }
+            }
+            for (int i = 0; i < P; ++i) {
+              lg[i] = lg[i] * alpha[i] + sum[i];
+              mg[i] = mx[i];
+            }
+            float* og = o.data() + static_cast<size_t>(gi) * P * hdv;
+            if (rescale) {
+              for (int i = 0; i < rows; ++i) {
+                const float a = alpha[i];
+                if (a == 1.0f) continue;
+                float* orow = og + static_cast<int64_t>(i) * hdv;
+                for (int32_t d = 0; d < hdv; ++d) orow[d] *= a;
+              }
+            }
+            for (int32_t c = 0; c < hdv / P; ++c) {
+              sme_->block_acc(st.data(), v_panel(hs, u.run, c) + (t0 - keys.klo) * P, depth, og + c * P, hdv, rows, P);
+            }
+          }
+        }
+        for (int32_t gi = 0; gi < group; ++gi) {
+          const float* og = o.data() + static_cast<size_t>(gi) * P * hdv;
+          const float* lg = lrow.data() + static_cast<size_t>(gi) * P;
+          for (int i = 0; i < rows; ++i) {
+            float* out = row_ptr<float>(p.out, static_cast<int64_t>(r0) + i) + (static_cast<int64_t>(u.kvh) * group + gi) * hdv;
+            const float inv = lg[i] > 0 ? 1.0f / lg[i] : 0.0f;
+            for (int32_t d = 0; d < hdv; ++d) out[d] = og[static_cast<int64_t>(i) * hdv + d] * inv;
+          }
+        }
+      }
+    });
+  }
+}
+
+void CpuDevice::attention_rows(const AttentionParams& p, std::span<const size_t> sel) {
   const KvGeometry& g = *p.kv.front().geom;  // all sequences share the pool geometry
   const int32_t hdv = g.head_dim_v;
   const int32_t nkv = g.num_kv_heads;
   const int32_t group = p.num_heads / nkv;
-  const size_t m = p.positions.size();
+  // `sel`: the rows to compute (empty = all); index i below is the i-th of them.
+  const size_t m = sel.empty() ? p.positions.size() : sel.size();
+  auto row_of = [&](size_t i) { return sel.empty() ? i : sel[i]; };
   // Work unit: one query row x one KV head (its whole query-head group).
   const size_t units = m * static_cast<size_t>(nkv);
-  auto range_of = [&](size_t r, int64_t& lo, int64_t& hi) {
+  auto range_of = [&](size_t r, int64_t& lo, int64_t& hi) {  // r: a row of p (not an index into sel)
     const int64_t pos = p.positions[r];
     lo = p.sliding_window > 0 ? std::max<int64_t>(0, pos - p.sliding_window + 1) : 0;
     hi = pos + 1;
   };
   int64_t longest = 0;
-  for (size_t r = 0; r < m; ++r) {
+  for (size_t i = 0; i < m; ++i) {
     int64_t lo, hi;
-    range_of(r, lo, hi);
+    range_of(row_of(i), lo, hi);
     longest = std::max(longest, hi - lo);
   }
 
@@ -1083,7 +1730,7 @@ void CpuDevice::attention(const AttentionParams& p) {
         const auto h0 = static_cast<int32_t>(task % static_cast<size_t>(subgroups)) * per;
         const int32_t count = std::min(per, group - h0);
         if (count <= 0) continue;
-        const size_t r = unit / static_cast<size_t>(nkv);
+        const size_t r = row_of(unit / static_cast<size_t>(nkv));
         const auto kvh = static_cast<int32_t>(unit % static_cast<size_t>(nkv));
         int64_t lo, hi;
         range_of(r, lo, hi);
@@ -1115,7 +1762,7 @@ void CpuDevice::attention(const AttentionParams& p) {
     sum.resize(static_cast<size_t>(group));
     for (size_t job = begin; job < end; ++job) {
       const size_t unit = job / chunks, c = job % chunks;
-      const size_t r = unit / static_cast<size_t>(nkv);
+      const size_t r = row_of(unit / static_cast<size_t>(nkv));
       const auto kvh = static_cast<int32_t>(unit % static_cast<size_t>(nkv));
       int64_t lo, hi;
       range_of(r, lo, hi);
@@ -1143,7 +1790,7 @@ void CpuDevice::attention(const AttentionParams& p) {
     for (size_t pair = begin; pair < end; ++pair) {
       const size_t unit = pair / static_cast<size_t>(group);
       const auto gi = static_cast<int32_t>(pair % static_cast<size_t>(group));
-      const size_t r = unit / static_cast<size_t>(nkv);
+      const size_t r = row_of(unit / static_cast<size_t>(nkv));
       const auto kvh = static_cast<int32_t>(unit % static_cast<size_t>(nkv));
       float* out = row_ptr<float>(p.out, static_cast<int64_t>(r)) + (static_cast<int64_t>(kvh) * group + gi) * hdv;
       float gmax = -INFINITY;
@@ -1170,6 +1817,8 @@ namespace {
 // Elementwise work over [m, d] as (row, column chunk) tasks: a decode step has
 // one row, so splitting columns is what spreads it over the pool.
 constexpr int64_t kEltChunk = 2048;
+// Elementwise ops below this many values run on the calling thread.
+constexpr int64_t kParallelElems = 1 << 16;
 
 template <typename Fn>
 void for_row_chunks(ThreadPool& pool, int64_t m, int64_t d, Fn&& fn) {
@@ -1192,6 +1841,40 @@ void act_mul_span(ActFn f, const float* g, const float* u, float* o, int64_t n) 
   for (int64_t i = 0; i < n; ++i) o[i] = f(g[i]) * u[i];
 }
 
+#if defined(__aarch64__)
+// exp_nonpos on 4 lanes (the same reduction and polynomial).
+inline float32x4_t exp_nonpos4(float32x4_t x) {
+  x = vmaxq_f32(x, vdupq_n_f32(-87.0f));
+  const float32x4_t big = vdupq_n_f32(12582912.0f);
+  const float32x4_t n = vsubq_f32(vfmaq_f32(big, x, vdupq_n_f32(1.44269504088896341f)), big);
+  float32x4_t r = vfmsq_f32(x, n, vdupq_n_f32(0.693145751953125f));
+  r = vfmsq_f32(r, n, vdupq_n_f32(1.428606765330187e-06f));
+  float32x4_t p = vdupq_n_f32(1.0f / 720);
+  p = vfmaq_f32(vdupq_n_f32(1.0f / 120), p, r);
+  p = vfmaq_f32(vdupq_n_f32(1.0f / 24), p, r);
+  p = vfmaq_f32(vdupq_n_f32(1.0f / 6), p, r);
+  p = vfmaq_f32(vdupq_n_f32(0.5f), p, r);
+  p = vfmaq_f32(vdupq_n_f32(1.0f), p, r);
+  p = vfmaq_f32(vdupq_n_f32(1.0f), p, r);
+  const int32x4_t bits = vshlq_n_s32(vaddq_s32(vcvtq_s32_f32(n), vdupq_n_s32(127)), 23);
+  return vmulq_f32(p, vreinterpretq_f32_s32(bits));
+}
+
+// silu(g) * u, 4 lanes at a time (silu above, vectorized).
+void silu_mul_span(const float* g, const float* u, float* o, int64_t n) {
+  int64_t i = 0;
+  const float32x4_t one = vdupq_n_f32(1.0f);
+  for (; i + 4 <= n; i += 4) {
+    const float32x4_t x = vld1q_f32(g + i);
+    const float32x4_t e = exp_nonpos4(vnegq_f32(vabsq_f32(x)));
+    const float32x4_t num = vbslq_f32(vcgeq_f32(x, vdupq_n_f32(0.0f)), one, e);
+    const float32x4_t sx = vdivq_f32(vmulq_f32(x, num), vaddq_f32(one, e));
+    vst1q_f32(o + i, vmulq_f32(sx, vld1q_f32(u + i)));
+  }
+  for (; i < n; ++i) o[i] = silu(g[i]) * u[i];
+}
+#endif
+
 }  // namespace
 
 void CpuDevice::act_mul(Activation act, const TensorView& gate, const TensorView& up, const TensorView& out) {
@@ -1202,7 +1885,11 @@ void CpuDevice::act_mul(Activation act, const TensorView& gate, const TensorView
     float* o = row_ptr<float>(out, r) + c0;
     // One loop per activation (no switch per element) so each vectorizes.
     switch (act) {
+#if defined(__aarch64__)
+      case Activation::kSilu: silu_mul_span(gr, ur, o, c1 - c0); break;
+#else
       case Activation::kSilu: act_mul_span(silu, gr, ur, o, c1 - c0); break;
+#endif
       case Activation::kGelu: act_mul_span(gelu, gr, ur, o, c1 - c0); break;
       case Activation::kGeluTanh: act_mul_span(gelu_tanh, gr, ur, o, c1 - c0); break;
     }
@@ -1212,6 +1899,61 @@ void CpuDevice::act_mul(Activation act, const TensorView& gate, const TensorView
 void CpuDevice::matmul_gated(Activation act, const TensorView& x, const TensorView& w_gate, const TensorView& w_up,
                              const TensorView& out, const TensorView& gate_scratch, const TensorView& up_scratch) {
   const int64_t m = rows(x), k = cols(x), n = rows(w_gate);
+  if (qmm_ != nullptr && rows(w_up) == n) {
+    const MatmulShape sg{m, n, k, w_gate.dtype(), true}, su{m, n, k, w_up.dtype(), true};
+    const MatmulSelection qg = select_matmul(sg, plan_, matmul_caps(sg.weight, w_gate.data(), n, k, m));
+    const MatmulSelection qu = select_matmul(su, plan_, matmul_caps(su.weight, w_up.data(), n, k, m));
+    const bool qmm_g = qg.id == MatmulKernelId::kQmmGemm || qg.id == MatmulKernelId::kQmmGemv || qg.id == MatmulKernelId::kSmeGemm;
+    const bool qmm_u = qu.id == MatmulKernelId::kQmmGemm || qu.id == MatmulKernelId::kQmmGemv || qu.id == MatmulKernelId::kSmeGemm;
+    if (qmm_g && qmm_u && qg.id == MatmulKernelId::kQmmGemv && qu.id == MatmulKernelId::kQmmGemv && qg.act == qu.act) {
+      // Decode-sized: both projections per 16-column chunk, the activation
+      // applied while the chunk is in L1 (no gate/up round trip).
+      record_matmul(qg.id, sg, -1);
+      record_matmul(qu.id, su, -1);
+      if (qmm_acts_.empty()) qmm_acts_.resize(1);
+      qmm_quantize(qmm_acts_[0], x, qg.act == MatmulActFormat::kInt16 ? qmm::ActMode::kInt16 : qmm::ActMode::kInt8, false);
+      const qmm::Acts& a = qmm_acts_[0].acts();
+      constexpr int64_t kUnit = 16;
+      const auto items = static_cast<size_t>((n + kUnit - 1) / kUnit);
+      const int64_t gb = dtype_row_bytes(w_gate.dtype(), k), ub = dtype_row_bytes(w_up.dtype(), k);
+      const std::byte* pg = find_qmm_packed(w_gate.data(), n, k);
+      const std::byte* pu = find_qmm_packed(w_up.data(), n, k);
+      const size_t grain = gemv_grain(items, static_cast<size_t>(kUnit * (gb + ub)), pool_.size(), plan_.matmul_chunks_per_thread,
+                                      plan_.gemv_min_chunk_bytes);
+      pool_.parallel_for(items, grain, [&](size_t begin, size_t end) {
+        float g[qmm::kGemvMaxRows * kUnit], u[qmm::kGemvMaxRows * kUnit];
+        for (size_t it = begin; it < end; ++it) {
+          const int64_t n0 = static_cast<int64_t>(it) * kUnit, nn = std::min<int64_t>(kUnit, n - n0);
+          const auto* wg = static_cast<const std::byte*>(w_gate.data()) + n0 * gb;
+          const auto* wu = static_cast<const std::byte*>(w_up.data()) + n0 * ub;
+          for (int64_t r0 = 0; r0 < m; r0 += qmm::kGemvMaxRows) {
+            const int rr = static_cast<int>(std::min<int64_t>(qmm::kGemvMaxRows, m - r0));
+            // Row r0 + t of the tile lands at g[t * kUnit + j] (y offset by -r0 rows).
+            if (pg != nullptr && pu != nullptr && nn == kUnit) {
+              // Packed copies: groups n0 / 4 .. + 4, outputs at columns 4 g (offset by -n0).
+              qmm_->gemv_packed(w_gate.dtype(), pg, k, n0 / 4, n0 / 4 + kUnit / 4, a, r0, rr, g - r0 * kUnit - n0, kUnit, nullptr);
+              qmm_->gemv_packed(w_up.dtype(), pu, k, n0 / 4, n0 / 4 + kUnit / 4, a, r0, rr, u - r0 * kUnit - n0, kUnit, nullptr);
+            } else {
+              qmm_->gemv(w_gate.dtype(), wg, gb, 0, nn, a, r0, rr, g - r0 * kUnit, kUnit, nullptr);
+              qmm_->gemv(w_up.dtype(), wu, ub, 0, nn, a, r0, rr, u - r0 * kUnit, kUnit, nullptr);
+            }
+            for (int t = 0; t < rr; ++t) {
+              float* o = row_ptr<float>(out, r0 + t) + n0;
+              for (int64_t j = 0; j < nn; ++j) o[j] = apply_act(act, g[t * kUnit + j]) * u[t * kUnit + j];
+            }
+          }
+        }
+      });
+      return;
+    }
+    if (qmm_g && qmm_u) {
+      // Prefill-sized: both projections in one parallel region, then the activation.
+      const MatmulJob jobs[2] = {{x, w_gate, gate_scratch, nullptr}, {x, w_up, up_scratch, nullptr}};
+      matmul_many(jobs);
+      act_mul(act, gate_scratch, up_scratch, out);
+      return;
+    }
+  }
   const MatmulShape sg{m, n, k, w_gate.dtype(), true}, su{m, rows(w_up), k, w_up.dtype(), true};
   const MatmulSelection selg = select_matmul_int8(sg, plan_, matmul_caps(sg.weight, w_gate.data(), n, k, m));
   const MatmulSelection selu = select_matmul_int8(su, plan_, matmul_caps(su.weight, w_up.data(), su.n, k, m));
@@ -1281,12 +2023,17 @@ void CpuDevice::activation(Activation act, const TensorView& x, const TensorView
 
 void CpuDevice::add(const TensorView& a, const TensorView& b, const TensorView& y) {
   const int64_t m = rows(a), d = cols(a);
-  for (int64_t r = 0; r < m; ++r) {
+  auto span = [&](int64_t r, int64_t c0, int64_t c1) {
     const float* ar = row_ptr<const float>(a, r);
     const float* br = row_ptr<const float>(b, r);
     float* yr = row_ptr<float>(y, r);
-    for (int64_t i = 0; i < d; ++i) yr[i] = ar[i] + br[i];
+    for (int64_t i = c0; i < c1; ++i) yr[i] = ar[i] + br[i];
+  };
+  if (m * d < kParallelElems) {  // decode: a parallel region costs more than the work
+    for (int64_t r = 0; r < m; ++r) span(r, 0, d);
+    return;
   }
+  for_row_chunks(pool_, m, d, span);
 }
 
 void CpuDevice::scale(const TensorView& x, float s) {

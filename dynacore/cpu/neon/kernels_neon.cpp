@@ -10,6 +10,8 @@
 
 #include <arm_neon.h>
 
+#include <algorithm>
+
 #include <cstring>
 
 #include "dynacore/tensor/fp16.h"
@@ -390,6 +392,149 @@ void attn_accum_f32(const float* v, int64_t n, int32_t dim, const float* w, floa
   for (int64_t t = 0; t < n; ++t) axpy_f32(w[t], v + t * dim, acc, dim);
 }
 
+// GQA scores (DD-066): NH heads sharing one KV head; each k row is read once
+// for all of them, 4 accumulators per head over the head dimension. KT keys
+// run together so NH x KT independent FMA chains hide the FMA latency; each
+// key's chain is the same as one key alone (identical results).
+inline float32x4_t load4(const float* p) { return vld1q_f32(p); }
+inline float32x4_t load4(const uint16_t* p) { return load_f16x4(p); }
+
+template <int NH, int KT, typename E>
+inline void attn_scores_heads_keys(const E* k, int32_t dim, const float* q, float scale, float* scores,
+                                   int64_t s_stride) {
+  float32x4_t acc[KT][NH];
+  for (int j = 0; j < KT; ++j) {
+    for (int h = 0; h < NH; ++h) acc[j][h] = vdupq_n_f32(0);
+  }
+  for (int32_t c = 0; c < dim; c += 4) {
+    float32x4_t qv[NH];
+    for (int h = 0; h < NH; ++h) qv[h] = vld1q_f32(q + static_cast<int64_t>(h) * dim + c);
+    for (int j = 0; j < KT; ++j) {
+      const float32x4_t kv = load4(k + static_cast<int64_t>(j) * dim + c);
+      for (int h = 0; h < NH; ++h) acc[j][h] = vfmaq_f32(acc[j][h], kv, qv[h]);
+    }
+  }
+  for (int j = 0; j < KT; ++j) {
+    for (int h = 0; h < NH; ++h) scores[h * s_stride + j] = vaddvq_f32(acc[j][h]) * scale;
+  }
+}
+
+template <int NH, typename E>
+void attn_scores_heads_tile(const E* k, int64_t n, int32_t dim, const float* q, float scale, float* scores,
+                            int64_t s_stride) {
+  constexpr int kKeys = NH <= 4 ? 4 : 2;  // NH x kKeys accumulators stay within the registers
+  int64_t t = 0;
+  for (; t + kKeys <= n; t += kKeys) attn_scores_heads_keys<NH, kKeys, E>(k + t * dim, dim, q, scale, scores + t, s_stride);
+  for (; t < n; ++t) attn_scores_heads_keys<NH, 1, E>(k + t * dim, dim, q, scale, scores + t, s_stride);
+}
+
+template <typename E>
+void attn_scores_heads(const E* k, int64_t n, int32_t dim, const float* q, int32_t nh, float scale, float* scores,
+                       int64_t s_stride) {
+  for (int32_t h0 = 0; h0 < nh; h0 += 8) {
+    const float* qh = q + static_cast<int64_t>(h0) * dim;
+    float* sh = scores + h0 * s_stride;
+    switch (std::min(8, nh - h0)) {
+      case 1: attn_scores_heads_tile<1>(k, n, dim, qh, scale, sh, s_stride); break;
+      case 2: attn_scores_heads_tile<2>(k, n, dim, qh, scale, sh, s_stride); break;
+      case 3: attn_scores_heads_tile<3>(k, n, dim, qh, scale, sh, s_stride); break;
+      case 4: attn_scores_heads_tile<4>(k, n, dim, qh, scale, sh, s_stride); break;
+      case 5: attn_scores_heads_tile<5>(k, n, dim, qh, scale, sh, s_stride); break;
+      case 6: attn_scores_heads_tile<6>(k, n, dim, qh, scale, sh, s_stride); break;
+      case 7: attn_scores_heads_tile<7>(k, n, dim, qh, scale, sh, s_stride); break;
+      default: attn_scores_heads_tile<8>(k, n, dim, qh, scale, sh, s_stride); break;
+    }
+  }
+}
+
+void attn_scores_heads_f32(const float* k, int64_t n, int32_t dim, const float* q, int32_t nh, float scale,
+                           float* scores, int64_t s_stride) {
+  if (dim % 4 != 0) {
+    for (int32_t h = 0; h < nh; ++h) attn_scores_f32(k, n, dim, q + static_cast<int64_t>(h) * dim, scale, scores + h * s_stride);
+    return;
+  }
+  attn_scores_heads(k, n, dim, q, nh, scale, scores, s_stride);
+}
+
+void attn_scores_heads_f16(const uint16_t* k, int64_t n, int32_t dim, const float* q, int32_t nh, float scale,
+                           float* scores, int64_t s_stride) {
+  if (dim % 4 != 0) {
+    for (int32_t h = 0; h < nh; ++h) attn_scores_f16(k, n, dim, q + static_cast<int64_t>(h) * dim, scale, scores + h * s_stride);
+    return;
+  }
+  attn_scores_heads(k, n, dim, q, nh, scale, scores, s_stride);
+}
+
+// GQA value accumulation: per 8-wide chunk of the head dimension, NH x 2
+// accumulators stay in registers over the run; each v vector is loaded once
+// for all heads.
+// CW floats of the head dimension per pass (CW / 4 vectors per head): with
+// few heads a wider chunk gives more independent FMA chains per v row.
+template <int NH, int CW, typename E>
+inline void attn_accum_heads_chunk(const E* v, int64_t n, int32_t dim, const float* w, int64_t w_stride, float* acc,
+                                   int32_t c) {
+  constexpr int kV = CW / 4;
+  float32x4_t a[NH][kV];
+  for (int h = 0; h < NH; ++h) {
+    for (int i = 0; i < kV; ++i) a[h][i] = vld1q_f32(acc + h * dim + c + 4 * i);
+  }
+  for (int64_t t = 0; t < n; ++t) {
+    float32x4_t vv[kV];
+    for (int i = 0; i < kV; ++i) vv[i] = load4(v + t * dim + c + 4 * i);
+    for (int h = 0; h < NH; ++h) {
+      const float wt = w[h * w_stride + t];
+      for (int i = 0; i < kV; ++i) a[h][i] = vfmaq_n_f32(a[h][i], vv[i], wt);
+    }
+  }
+  for (int h = 0; h < NH; ++h) {
+    for (int i = 0; i < kV; ++i) vst1q_f32(acc + h * dim + c + 4 * i, a[h][i]);
+  }
+}
+
+template <int NH, typename E>
+void attn_accum_heads_tile(const E* v, int64_t n, int32_t dim, const float* w, int64_t w_stride, float* acc) {
+  constexpr int kWide = NH <= 2 ? 32 : NH <= 4 ? 16 : 8;
+  int32_t c = 0;
+  for (; c + kWide <= dim; c += kWide) attn_accum_heads_chunk<NH, kWide, E>(v, n, dim, w, w_stride, acc, c);
+  for (; c < dim; c += 8) attn_accum_heads_chunk<NH, 8, E>(v, n, dim, w, w_stride, acc, c);
+}
+
+template <typename E>
+void attn_accum_heads(const E* v, int64_t n, int32_t dim, const float* w, int32_t nh, int64_t w_stride, float* acc) {
+  for (int32_t h0 = 0; h0 < nh; h0 += 8) {
+    const float* wh = w + h0 * w_stride;
+    float* ah = acc + static_cast<int64_t>(h0) * dim;
+    switch (std::min(8, nh - h0)) {
+      case 1: attn_accum_heads_tile<1>(v, n, dim, wh, w_stride, ah); break;
+      case 2: attn_accum_heads_tile<2>(v, n, dim, wh, w_stride, ah); break;
+      case 3: attn_accum_heads_tile<3>(v, n, dim, wh, w_stride, ah); break;
+      case 4: attn_accum_heads_tile<4>(v, n, dim, wh, w_stride, ah); break;
+      case 5: attn_accum_heads_tile<5>(v, n, dim, wh, w_stride, ah); break;
+      case 6: attn_accum_heads_tile<6>(v, n, dim, wh, w_stride, ah); break;
+      case 7: attn_accum_heads_tile<7>(v, n, dim, wh, w_stride, ah); break;
+      default: attn_accum_heads_tile<8>(v, n, dim, wh, w_stride, ah); break;
+    }
+  }
+}
+
+void attn_accum_heads_f32(const float* v, int64_t n, int32_t dim, const float* w, int32_t nh, int64_t w_stride,
+                          float* acc) {
+  if (dim % 8 != 0) {
+    for (int32_t h = 0; h < nh; ++h) attn_accum_f32(v, n, dim, w + h * w_stride, acc + static_cast<int64_t>(h) * dim);
+    return;
+  }
+  attn_accum_heads(v, n, dim, w, nh, w_stride, acc);
+}
+
+void attn_accum_heads_f16(const uint16_t* v, int64_t n, int32_t dim, const float* w, int32_t nh, int64_t w_stride,
+                          float* acc) {
+  if (dim % 8 != 0) {
+    for (int32_t h = 0; h < nh; ++h) attn_accum_f16(v, n, dim, w + h * w_stride, acc + static_cast<int64_t>(h) * dim);
+    return;
+  }
+  attn_accum_heads(v, n, dim, w, nh, w_stride, acc);
+}
+
 }  // namespace
 
 bool register_neon_kernels(CpuKernels& k) {
@@ -403,6 +548,10 @@ bool register_neon_kernels(CpuKernels& k) {
   k.attn_accum_f16 = attn_accum_f16;
   k.attn_scores_f32 = attn_scores_f32;
   k.attn_accum_f32 = attn_accum_f32;
+  k.attn_scores_heads_f32 = attn_scores_heads_f32;
+  k.attn_accum_heads_f32 = attn_accum_heads_f32;
+  k.attn_scores_heads_f16 = attn_scores_heads_f16;
+  k.attn_accum_heads_f16 = attn_accum_heads_f16;
   auto set = [&](DType t, VecDotFn dot, DequantFn dq) {
     k.vec_dot[static_cast<size_t>(t)] = dot;
     if (dq) k.dequant[static_cast<size_t>(t)] = dq;

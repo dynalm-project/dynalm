@@ -46,4 +46,13 @@ class MappedFile {
 #endif
 };
 
+// Drops the resident pages of [p, p + len) when the whole range lies inside a
+// live MappedFile, so they stop counting toward the process's resident memory;
+// the bytes stay valid (the next read faults them in again from the file).
+// Only whole pages inside the range are released. A range that is not part of
+// a mapped file (owned host memory) is never touched. Returns the bytes
+// released (0 where unsupported: Windows). For weights a device has copied
+// into another layout and no longer reads (CpuDevice packed qmm copies).
+size_t release_file_pages(const void* p, size_t len);
+
 }  // namespace dynacore

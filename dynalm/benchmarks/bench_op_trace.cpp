@@ -69,9 +69,23 @@ int main(int argc, char** argv) {
   CpuDevice cpu(pool, select_best_isa(cpu_info().features));
   ir::RecordingDevice rec(cpu, ir::RecordingDevice::Mode::kTrace);
   rec.set_timing(true);
-  auto kv = KvBlockPool::create(kv_geometry_for(c, DType::kF16, 16, 1024), rec);
-  auto tf = Transformer::create(c, (*m)->weights, rec, 256);
+  const int chunk = std::getenv("BENCH_TRACE_PREFILL") ? std::max(1, std::atoi(std::getenv("BENCH_TRACE_PREFILL"))) : 0;
+  // BENCH_TRACE_CTX=n: tokens of context before the traced steps (default 256).
+  const int ctx0 = std::getenv("BENCH_TRACE_CTX") ? std::max(1, std::atoi(std::getenv("BENCH_TRACE_CTX"))) : 256;
+  const int64_t ctx_tokens = ctx0 + 512 + static_cast<int64_t>(steps) * std::max(chunk, 1);
+  // BENCH_TRACE_USERS=n: n sequences decode together (batched decode steps).
+  const int users = std::getenv("BENCH_TRACE_USERS") ? std::max(1, std::atoi(std::getenv("BENCH_TRACE_USERS"))) : 1;
+  auto kv = KvBlockPool::create(kv_geometry_for(c, DType::kF16, 16, (ctx_tokens + 64) * users), rec);
+  auto tf = Transformer::create(c, (*m)->weights, rec, std::max(256, chunk));
   if (!kv.ok() || !tf.ok()) return std::fprintf(stderr, "setup failed\n"), 1;
+  // The engine's CPU plan: int8 activations at any row count where qmm runs
+  // (BENCH_INT8_ROWS=n overrides; 0 = fp32 reference).
+  {
+    KernelPlan base = KernelPlan::defaults();
+    const char* ir = std::getenv("BENCH_INT8_ROWS");
+    base.int8_decode_max_rows = ir != nullptr && *ir != '\0' ? static_cast<int32_t>(std::atol(ir)) : 1 << 30;
+    (*tf)->set_kernel_base(base);
+  }
   const TensorRegistry& w = (*m)->weights;
   for (int r = 0; r < static_cast<int>(TensorRole::kCount); ++r) {
     const auto role = static_cast<TensorRole>(r);
@@ -83,25 +97,48 @@ int main(int argc, char** argv) {
     }
   }
 
-  KvBlockTable seq(**kv);
-  if (!seq.reserve(512).ok()) return 1;
-  std::vector<float> logits(static_cast<size_t>(c.vocab_size));
-  std::vector<TokenId> toks(256);
-  for (size_t i = 0; i < toks.size(); ++i) toks[i] = static_cast<TokenId>(100 + i % 500);
-  std::vector<int32_t> pos(256);
-  std::iota(pos.begin(), pos.end(), 0);
-  if (!(*tf)->forward(toks, pos, **kv, seq.block_table(), logits).ok()) return 1;  // prefill, pages weights in
+  std::vector<KvBlockTable> seqs;
+  for (int u = 0; u < users; ++u) {
+    seqs.emplace_back(**kv);
+    if (!seqs.back().reserve(ctx_tokens).ok()) return 1;
+  }
+  KvBlockTable& seq = seqs.front();
+  std::vector<float> logits(static_cast<size_t>(c.vocab_size) * users);
+  for (int u = 0; u < users; ++u) {
+    for (int p0 = 0; p0 < ctx0; p0 += 256) {  // prefill, pages weights in
+      std::vector<TokenId> toks(static_cast<size_t>(std::min(256, ctx0 - p0)));
+      for (size_t i = 0; i < toks.size(); ++i) toks[i] = static_cast<TokenId>(100 + (p0 + i + 7 * u) % 500);
+      std::vector<int32_t> pos(toks.size());
+      std::iota(pos.begin(), pos.end(), p0);
+      if (!(*tf)->forward(toks, pos, **kv, seqs[static_cast<size_t>(u)].block_table(),
+                          std::span<float>(logits).first(static_cast<size_t>(c.vocab_size))).ok()) {
+        return 1;
+      }
+    }
+  }
 
   std::map<std::string, std::pair<int64_t, int64_t>> by_kind;  // label -> (ns, count)
   std::vector<std::pair<int64_t, std::string>> slowest;
   int64_t total_ns = 0, wall_ns = 0;
   size_t ops_per_step = 0;
   for (int s = 0; s < steps; ++s) {
-    rec.begin_graph("decode");
-    const TokenId t = 100;
-    const int32_t p = 256 + s;
+    rec.begin_graph(chunk > 0 ? "prefill" : "decode");
+    std::vector<TokenId> ct(static_cast<size_t>(std::max(chunk, 1)), 100);
+    std::vector<int32_t> cp(ct.size());
+    for (size_t i = 0; i < cp.size(); ++i) cp[i] = ctx0 + s * static_cast<int32_t>(ct.size()) + static_cast<int32_t>(i);
     const auto t0 = std::chrono::steady_clock::now();
-    if (!(*tf)->forward({&t, 1}, {&p, 1}, **kv, seq.block_table(), logits).ok()) return 1;
+    if (users > 1) {
+      std::vector<SeqBatch> batch(static_cast<size_t>(users));
+      for (int u = 0; u < users; ++u) {
+        batch[static_cast<size_t>(u)].tokens = ct;
+        batch[static_cast<size_t>(u)].start_pos = cp.front();
+        batch[static_cast<size_t>(u)].block_table = seqs[static_cast<size_t>(u)].block_table();
+      }
+      if (!(*tf)->forward_batch(batch, **kv, logits).ok()) return 1;
+    } else if (!(*tf)->forward(ct, cp, **kv, seq.block_table(),
+                               std::span<float>(logits).first(static_cast<size_t>(c.vocab_size))).ok()) {
+      return 1;
+    }
     wall_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count();
     const ir::Graph& g = rec.graph();
     if (s == 0) {
@@ -126,7 +163,8 @@ int main(int argc, char** argv) {
   }
   const double per_step = static_cast<double>(wall_ns) / steps / 1e6;
   const double in_ops = static_cast<double>(total_ns) / steps / 1e6;
-  std::printf("model %s, %d threads, %d decode steps at ~%d tokens of context\n", pos_args[0], threads, steps, 256);
+  std::printf("model %s, %d threads, %d user(s), %d steps after %d tokens of context\n", pos_args[0], threads, users, steps,
+              ctx0);
   std::printf("step %.2f ms wall, %.2f ms inside %zu ops (%.1f%%), %.2f ms between ops\n\n", per_step, in_ops,
               ops_per_step, 100 * in_ops / per_step, per_step - in_ops);
   std::vector<std::pair<int64_t, std::string>> kinds;

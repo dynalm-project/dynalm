@@ -58,6 +58,7 @@ uint64_t plan_word(const KernelPlan& p) {
   mix(static_cast<uint64_t>(p.expand_min_rows));
   mix(static_cast<uint64_t>(p.gemm_k_block));
   mix(static_cast<uint64_t>(p.matmul_chunks_per_thread));
+  mix(static_cast<uint64_t>(p.gemv_min_chunk_bytes));
   mix(static_cast<uint64_t>(p.int8_decode_max_rows));
   mix(p.int8_ffn_down ? 1 : 0);
   mix(static_cast<uint64_t>(p.int16_decode_max_rows));
@@ -232,6 +233,7 @@ ValueId RecordingDevice::record_op(const Call* c, OpKind kind, std::vector<Value
                                    const TensorView& out, bool in_place) {
   if (c != nullptr && (kind == OpKind::kMatMul || kind == OpKind::kQuantizedMatMul)) {
     attrs["int8_rows"] = static_cast<int64_t>(c->plan->int8_decode_max_rows);  // the plan's limit for this op
+    attrs["int16_rows"] = static_cast<int64_t>(c->plan->int16_decode_max_rows);
   }
   std::vector<Type> types;
   for (ValueId v : inputs) types.push_back(graph_.value(v).type);
