@@ -37,7 +37,7 @@ uint32_t lower(uint32_t c) { return (c >= 'A' && c <= 'Z') ? c + 32 : c; }
 
 // Length (in code points) of a contraction at i: 's 't 'm 'd 're 've 'll.
 size_t match_contraction(const Cps& s, size_t i, size_t n, bool ignore_case) {
-  if (s.cp[i] != '\'' || i + 1 >= n) return 0;
+  if (i + 1 >= n || s.cp[i] != '\'') return 0;  // bounds first: i may be n
   auto at = [&](size_t k) { return ignore_case ? lower(s.cp[k]) : s.cp[k]; };
   const uint32_t a = at(i + 1);
   if (a == 's' || a == 't' || a == 'm' || a == 'd') return 2;
