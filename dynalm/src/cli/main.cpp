@@ -9,6 +9,7 @@
 #include "cli/commands.h"
 #include "common/version.h"
 #include "logging/log.h"
+#include "runtime/engine.h"
 #include "dynacore/device/device_registry.h"
 #include "dynacore/gpu/ggml_device.h"
 #include "dynacore/hardware/cpu_info.h"
@@ -94,9 +95,14 @@ int cmd_version() {
   }
   std::printf("devices:  %s%s\n", devices.c_str(),
               devices == "cpu" ? " (GPU: build with -DENABLE_METAL, -DENABLE_VULKAN or -DENABLE_CUDA)" : "");
-  std::printf("cpu path: %s\n", dynacore::ggml_gpu_compiled(dynacore::DeviceType::kCpu)
-                                     ? "ggml kernels (fast, llama.cpp-level accuracy); --mode exact: DD-053"
-                                     : "native kernels (built without ENABLE_GGML_CPU)");
+  // The default CPU path, as the engine chooses it (apply_backend_choice): DynaCore's kernels where
+  // native_cpu_default() (SME CPUs such as Apple M4), otherwise ggml's when they are built in.
+  const char* cpu_path = !dynacore::ggml_gpu_compiled(dynacore::DeviceType::kCpu)
+                             ? "native kernels (built without ENABLE_GGML_CPU)"
+                         : dynalm::native_cpu_default()
+                             ? "DynaLM kernels (default on this CPU); --backend ggml-cpu: ggml kernels"
+                             : "ggml kernels (fast, llama.cpp-level accuracy); --mode exact: DD-053";
+  std::printf("cpu path: %s\n", cpu_path);
   return 0;
 }
 
