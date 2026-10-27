@@ -226,6 +226,13 @@ These are DynaLM's own CPU kernels, the default CPU path on Apple M4 class CPUs 
 use ggml's kernels by default and were not measured. The project's 2× target is not met. Details:
 [docs/perf/cpu-experiments.md](docs/perf/cpu-experiments.md).
 
+**More models (in progress):** a sweep of 45 GGUF models from 0.36B to 24B parameters on the same
+machine. So far every model that downloaded runs and matches llama.cpp's next token on 94–99 % of
+positions (llama.cpp against itself: 94–100 %). Over 19 model shapes, DynaLM's first token on a
+2,048-token prompt is 1.9× faster, one-user output 1.2× (slower on four models below 1.7B), 4-user
+throughput 1.5×, with 2.5× less memory; its slowest token gaps (p99) are longer on most small models.
+Results: [docs/perf/cpu-model-sweep.md](docs/perf/cpu-model-sweep.md).
+
 ### Metal (DynaLM 0.2.0)
 
 Measured on one machine (Apple M4 Pro, 24 GB, macOS 26.7, AC power) against llama.cpp's server

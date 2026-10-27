@@ -1,0 +1,757 @@
+{
+ "measured": "2026-10-26/27",
+ "machine": "Apple M4 Pro, 24 GiB, macOS 27.0.1, AC power",
+ "dynalm": "0.3.0 (release binary)",
+ "llama_cpp": "9a16f1dbe",
+ "accuracy": [
+  {
+   "n": 1,
+   "model": "Qwen2.5 0.5B Instruct",
+   "params": null,
+   "quant": "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+   "top1": 97.65,
+   "kl_mean": 0.00161051,
+   "ppl_dynalm": 17.661,
+   "ppl_llama": 17.735
+  },
+  {
+   "n": 2,
+   "model": "Llama 3.2 1B Instruct",
+   "params": null,
+   "quant": "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+   "top1": 97.41,
+   "kl_mean": 0.00171198,
+   "ppl_dynalm": 16.513,
+   "ppl_llama": 16.523
+  },
+  {
+   "n": 3,
+   "model": "Qwen3 0.6B",
+   "params": null,
+   "quant": "Qwen3-0.6B-Q8_0.gguf",
+   "top1": 97.33,
+   "kl_mean": 0.00143434,
+   "ppl_dynalm": 23.779,
+   "ppl_llama": 23.724
+  },
+  {
+   "n": 4,
+   "model": "Qwen2.5 1.5B Instruct",
+   "params": null,
+   "quant": "qwen2.5-1.5b-instruct-q4_k_m.gguf",
+   "top1": 95.29,
+   "kl_mean": 0.00682447,
+   "ppl_dynalm": 12.077,
+   "ppl_llama": 12.188
+  },
+  {
+   "n": 5,
+   "model": "Qwen3 1.7B",
+   "params": null,
+   "quant": "Qwen3-1.7B-Q8_0.gguf",
+   "top1": 97.61,
+   "kl_mean": 0.00179796,
+   "ppl_dynalm": 18.482,
+   "ppl_llama": 18.494
+  },
+  {
+   "n": 6,
+   "model": "SmolLM2 1.7B Instruct",
+   "params": null,
+   "quant": "smollm2-1.7b-instruct-q4_0.gguf",
+   "top1": 94.78,
+   "kl_mean": 0.00552188,
+   "ppl_dynalm": 12.212,
+   "ppl_llama": 12.317
+  },
+  {
+   "n": 7,
+   "model": "Qwen2.5 Coder 1.5B Instruct",
+   "params": null,
+   "quant": "Qwen2.5-Coder-1.5B-Instruct-Q4_K_M.gguf",
+   "top1": 96.12,
+   "kl_mean": 0.00344453,
+   "ppl_dynalm": 16.396,
+   "ppl_llama": 16.42
+  },
+  {
+   "n": 8,
+   "model": "TinyLlama 1.1B Chat",
+   "params": null,
+   "quant": "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+   "top1": 97.1,
+   "kl_mean": 0.00240622,
+   "ppl_dynalm": 25.325,
+   "ppl_llama": 25.395
+  },
+  {
+   "n": 9,
+   "model": "SmolLM2 360M Instruct",
+   "params": null,
+   "quant": "SmolLM2-360M-Instruct.Q4_K_M.gguf",
+   "top1": 96.55,
+   "kl_mean": 0.00248266,
+   "ppl_dynalm": 16.072,
+   "ppl_llama": 16.099
+  },
+  {
+   "n": 10,
+   "model": "Qwen2.5 3B Instruct",
+   "params": null,
+   "quant": "qwen2.5-3b-instruct-q4_k_m.gguf",
+   "top1": 94.98,
+   "kl_mean": 0.01010707,
+   "ppl_dynalm": 10.41,
+   "ppl_llama": 10.528
+  },
+  {
+   "n": 11,
+   "model": "Qwen3 4B",
+   "params": null,
+   "quant": "Qwen3-4B-Q4_K_M.gguf",
+   "top1": 97.69,
+   "kl_mean": 0.00310641,
+   "ppl_dynalm": 18.626,
+   "ppl_llama": 18.741
+  },
+  {
+   "n": 12,
+   "model": "Qwen3 4B Instruct 2507",
+   "params": null,
+   "quant": "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+   "top1": 96.82,
+   "kl_mean": 0.00449246,
+   "ppl_dynalm": 12.368,
+   "ppl_llama": 12.405
+  },
+  {
+   "n": 13,
+   "model": "Llama 3.2 3B Instruct",
+   "params": null,
+   "quant": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+   "top1": 98.31,
+   "kl_mean": 0.00128271,
+   "ppl_dynalm": 12.469,
+   "ppl_llama": 12.522
+  },
+  {
+   "n": 14,
+   "model": "Gemma 3 1B IT",
+   "params": null,
+   "quant": "google_gemma-3-1b-it-Q4_K_M.gguf",
+   "top1": 97.33,
+   "kl_mean": 0.00372225,
+   "ppl_dynalm": 34.152,
+   "ppl_llama": 34.325
+  },
+  {
+   "n": 15,
+   "model": "Gemma 3 4B IT",
+   "params": null,
+   "quant": "google_gemma-3-4b-it-Q4_K_M.gguf",
+   "top1": 96.51,
+   "kl_mean": 0.01021778,
+   "ppl_dynalm": 19.994,
+   "ppl_llama": 19.692
+  },
+  {
+   "n": 24,
+   "model": "Qwen2.5 Coder 0.5B Instruct",
+   "params": null,
+   "quant": "qwen2.5-coder-0.5b-instruct-q4_k_m.gguf",
+   "top1": 98.27,
+   "kl_mean": 0.00086185,
+   "ppl_dynalm": 39.603,
+   "ppl_llama": 39.603
+  },
+  {
+   "n": 25,
+   "model": "Qwen2.5 Coder 3B Instruct",
+   "params": null,
+   "quant": "Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf",
+   "top1": 95.69,
+   "kl_mean": 0.00681576,
+   "ppl_dynalm": 12.179,
+   "ppl_llama": 12.362
+  },
+  {
+   "n": 28,
+   "model": "DeepSeek Coder 1.3B Instruct",
+   "params": null,
+   "quant": "deepseek-coder-1.3b-instruct.Q4_K_M.gguf",
+   "top1": 96.94,
+   "kl_mean": 0.0023562,
+   "ppl_dynalm": 34.695,
+   "ppl_llama": 34.595
+  },
+  {
+   "n": 16,
+   "model": "Qwen2.5 7B Instruct",
+   "params": null,
+   "quant": "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+   "top1": 96.51,
+   "kl_mean": 0.00500515,
+   "ppl_dynalm": 7.286,
+   "ppl_llama": 7.317
+  },
+  {
+   "n": 17,
+   "model": "Qwen3 8B",
+   "params": null,
+   "quant": "Qwen3-8B-Q4_K_M.gguf",
+   "top1": 97.14,
+   "kl_mean": 0.00515919,
+   "ppl_dynalm": 11.619,
+   "ppl_llama": 11.638
+  },
+  {
+   "n": 18,
+   "model": "Llama 3.1 8B Instruct",
+   "params": null,
+   "quant": "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+   "top1": 98.12,
+   "kl_mean": 0.00136831,
+   "ppl_dynalm": 8.809,
+   "ppl_llama": 8.821
+  },
+  {
+   "n": 19,
+   "model": "Mistral 7B Instruct v0.3",
+   "params": null,
+   "quant": "Mistral-7B-Instruct-v0.3-Q4_K_M.gguf",
+   "top1": 97.73,
+   "kl_mean": 0.00154056,
+   "ppl_dynalm": 7.608,
+   "ppl_llama": 7.617
+  },
+  {
+   "n": 20,
+   "model": "Gemma 2 9B IT",
+   "params": null,
+   "quant": "gemma-2-9b-it-Q4_K_M.gguf",
+   "top1": 98.86,
+   "kl_mean": 0.00129862,
+   "ppl_dynalm": 10.4,
+   "ppl_llama": 10.433
+  },
+  {
+   "n": 21,
+   "model": "Llama 3 8B Instruct",
+   "params": null,
+   "quant": "Meta-Llama-3-8B-Instruct-Q4_K_M.gguf",
+   "top1": 98.39,
+   "kl_mean": 0.00139986,
+   "ppl_dynalm": 10.585,
+   "ppl_llama": 10.592
+  },
+  {
+   "n": 23,
+   "model": "DeepSeek R1 Distill Llama 8B",
+   "params": null,
+   "quant": "DeepSeek-R1-Distill-Llama-8B-Q4_K_M.gguf",
+   "top1": 94.43,
+   "kl_mean": 0.03562844,
+   "ppl_dynalm": 16.717,
+   "ppl_llama": 16.313
+  },
+  {
+   "n": 26,
+   "model": "Qwen2.5 Coder 7B Instruct",
+   "params": null,
+   "quant": "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
+   "top1": 97.65,
+   "kl_mean": 0.0016314,
+   "ppl_dynalm": 10.802,
+   "ppl_llama": 10.812
+  },
+  {
+   "n": 29,
+   "model": "DeepSeek Coder 6.7B Instruct",
+   "params": null,
+   "quant": "deepseek-coder-6.7b-instruct.Q4_K_M.gguf",
+   "top1": 96.75,
+   "kl_mean": 0.00411479,
+   "ppl_dynalm": 20.812,
+   "ppl_llama": 21.021
+  }
+ ],
+ "speed": [
+  {
+   "model": "Qwen2.5 0.5B Instruct",
+   "same_shape": [
+    "Qwen2.5 Coder 0.5B Instruct"
+   ],
+   "dynalm": {
+    "tok": 139.5,
+    "ttft2048": 834.3,
+    "itl50": 5.1,
+    "itl95": 12.2,
+    "itl99": 12.5,
+    "multi": 278.9,
+    "rss": 0.62
+   },
+   "llama": {
+    "tok": 175.2,
+    "ttft2048": 1343.2,
+    "itl50": 3.4,
+    "itl95": 3.9,
+    "itl99": 4.3,
+    "multi": 134.4,
+    "rss": 1.18
+   },
+   "errors": 0,
+   "note": ""
+  },
+  {
+   "model": "Llama 3.2 1B Instruct",
+   "same_shape": [],
+   "dynalm": {
+    "tok": 125.7,
+    "ttft2048": 1581.4,
+    "itl50": 4.7,
+    "itl95": 7.5,
+    "itl99": 7.8,
+    "multi": 182.3,
+    "rss": 1.08
+   },
+   "llama": {
+    "tok": 104.5,
+    "ttft2048": 2928.9,
+    "itl50": 5.0,
+    "itl95": 5.0,
+    "itl99": 5.1,
+    "multi": 118.0,
+    "rss": 2.91
+   },
+   "errors": 0,
+   "note": ""
+  },
+  {
+   "model": "Qwen3 0.6B",
+   "same_shape": [],
+   "dynalm": {
+    "tok": 158.1,
+    "ttft2048": 1096.2,
+    "itl50": 4.3,
+    "itl95": 6.1,
+    "itl99": 7.1,
+    "multi": 254.9,
+    "rss": 1.22
+   },
+   "llama": {
+    "tok": 145.3,
+    "ttft2048": 1804.6,
+    "itl50": 4.7,
+    "itl95": 4.8,
+    "itl99": 4.9,
+    "multi": 221.6,
+    "rss": 5.52
+   },
+   "errors": 0,
+   "note": ""
+  },
+  {
+   "model": "Qwen2.5 1.5B Instruct",
+   "same_shape": [
+    "Qwen2.5 Coder 1.5B Instruct"
+   ],
+   "dynalm": {
+    "tok": 103.3,
+    "ttft2048": 2449.1,
+    "itl50": 5.4,
+    "itl95": 9.4,
+    "itl99": 9.6,
+    "multi": 128.6,
+    "rss": 1.34
+   },
+   "llama": {
+    "tok": 77.9,
+    "ttft2048": 4241.4,
+    "itl50": 6.3,
+    "itl95": 6.4,
+    "itl99": 6.5,
+    "multi": 85.1,
+    "rss": 3.04
+   },
+   "errors": 0,
+   "note": ""
+  },
+  {
+   "model": "Qwen3 1.7B",
+   "same_shape": [],
+   "dynalm": {
+    "tok": 73.2,
+    "ttft2048": 2330.2,
+    "itl50": 9.4,
+    "itl95": 10.3,
+    "itl99": 14.1,
+    "multi": 116.1,
+    "rss": 2.37
+   },
+   "llama": {
+    "tok": 65.6,
+    "ttft2048": 3801.1,
+    "itl50": 9.8,
+    "itl95": 9.9,
+    "itl99": 14.3,
+    "multi": 99.1,
+    "rss": 6.98
+   },
+   "errors": 0,
+   "note": ""
+  },
+  {
+   "model": "SmolLM2 1.7B Instruct",
+   "same_shape": [],
+   "dynalm": {
+    "tok": 73.9,
+    "ttft2048": 3153.1,
+    "itl50": 6.9,
+    "itl95": 13.6,
+    "itl99": 17.5,
+    "multi": 91.5,
+    "rss": 1.96
+   },
+   "llama": {
+    "tok": 77.1,
+    "ttft2048": 3869.7,
+    "itl50": 7.0,
+    "itl95": 7.2,
+    "itl99": 7.7,
+    "multi": 97.8,
+    "rss": 7.88
+   },
+   "errors": 0,
+   "note": ""
+  },
+  {
+   "model": "TinyLlama 1.1B Chat",
+   "same_shape": [],
+   "dynalm": {
+    "tok": 140.2,
+    "ttft2048": 0.0,
+    "itl50": 3.8,
+    "itl95": 6.6,
+    "itl99": 6.8,
+    "multi": 193.2,
+    "rss": 0.84
+   },
+   "llama": {
+    "tok": 103.9,
+    "ttft2048": 0.0,
+    "itl50": 4.7,
+    "itl95": 4.8,
+    "itl99": 4.8,
+    "multi": 117.3,
+    "rss": 1.9
+   },
+   "errors": 16,
+   "note": "2,048-token prompt exceeds the model's 2,048-token context: not measurable in either engine"
+  },
+  {
+   "model": "SmolLM2 360M Instruct",
+   "same_shape": [],
+   "dynalm": {
+    "tok": 147.3,
+    "ttft2048": 874.7,
+    "itl50": 4.8,
+    "itl95": 11.3,
+    "itl99": 11.5,
+    "multi": 276.8,
+    "rss": 0.51
+   },
+   "llama": {
+    "tok": 182.3,
+    "ttft2048": 1498.7,
+    "itl50": 3.1,
+    "itl95": 3.1,
+    "itl99": 4.5,
+    "multi": 203.7,
+    "rss": 1.99
+   },
+   "errors": 0,
+   "note": ""
+  },
+  {
+   "model": "Qwen2.5 3B Instruct",
+   "same_shape": [
+    "Qwen2.5 Coder 3B Instruct"
+   ],
+   "dynalm": {
+    "tok": 53.6,
+    "ttft2048": 4092.8,
+    "itl50": 10.7,
+    "itl95": 18.0,
+    "itl99": 18.3,
+    "multi": 71.0,
+    "rss": 2.34
+   },
+   "llama": {
+    "tok": 38.9,
+    "ttft2048": 9080.3,
+    "itl50": 11.6,
+    "itl95": 11.9,
+    "itl99": 12.9,
+    "multi": 42.5,
+    "rss": 5.09
+   },
+   "errors": 0,
+   "note": ""
+  },
+  {
+   "model": "Qwen3 4B",
+   "same_shape": [
+    "Qwen3 4B Instruct 2507"
+   ],
+   "dynalm": {
+    "tok": 38.9,
+    "ttft2048": 5703.2,
+    "itl50": 14.7,
+    "itl95": 20.5,
+    "itl99": 27.2,
+    "multi": 50.3,
+    "rss": 3.24
+   },
+   "llama": {
+    "tok": 28.9,
+    "ttft2048": 12329.0,
+    "itl50": 15.8,
+    "itl95": 17.0,
+    "itl99": 22.2,
+    "multi": 31.0,
+    "rss": 9.12
+   },
+   "errors": 0,
+   "note": ""
+  },
+  {
+   "model": "Llama 3.2 3B Instruct",
+   "same_shape": [],
+   "dynalm": {
+    "tok": 53.1,
+    "ttft2048": 4059.7,
+    "itl50": 11.0,
+    "itl95": 18.1,
+    "itl99": 18.8,
+    "multi": 70.0,
+    "rss": 2.62
+   },
+   "llama": {
+    "tok": 38.6,
+    "ttft2048": 9210.2,
+    "itl50": 12.0,
+    "itl95": 12.2,
+    "itl99": 12.3,
+    "multi": 41.3,
+    "rss": 7.76
+   },
+   "errors": 0,
+   "note": ""
+  },
+  {
+   "model": "Gemma 3 1B IT",
+   "same_shape": [],
+   "dynalm": {
+    "tok": 74.4,
+    "ttft2048": 1647.5,
+    "itl50": 9.6,
+    "itl95": 12.6,
+    "itl99": 23.2,
+    "multi": 131.9,
+    "rss": 1.01
+   },
+   "llama": {
+    "tok": 96.6,
+    "ttft2048": 2024.5,
+    "itl50": 5.9,
+    "itl95": 7.0,
+    "itl99": 9.5,
+    "multi": 120.3,
+    "rss": 2.27
+   },
+   "errors": 0,
+   "note": ""
+  },
+  {
+   "model": "Gemma 3 4B IT",
+   "same_shape": [],
+   "dynalm": {
+    "tok": 41.5,
+    "ttft2048": 5048.6,
+    "itl50": 14.0,
+    "itl95": 19.5,
+    "itl99": 24.0,
+    "multi": 54.1,
+    "rss": 3.18
+   },
+   "llama": {
+    "tok": 31.9,
+    "ttft2048": 10130.0,
+    "itl50": 14.9,
+    "itl95": 15.2,
+    "itl99": 17.4,
+    "multi": 34.8,
+    "rss": 8.24
+   },
+   "errors": 0,
+   "note": ""
+  },
+  {
+   "model": "DeepSeek Coder 1.3B Instruct",
+   "same_shape": [],
+   "dynalm": {
+    "tok": 88.7,
+    "ttft2048": 2012.7,
+    "itl50": 7.2,
+    "itl95": 13.6,
+    "itl99": 14.0,
+    "multi": 127.2,
+    "rss": 1.84
+   },
+   "llama": {
+    "tok": 83.3,
+    "ttft2048": 3769.6,
+    "itl50": 6.3,
+    "itl95": 6.4,
+    "itl99": 6.5,
+    "multi": 91.6,
+    "rss": 8.4
+   },
+   "errors": 0,
+   "note": ""
+  },
+  {
+   "model": "Qwen2.5 7B Instruct",
+   "same_shape": [
+    "Qwen2.5 Coder 7B Instruct"
+   ],
+   "dynalm": {
+    "tok": 24.0,
+    "ttft2048": 8930.4,
+    "itl50": 23.0,
+    "itl95": 34.5,
+    "itl99": 54.2,
+    "multi": 30.3,
+    "rss": 5.0
+   },
+   "llama": {
+    "tok": 14.5,
+    "ttft2048": 20444.6,
+    "itl50": 28.7,
+    "itl95": 51.6,
+    "itl99": 156.5,
+    "multi": 17.5,
+    "rss": 9.04
+   },
+   "errors": 0,
+   "note": ""
+  },
+  {
+   "model": "Qwen3 8B",
+   "same_shape": [],
+   "dynalm": {
+    "tok": 23.4,
+    "ttft2048": 9699.2,
+    "itl50": 24.8,
+    "itl95": 31.2,
+    "itl99": 37.8,
+    "multi": 25.1,
+    "rss": 5.63
+   },
+   "llama": {
+    "tok": 15.3,
+    "ttft2048": 22530.6,
+    "itl50": 26.8,
+    "itl95": 31.9,
+    "itl99": 73.6,
+    "multi": 15.6,
+    "rss": 9.63
+   },
+   "errors": 0,
+   "note": ""
+  },
+  {
+   "model": "Llama 3.1 8B Instruct",
+   "same_shape": [
+    "Llama 3 8B Instruct",
+    "DeepSeek R1 Distill Llama 8B"
+   ],
+   "dynalm": {
+    "tok": 23.9,
+    "ttft2048": 9475.0,
+    "itl50": 24.2,
+    "itl95": 30.3,
+    "itl99": 36.0,
+    "multi": 28.7,
+    "rss": 5.48
+   },
+   "llama": {
+    "tok": 15.6,
+    "ttft2048": 22602.8,
+    "itl50": 26.0,
+    "itl95": 33.6,
+    "itl99": 44.9,
+    "multi": 16.5,
+    "rss": 9.85
+   },
+   "errors": 0,
+   "note": ""
+  },
+  {
+   "model": "Mistral 7B Instruct v0.3",
+   "same_shape": [],
+   "dynalm": {
+    "tok": 23.2,
+    "ttft2048": 9684.6,
+    "itl50": 24.3,
+    "itl95": 34.8,
+    "itl99": 52.4,
+    "multi": 29.5,
+    "rss": 4.95
+   },
+   "llama": {
+    "tok": 16.8,
+    "ttft2048": 22265.4,
+    "itl50": 23.9,
+    "itl95": 27.0,
+    "itl99": 34.2,
+    "multi": 17.3,
+    "rss": 8.97
+   },
+   "errors": 0,
+   "note": ""
+  },
+  {
+   "model": "Gemma 2 9B IT",
+   "same_shape": [],
+   "dynalm": {
+    "tok": 17.2,
+    "ttft2048": 12651.0,
+    "itl50": 34.6,
+    "itl95": 42.7,
+    "itl99": 56.7,
+    "multi": 22.1,
+    "rss": 7.23
+   },
+   "llama": {
+    "tok": 10.8,
+    "ttft2048": 33816.9,
+    "itl50": 36.1,
+    "itl95": 56.4,
+    "itl99": 93.5,
+    "multi": 12.3,
+    "rss": 11.53
+   },
+   "errors": 0,
+   "note": ""
+  }
+ ],
+ "failed": [
+  {
+   "n": 22,
+   "model": "DeepSeek R1 Distill Qwen 7B",
+   "reason": "download failed (curl exit 56)"
+  }
+ ],
+ "total_models": 45
+}
