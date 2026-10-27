@@ -126,19 +126,25 @@ void test_open_server(const std::string& model) {
   // Error bodies never echo the model path.
   CHECK(r->body.find(model) == std::string::npos);
 
-  // Overload: max_active = 1, a long streaming request holds the slot.
-  std::atomic<bool> streaming{false};
+  // Overload: max_active = 1, a long streaming request holds the slot. The second request is sent
+  // from the holder's first chunk, while that stream is certainly open, and the holder ignores EOS
+  // so it cannot end early (a fast runner used to finish the holder first and get a 200).
+  bool overload_sent = false;
+  httplib::Result overload;
   std::thread holder([&] {
-    stream_post(f.port, R"({"prompt":"hold","max_tokens":600,"stream":true,"temperature":0})", [&](size_t) {
-      streaming.store(true);
-      return true;
-    });
+    stream_post(f.port, R"({"prompt":"hold","max_tokens":900,"ignore_eos":true,"stream":true,"temperature":0})",
+                [&](size_t) {
+                  if (!overload_sent) {
+                    overload_sent = true;
+                    auto c2 = f.client();
+                    overload = c2.Post("/v1/completions", kBody, kJson);
+                  }
+                  return true;
+                });
   });
-  for (int i = 0; i < 2000 && !streaming.load(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(5));
-  CHECK(streaming.load());
-  r = c.Post("/v1/completions", kBody, kJson);
-  CHECK(r && r->status == 503 && r->has_header("Retry-After"));
   holder.join();
+  CHECK(overload_sent);
+  CHECK(overload && overload->status == 503 && overload->has_header("Retry-After"));
 
   // Disconnect mid-stream frees the request (slot back to 0).
   {
