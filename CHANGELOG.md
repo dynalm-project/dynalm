@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-27
+
+A patch release: one display fix and new benchmark documentation. The engine, its kernels and its
+defaults are unchanged from 0.3.0.
+
+### Fixed
+- `dynalm --version` printed `cpu path: ggml kernels` on CPUs where DynaLM's own kernels are the
+  default CPU path (SME CPUs such as Apple M4). It now reports the path the engine uses:
+  `DynaLM kernels (default on this CPU)` there, ggml's kernels elsewhere. `dynalm doctor` and the
+  `Device:` log line were already correct.
+
+### Documentation
+- CPU model sweep (`docs/perf/cpu-model-sweep.md`, in progress): accuracy against llama.cpp for
+  27 GGUF models from 0.36B to 9B parameters and speed for 19 model shapes, on one Apple M4 Pro.
+
 ## [0.3.0] - 2026-10-26
 
 DynaLM's own CPU engine (no ggml in the CPU path) and the CPU performance work measured on the
