@@ -41,6 +41,7 @@ add_library(dynalm_runtime STATIC
   runtime/speculative.cpp
   runtime/sequence.cpp
   runtime/text_stream.cpp
+  sampling/json_constraint.cpp
   sampling/sampler.cpp
   scheduler/scheduler.cpp
   tokenizer/pretokenizer.cpp

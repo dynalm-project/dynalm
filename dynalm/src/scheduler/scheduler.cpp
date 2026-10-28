@@ -131,6 +131,7 @@ uint64_t Scheduler::submit(Request request) {
   // are taken until admission.
   e.seq = std::make_unique<SequenceState>(id, request.prompt, request.stop, kv_);
   e.priority = request.priority;
+  e.constraint = std::move(request.constraint);
   if (!request.sampling.greedy() || request.sampling.has_penalties()) {
     e.sampler = std::make_unique<Sampler>(request.sampling);
   }
@@ -650,6 +651,23 @@ bool Scheduler::step() {
           next = sample_greedy(row);
           ok = next == draft;
         }
+      } else if (e.constraint) {
+        // The unconstrained choice first; the whole vocabulary is masked only
+        // when that token would break the JSON.
+        if (e.sampler) {
+          constrained_row_.assign(row.begin(), row.end());
+          next = e.sampler->sample(constrained_row_, e.seq->tokens());
+        } else {
+          next = sample_greedy(row);
+        }
+        if (!e.constraint->allows(next)) {
+          if (!e.constraint->mask(row)) {
+            e.seq->fail(Internal("structured output: no token can continue the JSON"));
+            break;
+          }
+          next = e.sampler ? e.sampler->sample(row, e.seq->tokens()) : sample_greedy(row);
+        }
+        e.constraint->accept(next);
       } else {
         next = e.sampler ? e.sampler->sample(row, e.seq->tokens()) : sample_greedy(row);
       }
@@ -686,7 +704,7 @@ int32_t Scheduler::plan_drafts(Entry& e, int32_t room, uint64_t step_no) {
   // Up to the tokens this request may still generate after the next one.
   const int32_t left = q.stop().max_new_tokens - q.generated() - 1;
   const int32_t k = std::min({config_.spec_k, room, left});
-  if (k <= 0 || step_no < e.spec_resume_step) return 0;
+  if (k <= 0 || step_no < e.spec_resume_step || e.constraint) return 0;
   if (e.spec_accept_ema < 0.25) e.spec_accept_ema = 0.5;  // probing again after a pause
   e.spec_feed.assign(1, q.tokens().back());
   std::vector<TokenId> drafts;
@@ -707,7 +725,7 @@ void Scheduler::draft_with_model(uint64_t step_no) {
   for (Entry& e : running_) {
     e.spec_model_drafts.clear();
     if (is_terminal(e.seq->status()) || e.seq->status() != SequenceStatus::kDecode || e.seq->pending() != 1) continue;
-    if (step_no < e.spec_resume_step) continue;
+    if (step_no < e.spec_resume_step || e.constraint) continue;
     const int32_t left = e.seq->stop().max_new_tokens - e.seq->generated() - 1;
     const int32_t k = std::min(config_.spec_k, left);
     if (k <= 0) continue;

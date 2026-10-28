@@ -1,4 +1,5 @@
 #include "api/openai.h"
+#include "sampling/json_constraint.h"
 
 #include <cmath>
 #include "common/core.h"
@@ -96,7 +97,31 @@ Status read_common(const json::Value& body, int32_t default_max_tokens, float de
   if (const json::Value* n = body.find("n"); n && !n->is_null()) {
     if (!n->is_number() || n->as_number() != 1) return bad("only n = 1 is supported");
   }
-  for (std::string_view unsupported : {"tools", "functions", "logprobs", "top_logprobs", "response_format"}) {
+  // Structured output. OpenAI: {"type": "json_object"} and
+  // {"type": "json_schema", "json_schema": {"schema": {...}}}; llama.cpp's
+  // {"type": "json_object", "schema": {...}} is accepted too.
+  if (const json::Value* rf = body.find("response_format"); rf && !rf->is_null()) {
+    const json::Value* type = rf->is_object() ? rf->find("type") : nullptr;
+    if (type == nullptr || !type->is_string()) return bad("'response_format' must be an object with a 'type'");
+    const std::string& t = type->as_string();
+    const json::Value* schema = nullptr;
+    if (t == "json_schema") {
+      const json::Value* js = rf->find("json_schema");
+      schema = js && js->is_object() ? js->find("schema") : nullptr;
+      if (schema == nullptr) return bad("'response_format': json_schema needs 'json_schema': {'schema': {...}}");
+    } else if (t == "json_object") {
+      schema = rf->find("schema");
+    } else if (t != "text") {
+      return bad("'response_format' type must be 'text', 'json_object' or 'json_schema'");
+    }
+    if (t != "text") {
+      auto g = JsonGrammar::compile(schema);
+      if (!g.ok()) return bad(g.status().message());
+      r.params.json = *g;
+    }
+  }
+
+  for (std::string_view unsupported : {"tools", "functions", "logprobs", "top_logprobs"}) {
     const json::Value* v = body.find(unsupported);
     if (v && !v->is_null() && !(v->is_bool() && !v->as_bool())) {
       return bad("'" + std::string(unsupported) + "' is not supported");

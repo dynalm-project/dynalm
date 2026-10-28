@@ -34,6 +34,7 @@
 #include "dynacore/base/status.h"
 #include "kv_cache/kv_cache.h"
 #include "model/transformer.h"
+#include "sampling/json_constraint.h"
 #include "sampling/sampler.h"
 #include "prefix_cache/prefix_cache.h"
 #include "runtime/sequence.h"
@@ -63,6 +64,9 @@ struct Request {
   RequestCallback on_event;
   int32_t priority = 0;    // higher is admitted first; FCFS within a level
   int64_t timeout_ms = 0;  // 0 = none; counted from submission, fails with kDeadlineExceeded
+  // Structured output: only tokens that keep the output valid JSON (and the
+  // schema) are chosen; such streams do not draft speculatively.
+  std::shared_ptr<JsonConstraint> constraint;
 };
 
 // Per-step work limits. Decode rows (one per generating sequence) are cheap
@@ -329,6 +333,7 @@ class Scheduler {
     int64_t last_token_ns = 0;  // when it last produced a token (prefill bursts)
     int32_t cached_blocks = 0;  // full blocks already offered to the prefix cache
     std::unique_ptr<Sampler> sampler;  // null: greedy
+    std::shared_ptr<JsonConstraint> constraint;  // null: unconstrained
     int64_t admit_ns = 0;       // latest admission (prefill aging)
     RequestTrace trace;         // filled only with SchedulerConfig::trace
     // Speculative decoding (SchedulerConfig::spec_k): this step's decode
@@ -344,6 +349,7 @@ class Scheduler {
   // Draft-model drafts of every eligible decoding stream, once per step.
   void draft_with_model(uint64_t step_no);
   BatchDrafter* draft_ = nullptr;
+  std::vector<float> constrained_row_;  // a logits row sampled before the constraint check
 
   void drain_incoming();
   void expire_deadlines(int64_t now);

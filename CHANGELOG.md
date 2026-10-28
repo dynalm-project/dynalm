@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+- Structured output: `response_format` `json_object` and `json_schema` (OpenAI), and
+  llama.cpp's `json_object` + `schema`. Only tokens that keep the answer valid JSON, matching the
+  schema, are chosen, and generation ends with the document. JSON Schema subset: types,
+  properties, required, `additionalProperties: false`, items, enum, const, and anyOf/oneOf with
+  alternatives that start differently. Other keywords are refused with an error, never ignored.
+  On an Apple M4 Pro (Qwen2.5-0.5B, CPU and Metal), throughput is unchanged.
+
 ## [0.3.2] - 2026-10-28
 
 A performance patch for ARM CPUs: faster Q5_0 and Q5_1 weights. Results are bit-identical to 0.3.1.
