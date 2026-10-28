@@ -337,7 +337,18 @@ void check_weight_panels(DType t, int64_t n, int64_t k) {
         if (n0 + j < n) CHECK(dequantize_row(t, w.data() + (n0 + j) * rb, wd.data(), k));
         for (int64_t i = 0; i < k; ++i) {
           const float want = n0 + j < n ? wd[static_cast<size_t>(i)] : 0.0f;
-          CHECK(panel[static_cast<size_t>(i * qmm::kSmePanel + j)] == want);
+          const float got = panel[static_cast<size_t>(i * qmm::kSmePanel + j)];
+          if (got != want) {
+            // Seen once on a macos-14 Rosetta CI runner and not reproduced:
+            // say exactly which value differed, bit patterns included.
+            uint32_t gb = 0, wb = 0;
+            std::memcpy(&gb, &got, 4);
+            std::memcpy(&wb, &want, 4);
+            std::fprintf(stderr, "weight_panel_f32 %s n=%lld k=%lld packed=%d row=%lld k_index=%lld: got %.9g (0x%08x), want %.9g (0x%08x)\n",
+                         std::string(dtype_name(t)).c_str(), static_cast<long long>(n), static_cast<long long>(k),
+                         pk != nullptr ? 1 : 0, static_cast<long long>(n0 + j), static_cast<long long>(i), got, gb, want, wb);
+          }
+          CHECK(got == want);
         }
       }
     }
