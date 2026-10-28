@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <type_traits>
 
 #include "dynacore/cpu/qmm.h"
 #include "qmm_unpack.h"
@@ -21,6 +22,8 @@ namespace {
 
 using quant::BlockQ4_0;
 using quant::BlockQ4_K;
+using quant::BlockQ5_0;
+using quant::BlockQ5_1;
 using quant::BlockQ5_K;
 using quant::BlockQ6_K;
 using quant::BlockQ8_0;
@@ -60,6 +63,19 @@ void quantize_row(const float* x, int64_t k, ActMode mode, int8_t* hi, uint8_t* 
     d[b * ds] = db;
     c[b * ds] = db * static_cast<float>(vaddvq_s32(s));
   }
+}
+
+// Q5_0 / Q5_1 fifth bits: bit i of qh, as 0x10 in byte i of h[0] (i < 16) or h[1] (i >= 16).
+inline void q5_high_bits(const uint8_t* qh, uint8x16_t h[2]) {
+  uint32_t u;
+  std::memcpy(&u, qh, 4);
+  const uint8x16_t v = vreinterpretq_u8_u32(vdupq_n_u32(u));  // the 4 bytes, repeated
+  static constexpr uint8_t kIdx0[16] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1};
+  static constexpr uint8_t kIdx1[16] = {2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3};
+  static constexpr uint8_t kBit[16] = {1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128};
+  const uint8x16_t bit = vld1q_u8(kBit), b4 = vdupq_n_u8(0x10);
+  h[0] = vandq_u8(vtstq_u8(vqtbl1q_u8(v, vld1q_u8(kIdx0)), bit), b4);
+  h[1] = vandq_u8(vtstq_u8(vqtbl1q_u8(v, vld1q_u8(kIdx1)), bit), b4);
 }
 
 // ---------------------------------------------------------------------------
@@ -146,6 +162,24 @@ inline void unpack(const void* row, int64_t sub0, int nsub, Group& g) {
       vst1q_s8(g.q + 32 * j + 16, vsubq_s8(vreinterpretq_s8_u8(vshrq_n_u8(q, 4)), k8));
       detail::set32(g, j, fp16_to_fp32(b[j].d));
       g.mn[j] = 0;
+    }
+  } else if constexpr (T == DType::kQ5_0 || T == DType::kQ5_1) {
+    using B = std::conditional_t<T == DType::kQ5_0, BlockQ5_0, BlockQ5_1>;
+    const B* b = static_cast<const B*>(row) + sub0;
+    const uint8x16_t m4 = vdupq_n_u8(0x0F);
+    const int8x16_t off = vdupq_n_s8(T == DType::kQ5_0 ? 16 : 0);
+    for (int j = 0; j < nsub; ++j) {
+      uint8x16_t h[2];
+      q5_high_bits(b[j].qh, h);
+      const uint8x16_t q = vld1q_u8(b[j].qs);
+      vst1q_s8(g.q + 32 * j, vsubq_s8(vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q, m4), h[0])), off));
+      vst1q_s8(g.q + 32 * j + 16, vsubq_s8(vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q, 4), h[1])), off));
+      detail::set32(g, j, fp16_to_fp32(b[j].d));
+      if constexpr (T == DType::kQ5_0) {
+        g.mn[j] = 0;
+      } else {
+        g.mn[j] = -fp16_to_fp32(b[j].m);  // w = d q + m
+      }
     }
   } else {
     unpack_group<T>(row, sub0, nsub, g);
@@ -269,6 +303,25 @@ QMM_INLINE void unpack_v(const void* row, int64_t sub0, GroupV& g) {
       const uint8x16_t q = vld1q_u8(b[j].qs);
       g.q[2 * j] = vsubq_s8(vreinterpretq_s8_u8(vandq_u8(q, m4)), k8);
       g.q[2 * j + 1] = vsubq_s8(vreinterpretq_s8_u8(vshrq_n_u8(q, 4)), k8);
+    }
+  } else if constexpr (T == DType::kQ5_0 || T == DType::kQ5_1) {
+    using B = std::conditional_t<T == DType::kQ5_0, BlockQ5_0, BlockQ5_1>;
+    const B* b = static_cast<const B*>(row) + sub0;
+    legacy_scales(reinterpret_cast<const uint8_t*>(&b[0].d), sizeof(B), g);
+    if constexpr (T == DType::kQ5_1) {  // per-32 minimum coefficients: mn = -m
+      GroupV t;
+      legacy_scales(reinterpret_cast<const uint8_t*>(&b[0].m), sizeof(B), t);
+      g.mn[0] = vnegq_f32(t.s[0]);
+      g.mn[1] = vnegq_f32(t.s[1]);
+    }
+    const uint8x16_t m4 = vdupq_n_u8(0x0F);
+    const int8x16_t off = vdupq_n_s8(T == DType::kQ5_0 ? 16 : 0);
+    for (int j = 0; j < 8; ++j) {
+      uint8x16_t h[2];
+      q5_high_bits(b[j].qh, h);
+      const uint8x16_t q = vld1q_u8(b[j].qs);
+      g.q[2 * j] = vsubq_s8(vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q, m4), h[0])), off);
+      g.q[2 * j + 1] = vsubq_s8(vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q, 4), h[1])), off);
     }
   } else {
     Group t;
