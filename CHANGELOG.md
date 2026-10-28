@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-10-28
+
+A performance patch for ARM CPUs: faster Q5_0 and Q5_1 weights. Results are bit-identical to 0.3.1.
+
+### Performance
+- ARM (NEON) unpacking for Q5_0 and Q5_1 weights in the CPU matmul kernels, for both decode and
+  prompt processing. These formats used the scalar path before. llama.cpp's Q4_K_M files use Q5_0
+  for tensors whose row length is not a multiple of 256 (Qwen2.5-0.5B, SmolLM2-360M, Gemma-3-1B).
+  On Qwen2.5-0.5B Q4_K_M, 8 threads, Apple M4 Pro: 66 to 107 output tokens/s against 0.3.1's
+  engine (A/B on battery, Low Power Mode).
+
 ## [0.3.1] - 2026-10-27
 
 A patch release: one display fix and new benchmark documentation. The engine, its kernels and its
