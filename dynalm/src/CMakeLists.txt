@@ -8,6 +8,7 @@ add_library(dynalm_runtime STATIC
   bench/analysis.cpp
   bench/loadgen.cpp
   chat_template/chat_template.cpp
+  common/sha256.cpp
   config/config.cpp
   diagnostics/doctor.cpp
   execution/batch_planner.cpp

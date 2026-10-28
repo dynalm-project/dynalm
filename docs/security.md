@@ -60,6 +60,10 @@ warning.
 **Downloads** (`dynalm pull`):
 - the saved file name is restricted to `[A-Za-z0-9._-]`, does not start with `.`, and must end in `.gguf`;
 - the first 256 KiB are checked before the full download;
+- a file from Hugging Face is checked against the SHA-256 Hugging Face publishes for it (the
+  `X-Linked-ETag` header of LFS and Xet files) before it is moved into the model store; on a
+  mismatch the file is deleted and the pull fails. Other servers publish no checksum, so their
+  files are not checked, and pull says so;
 - `HF_TOKEN` is sent only to `https://huggingface.co/` URLs, through a mode-0600 header file, never on the command line.
 
 **Prompts and output** are not stored or logged by default. `--request-log` and
