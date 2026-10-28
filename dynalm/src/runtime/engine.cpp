@@ -550,10 +550,19 @@ Result<std::shared_ptr<RequestStream>> Engine::submit(std::vector<TokenId> token
 
   Request r;
   r.prompt = std::move(tokens);
-  r.stop = StopParams{params.max_tokens, params.stop_at_eog};
+  r.stop = StopParams{params.max_tokens, params.stop_at_eog || params.json != nullptr};
   r.priority = params.priority;
   r.sampling = params.sampling;
   r.timeout_ms = params.timeout_ms;
+  if (params.json) {
+    std::shared_ptr<const VocabBytes> vocab;
+    {
+      std::lock_guard<std::mutex> lock(vocab_bytes_mu_);
+      if (!vocab_bytes_) vocab_bytes_ = VocabBytes::build(*model_->tokenizer);
+      vocab = vocab_bytes_;
+    }
+    r.constraint = std::make_shared<JsonConstraint>(params.json, std::move(vocab), model_->tokenizer->eog_tokens());
+  }
   // Runs on the scheduler thread.
   r.on_event = [state, weak_core](const RequestEvent& ev) {
     if (state->ended) return;

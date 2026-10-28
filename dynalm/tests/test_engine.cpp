@@ -34,6 +34,7 @@
 
 #include "api/json.h"
 #include "chat_template/chat_template.h"
+#include "sampling/json_constraint.h"
 #include "common/sha256.h"
 #include "diagnostics/doctor.h"
 #include "dynacore/cpu/qmm.h"
@@ -134,6 +135,64 @@ const std::vector<std::string> kPrompts = {
     "forward pass and the prefix cache can share whole blocks between requests.",
 };
 const std::string kShared = std::string(200, 'x') + " shared system preamble. ";
+
+// Structured output through the scheduler: an enum ends right after its
+// value; free-form JSON streams (sampled, batched with an unconstrained
+// request) are always a valid prefix, and a valid document when they stop.
+void test_structured_output(Engine& e) {
+  auto compile = [](const char* schema) {
+    auto v = json::parse(schema);
+    CHECK(v.ok());
+    auto g = JsonGrammar::compile(&*v);
+    CHECK(g.ok());
+    return *g;
+  };
+  GenerateParams p;
+  p.max_tokens = 16;
+  p.json = compile(R"({"enum":["yes","no"]})");
+  auto s = e.generate_text(kPrompts[0], false, p);
+  CHECK(s.ok());
+  Out o = drain(*s);
+  CHECK(o.finish == StreamFinish::kStop && (o.text == "\"yes\"" || o.text == "\"no\""));
+
+  auto any_object = JsonGrammar::compile(nullptr);
+  CHECK(any_object.ok());
+  auto check_vocab = VocabBytes::from_bytes({"", "x"});
+  std::vector<std::shared_ptr<RequestStream>> streams;
+  for (int i = 0; i < 4; ++i) {
+    GenerateParams q;
+    q.max_tokens = 200;
+    q.json = i == 3 ? compile(R"({"type":"object","properties":{"a":{"type":"integer"},"b":{"type":"array","items":{"type":"boolean"}}},"required":["a","b"],"additionalProperties":false})")
+                    : *any_object;
+    q.sampling.temperature = 1.0f;
+    q.sampling.seed = 11 + static_cast<uint64_t>(i);
+    q.sampling.has_seed = true;
+    auto r = e.generate_text(kPrompts[static_cast<size_t>(i) % kPrompts.size()], false, q);
+    CHECK(r.ok());
+    streams.push_back(*r);
+  }
+  auto plain = e.generate_text(kPrompts[1], false, greedy(40));  // unconstrained, same batches
+  CHECK(plain.ok());
+  int stopped = 0;
+  for (size_t i = 0; i < streams.size(); ++i) {
+    const Out r = drain(streams[i]);
+    CHECK(r.finish == StreamFinish::kStop || r.finish == StreamFinish::kLength);
+    JsonConstraint c(i == 3 ? compile(R"({"type":"object","properties":{"a":{"type":"integer"},"b":{"type":"array","items":{"type":"boolean"}}},"required":["a","b"],"additionalProperties":false})")
+                            : *any_object,
+                     check_vocab, {0});
+    JsonConstraint::State st = c.state();
+    bool prefix = true;
+    for (char ch : r.text) prefix = prefix && c.feed(st, static_cast<uint8_t>(ch));
+    CHECK(prefix);
+    if (r.finish == StreamFinish::kStop) {
+      ++stopped;
+      CHECK(c.can_finish(st) && json::parse(r.text).ok());
+    }
+  }
+  CHECK(drain(*plain).tokens == 40);
+  std::printf("  structured output: enum ends after its value; %d of 4 sampled JSON streams completed, all valid prefixes\n",
+              stopped);
+}
 
 void test_basic_and_isolation(Engine& e, const char* label) {
   // 1. determinism
@@ -1247,6 +1306,135 @@ void test_mixed_step_protection(DeviceKind dev) {
   set_env("DYNALM_PREFILL_BURST_MS", "");
 }
 
+// Structured output (sampling/json_constraint): the matcher on whole
+// documents, schema compilation errors, and the vocabulary mask, which must
+// agree with the per-token check on every token at every step.
+void test_json_constraint() {
+  auto grammar = [](const char* schema) {
+    if (schema == nullptr) return JsonGrammar::compile(nullptr);
+    auto v = json::parse(schema);
+    CHECK(v.ok());
+    return JsonGrammar::compile(&*v);
+  };
+  auto vocab = VocabBytes::from_bytes({"", "x"});
+  // 1: every byte accepted and the document complete; 0: a byte rejected; 2: valid prefix only.
+  auto match = [&](const char* schema, std::string_view text) {
+    auto g = grammar(schema);
+    CHECK(g.ok());
+    JsonConstraint c(*g, vocab, {0});
+    JsonConstraint::State s = c.state();
+    for (char ch : text) {
+      if (!c.feed(s, static_cast<uint8_t>(ch))) return 0;
+    }
+    return c.can_finish(s) ? 1 : 2;
+  };
+  // json_object: any object.
+  CHECK(match(nullptr, R"({"a": [1, -2.5e3, true, false, null, {"b": "x\né \"q\""}], "c": {}})") == 1);
+  CHECK(match(nullptr, "{}") == 1);
+  CHECK(match(nullptr, "{ \n\t}") == 1);
+  CHECK(match(nullptr, "[1]") == 0);          // the root is an object
+  CHECK(match(nullptr, R"({"a" 1})") == 0);
+  CHECK(match(nullptr, R"({"a":1,})") == 0);
+  CHECK(match(nullptr, R"({"a":01})") == 0);
+  CHECK(match(nullptr, R"({"a":tru})") == 0);
+  CHECK(match(nullptr, "{} ") == 0);          // nothing after the document
+  CHECK(match(nullptr, R"({"a":"x)") == 2);
+  CHECK(match(nullptr, "{\"a\":\"\x01\"}") == 0);  // control character in a string
+  CHECK(match(nullptr, R"({"a":"\q"})") == 0);
+  CHECK(match(nullptr, ("{" + std::string(32, ' ') + "}").c_str()) == 1);
+  CHECK(match(nullptr, ("{" + std::string(33, ' ') + "}").c_str()) == 0);  // whitespace run limit
+  CHECK(match(nullptr, " {}") == 0);                                       // nothing before the document
+  std::string deep = "{\"a\":";
+  for (int i = 0; i < 40; ++i) deep += "[";
+  CHECK(match(nullptr, deep) == 0);  // depth limit
+  // A schema: required keys in any order, no unknown or repeated keys, integer.
+  const char* person = R"({"type":"object","additionalProperties":false,"required":["name","age"],
+      "properties":{"name":{"type":"string","description":"full name"},"age":{"type":"integer"},
+                    "tags":{"type":"array","items":{"type":"string"}},"ok":{"type":"boolean"}}})";
+  CHECK(match(person, R"({"name": "Bo", "age": 30})") == 1);
+  CHECK(match(person, R"({"age":30,"tags":["a","b"],"name":"Bo","ok":true})") == 1);
+  CHECK(match(person, R"({"name":"Bo"})") == 0);           // "age" is required
+  CHECK(match(person, R"({"name":"Bo","nick":"B"})") == 0);  // unknown key
+  CHECK(match(person, R"({"name":"Bo","name":"B"})") == 0);  // repeated key
+  CHECK(match(person, R"({"name":"Bo","age":1.5})") == 0);   // integer
+  CHECK(match(person, R"({"name":"Bo","age":30,"tags":[1]})") == 0);
+  // enum / const, type lists, anyOf.
+  const char* color = R"({"enum":["red","green",1,12]})";
+  CHECK(match(color, "\"red\"") == 1);
+  CHECK(match(color, "1") == 1);
+  CHECK(match(color, "12") == 1);
+  CHECK(match(color, "\"blue\"") == 0);
+  CHECK(match(color, "2") == 0);
+  CHECK(match(R"({"const":"x"})", "\"x\"") == 1);
+  CHECK(match(R"({"type":["string","null"]})", "null") == 1);
+  CHECK(match(R"({"type":["string","null"]})", "\"n\"") == 1);
+  CHECK(match(R"({"type":["string","null"]})", "1") == 0);
+  CHECK(match(R"({"anyOf":[{"type":"object","properties":{"a":{"type":"number"}}},{"type":"array"}]})",
+              R"({"a":-0.5e-3})") == 1);
+  CHECK(match(R"({"type":"number"})", "-") == 2);
+  CHECK(match(R"({"type":"number"})", "-0.5") == 1);
+  CHECK(match(R"({"type":"object","properties":{"a\"b":{"type":"null"}}})", R"({"a\"b":null})") == 1);
+  // Refused, not ignored.
+  CHECK(!grammar(R"({"type":"string","pattern":"^a"})").ok());
+  CHECK(!grammar(R"({"anyOf":[{"type":"string"},{"enum":["a"]}]})").ok());  // both start with '"'
+  CHECK(!grammar(R"({"type":"object","properties":{"a":{}},"required":["b"]})").ok());
+  CHECK(!grammar(R"({"type":"object","properties":{"a":{}},"additionalProperties":true})").ok());
+  CHECK(!grammar(R"({"type":"tuple"})").ok());
+  CHECK(!grammar(R"({"enum":[]})").ok());
+
+  // The mask agrees with allows() for every token, at every step of random
+  // walks over a vocabulary of JSON fragments (shared prefixes on purpose).
+  std::vector<std::string> pieces = {"", "{", "}", "[", "]", "\"", ":", ",", " ", "\n", "a", "b", "1", "0", ".",
+                                     "e", "-", "true", "false", "null", "\\", "u", "\":", "\",", "{\"", "\"}"};
+  Rng rng(7);
+  std::vector<std::string> bytes = {"" /* end of generation */, "<|ctl|>"};
+  bytes[1].clear();  // a control token: no bytes
+  while (bytes.size() < 3000) {
+    std::string tok;
+    const int len = 1 + static_cast<int>(rng.next() % 4);
+    for (int i = 0; i < len; ++i) tok += pieces[1 + rng.next() % (pieces.size() - 1)];
+    bytes.push_back(tok);
+  }
+  auto big = VocabBytes::from_bytes(bytes);
+  int finished = 0, longest = 0;
+  for (const char* schema : {static_cast<const char*>(nullptr), person}) {
+    auto g = grammar(schema);
+    CHECK(g.ok());
+    for (int walk = 0; walk < 20; ++walk) {
+      JsonConstraint c(*g, big, {0});
+      for (int step = 0; step < 40; ++step) {
+        std::vector<float> logits(bytes.size(), 0.0f);
+        const bool any = c.mask(logits);
+        std::vector<TokenId> allowed;
+        for (TokenId id = 0; id < static_cast<TokenId>(bytes.size()); ++id) {
+          const bool masked_in = logits[static_cast<size_t>(id)] == 0.0f;
+          CHECK(masked_in == c.allows(id));
+          if (masked_in) allowed.push_back(id);
+        }
+        CHECK(any == !allowed.empty());
+        if (allowed.empty()) break;
+        // Prefer ending when allowed, so walks finish documents too.
+        const bool end = c.allows(0) && rng.next() % 2 == 0;
+        const TokenId pick = end ? 0 : allowed[rng.next() % allowed.size()];
+        c.accept(pick);
+        longest = std::max(longest, step + 1);
+        if (pick == 0) {  // end of generation: only once complete
+          ++finished;
+          break;
+        }
+      }
+    }
+  }
+  std::printf("  json mask walks: %d documents completed, longest walk %d tokens\n", finished, longest);
+  CHECK(finished > 0 && longest >= 20);
+  // Once complete, only end-of-generation is allowed.
+  auto g = grammar(nullptr);
+  JsonConstraint done(*g, VocabBytes::from_bytes({"", "{", "}", "{}"}), {0});
+  CHECK(!done.allows(0) && done.allows(1) && !done.allows(2) && done.allows(3));
+  done.accept(3);
+  CHECK(done.complete() && done.allows(0) && !done.allows(1) && !done.allows(3));
+}
+
 // SHA-256 against the FIPS 180-4 / NIST test vectors, split updates, a file,
 // and the Hugging Face X-Linked-ETag header parse used by `dynalm pull`.
 void test_sha256(const std::filesystem::path& dir) {
@@ -1296,6 +1484,8 @@ int main() {
   g_model = (dir / "tiny.gguf").string();
   CHECK(test::write_file(g_model, test::tiny_model_gguf()));
   int rc = 0;
+  test_json_constraint();
+  std::printf("structured output: JSON matcher, schema subset and refusals, vocabulary mask == per-token check\n");
   test_sha256(dir);
   std::printf("sha256: NIST vectors, split updates, file, Hugging Face X-Linked-ETag\n");
   test_device_plan();
@@ -1338,6 +1528,7 @@ int main() {
                 ggml_cpu_usable() ? ", native and ggml-cpu" : " (ggml-cpu: SKIP, not usable here)");
     test_memory_bounded(*e);
     std::printf("  memory bounded over repeated requests\n");
+    test_structured_output(*e);
     test_speculative_batch(DeviceKind::kCpu, /*exact=*/true);
     std::printf("  speculative decoding in the batch: same text as plain decoding, drafts accepted\n");
     // A draft model: the target itself (drafts mostly accepted) and an unrelated
@@ -1402,6 +1593,7 @@ int main() {
       std::printf("  concurrent + shared prefixes, cancellation, deadline, solo prefill and mixed-step traces\n");
       test_memory_bounded(*g);
       std::printf("  memory bounded over repeated requests\n");
+      test_structured_output(*g);
       // GPU: no batch invariance, so lengths and acceptance, not text equality.
       test_speculative_batch(gpu_kind, /*exact=*/false);
       std::printf("  speculative decoding in the batch: completes, drafts accepted\n");

@@ -25,6 +25,7 @@
 #include "loader/safetensors/safetensors.h"
 #include "model/transformer.h"
 #include "runtime/sequence.h"
+#include "sampling/json_constraint.h"
 #include "tests/tiny_gguf.h"
 
 using namespace dynalm;
@@ -163,6 +164,48 @@ int fuzz_json(int iters) {
   return 0;
 }
 
+// Structured output: mutated JSON schemas compile or are refused cleanly, and
+// the matcher runs over mutated documents without crashing (ASan/UBSan in CI).
+int fuzz_json_schema(int iters) {
+  const std::string schemas[] = {
+      R"({"type":"object","properties":{"a":{"type":"integer"},"b":{"type":["string","null"]},"c":{"type":"array","items":{"enum":["x",1,true]}}},"required":["a"],"additionalProperties":false})",
+      R"({"anyOf":[{"type":"object","properties":{"k\"q":{"const":-0.5e3}}},{"type":"array","items":{"type":"number"}}]})",
+      R"({"type":"object"})",
+  };
+  const std::string docs[] = {
+      R"({"a": 12, "b": null, "c": ["x", 1, true]})",
+      R"({"k\"q": -500.0, "z": [1, 2.5e-3, -0]})",
+      R"({"s": "\u00e9\n", "t": [{}, [], {"u": false}]})",
+  };
+  Mutator m{0xD6E8FEB86659FD93ull};
+  auto vocab = VocabBytes::from_bytes({"", "{", "}", "\"", "a"});
+  int compiled = 0, accepted = 0;
+  for (int i = 0; i < iters; ++i) {
+    const std::string& s = schemas[static_cast<size_t>(i) % std::size(schemas)];
+    // Half the schemas are mutated (compile or refuse cleanly); the other half
+    // stay valid so the matcher meets many mutated documents.
+    const std::vector<uint8_t> b = i % 2 == 0 ? m.mutate(std::vector<uint8_t>(s.begin(), s.end()), s.size())
+                                              : std::vector<uint8_t>(s.begin(), s.end());
+    auto v = json::parse(std::string(b.begin(), b.end()));
+    if (!v.ok()) continue;
+    auto g = JsonGrammar::compile(&*v);
+    if (!g.ok()) continue;
+    ++compiled;
+    JsonConstraint c(*g, vocab, {0});
+    JsonConstraint::State st = c.state();
+    const std::string& d = docs[static_cast<size_t>(i / 3) % std::size(docs)];
+    const std::vector<uint8_t> doc = i % 4 == 1 ? std::vector<uint8_t>(d.begin(), d.end())
+                                                : m.mutate(std::vector<uint8_t>(d.begin(), d.end()), d.size());
+    bool ok = true;
+    for (uint8_t ch : doc) {
+      if (!(ok = c.feed(st, ch))) break;
+    }
+    accepted += ok && c.can_finish(st) ? 1 : 0;
+  }
+  std::printf("  json schema: %d mutations, %d compiled, %d documents matched\n", iters, compiled, accepted);
+  return compiled > 0 && accepted > 0 ? 0 : -1;
+}
+
 // Regression (S10, found by this fuzzer): metadata that would size the
 // runtime far beyond the file (a block_count of 67,108,866 with 2 layers of
 // tensors, a huge embedding_length) is refused before any allocation.
@@ -199,6 +242,7 @@ int main(int argc, char** argv) {
   rc |= fuzz_gguf(dir.string(), iters);
   rc |= fuzz_safetensors(dir.string(), iters);
   rc |= fuzz_json(iters * 4);
+  rc |= fuzz_json_schema(iters * 4);
   std::filesystem::remove_all(dir);
   if (rc != 0) {
     std::fprintf(stderr, "fuzz harness error\n");

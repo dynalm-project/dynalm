@@ -37,6 +37,54 @@ Supported JSON payload fields:
 - `stop` (string | array): Stop sequences that halt generation.
 - `presence_penalty`, `frequency_penalty`, `repetition_penalty`: Penalties against repeated tokens.
 - `stream_options.include_usage` (boolean): Emits token usage statistics in the final chunk.
+- `response_format` (object): Structured output, see below.
+
+### Structured output (`response_format`)
+
+The answer is forced to be valid JSON, and optionally to match a JSON Schema. Tokens that would
+break the JSON are never chosen, and generation ends as soon as the document is complete.
+
+| `response_format` | Output |
+| :--- | :--- |
+| `{"type": "text"}` (default) | Free text |
+| `{"type": "json_object"}` | Any JSON object |
+| `{"type": "json_schema", "json_schema": {"name": "...", "schema": {...}}}` | JSON matching the schema |
+| `{"type": "json_object", "schema": {...}}` | Same as `json_schema` (llama.cpp's form) |
+
+```python
+response = client.chat.completions.create(
+    model="qwen2.5:1.5b",
+    messages=[{"role": "user", "content": "Capital of France, as JSON with city and country."}],
+    response_format={"type": "json_schema", "json_schema": {"name": "place", "schema": {
+        "type": "object",
+        "properties": {"city": {"type": "string"}, "country": {"type": "string"}},
+        "required": ["city", "country"], "additionalProperties": False}}},
+)
+# '{\n  "city": "Paris",\n  "country": "France"\n}'
+```
+
+**Supported JSON Schema subset:**
+- `type`: one type, or a list of types;
+- `properties`, `required`, and `additionalProperties: false`;
+- `items`, `enum` and `const`;
+- `anyOf` / `oneOf`, when the alternatives start with different characters (for example a string
+  or `null`).
+
+Annotations (`title`, `description`, `default`, `examples`, `$schema`) are ignored. Any other
+keyword (`pattern`, `minLength`, `minimum`, `$ref`, `format`, ...) is refused with a 400 error
+naming it, never silently ignored.
+
+**Behaviour:**
+- **Key order:** object keys may come in any order, each at most once.
+- **Whitespace:** the document starts at its first character, and at most 32 whitespace
+  characters may come in a row.
+- **Length limit:** if `max_tokens` runs out first, the answer stops mid-document with
+  `finish_reason: "length"`, as with OpenAI. Give it enough tokens.
+- **Speculative decoding:** structured requests do not use it.
+- **Speed:** on an Apple M4 Pro, Qwen2.5-0.5B, the speed was the same as without structured
+  output.
+- **Prompting:** say in the prompt that you want JSON. The constraint guarantees valid JSON, but
+  the model writes better JSON when it is told to.
 
 ---
 

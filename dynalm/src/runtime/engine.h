@@ -169,6 +169,9 @@ struct GenerateParams {
   int32_t priority = 0;
   int64_t timeout_ms = 0;
   SamplingParams sampling;  // default: greedy (DD-043)
+  // Structured output (response_format): generate JSON matching this grammar.
+  // Implies stop_at_eog, so generation ends with the document.
+  std::shared_ptr<const JsonGrammar> json;
 };
 
 enum class StreamFinish : uint8_t { kNone, kStop, kLength, kCancelled, kError };
@@ -343,6 +346,9 @@ class Engine {
   std::unique_ptr<Transformer> draft_transformer_;
   std::unique_ptr<BatchDrafter> drafter_;
   std::unique_ptr<Scheduler> scheduler_;
+  // The vocabulary's bytes for structured output, built on first use.
+  std::mutex vocab_bytes_mu_;
+  std::shared_ptr<const VocabBytes> vocab_bytes_;
   std::shared_ptr<Core> core_;
 
   std::thread thread_;
