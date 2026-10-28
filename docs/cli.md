@@ -88,6 +88,9 @@ dynalm pull unsloth/gemma-3-4b-it-GGUF/gemma-3-4b-it-Q4_K_M.gguf --check
 
 - Unsupported architectures are refused before the download starts.
 - Interrupted downloads resume when you run the same command again.
+- Files from Hugging Face are checked against the SHA-256 that Hugging Face publishes for them
+  (about 20 s for a 5 GB file). A file that does not match is deleted and the pull fails.
+  Files from other servers, which publish no checksum, are not checked; pull says so.
 - Gated models (e.g. official Llama): accept the license on Hugging Face, then set `HF_TOKEN`.
 - Needs `curl`, which is built into Windows 10+, macOS and Linux.
 

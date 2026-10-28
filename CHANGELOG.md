@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Security
+- `dynalm pull` checks a file from Hugging Face against the SHA-256 Hugging Face publishes for it
+  (`X-Linked-ETag`) before moving it into the model store. A corrupt or altered download is
+  deleted and the pull fails. Files from other servers are not checked, and pull says so.
+
 ## [0.3.2] - 2026-10-28
 
 A performance patch for ARM CPUs: faster Q5_0 and Q5_1 weights. Results are bit-identical to 0.3.1.
