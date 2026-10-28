@@ -481,3 +481,39 @@ and C6 (1.46×): decode on one stream and gaps under new prompts.
   name, and DynaCore's CPU device under `--execution auto` is named "compiled/CPU". It failed on
   ARM builds without a GPU backend (hidden where native Metal is built). Fixed in the test (it now
   checks `Engine::device_kind()`); no engine change.
+
+## Cycle 3 (token gaps after a prompt) — 2026-10-28
+
+### Diagnosis: slower decode for about 110 ms after an SME prefill
+
+Measured on the Apple M4 Pro, AC power, Energy Mode Automatic (`powermode 0`), DynaLM 0.4.0,
+Qwen2.5-0.5B Q4_K_M, 8 threads, one stream, `dynalm benchmark --step-trace`:
+
+- **Slow window.** After every prompt of 512 tokens or more, the first 19–22 decode steps take
+  about 5.0 ms; after that, steps take 2.8–3.4 ms. The window lasts 106–113 ms, whatever the
+  prompt length or context position:
+
+  | Prompt | Last prefill chunk | Slow decode steps | Window |
+  |---|---|---|---|
+  | 64 | 33 ms | 0 | – |
+  | 512 | 182 ms | 22 | 109–113 ms |
+  | 1024 | 200 ms | 21–22 | 107–112 ms |
+  | 2048 | 240 ms | 19–20 | 106–111 ms |
+
+- **Cause: SME.** It disappears with `DYNACORE_SME=0`, which costs prompt speed: the 512-token
+  prefill takes 331–339 ms instead of 182 ms, and steady steps take 3.4–3.9 ms instead of 2.9 ms.
+- **Not a state leak.** The SME kernels enter and leave streaming mode and ZA around every block
+  (`smstart sm` / `smstart za` … `smstop za` / `smstop sm` in `qmm_sme.cpp.o`).
+- **Reproduced without DynaLM.** A standalone probe ran 200 ms of FMOPA on 8 threads, then timed
+  fixed NEON FMA work in 10 ms slices. NEON throughput was 10–11% lower for about 130 ms
+  (447–469k units per slice, against 497–505k after a 200 ms NEON burst), then fully back. So the
+  CPU runs slower for a while after heavy SME use (power management). DynaLM's decode, which is
+  partly memory-bound, slows by about 1.7× in that window.
+
+**Effect.** With a 128-token answer the window covers about 17% of the tokens, so the
+inter-token p90 and p99 rise: one stream, in process, p50 2.9 ms, p90 4.8 ms, p99 5.3 ms. This is
+most of the "p99 longer than llama.cpp" result in the CPU model sweep. Overall SME still wins:
+on a 512-token prompt it saves about 150 ms of prompt time, and the window costs about 44 ms.
+
+**Option.** `DYNACORE_SME=0` turns SME prefill off, for steadier token pacing at the cost of
+slower prompts.
