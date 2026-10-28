@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Security
+- `serve --api-keys-file FILE`: several API keys, one per line (`#` comments allowed), so each
+  user or app can have its own key and one can be revoked without changing the others.
+  `--api-key-file` still reads the first line only.
+- `serve --disable-metrics` (`server.metrics: false`): turns off `GET /metrics`.
+
 ## [0.3.2] - 2026-10-28
 
 A performance patch for ARM CPUs: faster Q5_0 and Q5_1 weights. Results are bit-identical to 0.3.1.

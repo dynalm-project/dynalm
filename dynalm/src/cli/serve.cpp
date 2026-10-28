@@ -32,7 +32,7 @@ constexpr OptionSpec kServeOptions[] = {
     {"model"},        {"host"},        {"port"},           {"model-id"},         {"threads"},
     {"ctx"},          {"batch"},       {"kv"},             {"http-threads"},     {"max-tokens"},
     {"max-active"},   {"request-timeout"}, {"temperature"}, {"backend"}, {"cpu", false}, {"gpu", false}, {"execution"}, {"shutdown-timeout"}, {"disable-admin", false}, {"int8-decode"}, {"policy"},
-    {"api-key-file"}, {"allow-unauthenticated", false},
+    {"api-key-file"}, {"api-keys-file"}, {"allow-unauthenticated", false}, {"disable-metrics", false},
     {"solo-prefill-chunk"}, {"solo-prefill-split", false}, {"prefill-order"}, {"prefill-aging-ms"},
     {"spec"}, {"spec-k"}, {"mode"},
 };
@@ -76,6 +76,9 @@ void usage() {
                "  --disable-admin         turn off POST /admin/shutdown (used by `dynalm stop`)\n"
                "  --api-key-file FILE     require \"Authorization: Bearer <key>\" (key: first line of FILE;\n"
                "                          or set DYNALM_API_KEY); required to bind a non-loopback --host\n"
+               "  --api-keys-file FILE    accept several keys, one per line ('#' comments); a key can be\n"
+               "                          revoked by deleting its line and restarting\n"
+               "  --disable-metrics       turn off GET /metrics\n"
                "  --allow-unauthenticated bind a non-loopback --host without an API key (trusted networks\n"
                "                          behind an authenticating gateway only; see docs/security.md)\n"
                "Every option can also be set as DYNALM_<OPTION> (e.g. DYNALM_HTTP_THREADS=32)\n"
@@ -110,7 +113,7 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
   int threads = 0, ctx = 0, batch = 0, http_threads = 0, max_tokens = 1024, max_active = 64;
   std::string spec;  // --spec: "" / "off" or "ngram"
   int32_t spec_k = 4;
-  std::string api_key_file;
+  std::string api_key_file, api_keys_file;
   bool allow_unauthenticated = false;
   int request_timeout_s = 600, shutdown_timeout_s = 30;
   for (size_t i = 0; i < args.size(); ++i) {
@@ -145,6 +148,8 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
     else if (a == "--shutdown-timeout") ok = parse_int(value(), shutdown_timeout_s);
     else if (a == "--disable-admin") so.enable_admin = false;
     else if (a == "--api-key-file") api_key_file = value();
+    else if (a == "--api-keys-file") api_keys_file = value();
+    else if (a == "--disable-metrics") so.enable_metrics = false;
     else if (a == "--allow-unauthenticated") allow_unauthenticated = true;
     else if (a == "--backend") {
       if (Status st = apply_backend_choice(value(), eo); !st.ok()) {
@@ -200,11 +205,19 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
     std::fprintf(stderr, "serve: %s\n", key.status().message().c_str());
     return 1;
   }
-  so.api_key = std::move(*key);
-  if (!is_loopback_host(so.host) && so.api_key.empty() && !allow_unauthenticated) {
+  if (!key->empty()) so.api_keys.push_back(std::move(*key));
+  if (!api_keys_file.empty()) {
+    auto keys = load_api_keys(api_keys_file);
+    if (!keys.ok()) {
+      std::fprintf(stderr, "serve: %s\n", keys.status().message().c_str());
+      return 1;
+    }
+    so.api_keys.insert(so.api_keys.end(), keys->begin(), keys->end());
+  }
+  if (!is_loopback_host(so.host) && so.api_keys.empty() && !allow_unauthenticated) {
     std::fprintf(stderr,
-                 "serve: --host %s exposes the server beyond this machine; set an API key (--api-key-file or "
-                 "DYNALM_API_KEY), or pass --allow-unauthenticated behind an authenticating gateway\n",
+                 "serve: --host %s exposes the server beyond this machine; set an API key (--api-key-file, "
+                 "--api-keys-file or DYNALM_API_KEY), or pass --allow-unauthenticated behind an authenticating gateway\n",
                  so.host.c_str());
     return 1;
   }
@@ -261,8 +274,8 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
     std::fprintf(stderr, "serve: %s\n", st.to_string().c_str());
     return 1;
   }
-  if (!so.api_key.empty()) {
-    LOG_INFO("Authentication: API key required");
+  if (!so.api_keys.empty()) {
+    LOG_INFO("Authentication: API key required ({} key{})", so.api_keys.size(), so.api_keys.size() == 1 ? "" : "s");
   } else if (is_loopback_host(so.host)) {
     LOG_INFO("Authentication: off (loopback bind)");
   } else {

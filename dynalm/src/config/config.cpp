@@ -33,6 +33,7 @@ constexpr YamlKey kYamlKeys[] = {
     {"server.request_timeout", "request-timeout", "600", "per-request timeout in seconds; 0 = none"},
     {"server.shutdown_timeout", "shutdown-timeout", "30", "drain time on stop, seconds"},
     {"server.admin", "disable-admin", "true", "POST /admin/shutdown (used by dynalm stop)", true},
+    {"server.metrics", "disable-metrics", "true", "GET /metrics (Prometheus)", true},
 };
 
 std::string_view trim(std::string_view s) {

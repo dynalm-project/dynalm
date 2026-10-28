@@ -174,7 +174,7 @@ void test_open_server(const std::string& model) {
 
 void test_api_key(const std::string& model) {
   ServerOptions so;
-  so.api_key = "test-key-0123456789abcdef";
+  so.api_keys = {"test-key-0123456789abcdef", "other-key-0123456789abcdef"};
   Fixture f(model, so);
   auto c = f.client();
   auto r = c.Get("/health");
@@ -189,14 +189,29 @@ void test_api_key(const std::string& model) {
   CHECK(r && r->status == 401);
   r = c.Post("/admin/shutdown", "{}", kJson);
   CHECK(r && r->status == 401 && !f.shutdown_requested.load());
-  c.set_bearer_token_auth(so.api_key);
+  r = c.Get("/v1/models", httplib::Headers{{"Authorization", "Bearer " + so.api_keys[1]}});
+  CHECK(r && r->status == 200);  // any of the keys
+  c.set_bearer_token_auth(so.api_keys[0]);
   r = c.Post("/v1/completions", kBody, kJson);
   CHECK(r && r->status == 200);
   r = c.Get("/metrics");
-  CHECK(r && r->status == 200 && r->body.find(so.api_key) == std::string::npos);
-  CHECK(request_server_shutdown("127.0.0.1", f.port, so.api_key).ok());
+  CHECK(r && r->status == 200);
+  for (const std::string& k : so.api_keys) CHECK(r->body.find(k) == std::string::npos);
+  CHECK(request_server_shutdown("127.0.0.1", f.port, so.api_keys[1]).ok());
   CHECK(f.shutdown_requested.load());
-  std::printf("  API key: 401 without / wrong / non-bearer, /health open, admin needs the key, key never echoed\n");
+  std::printf("  API keys: 401 without / wrong / non-bearer, any key accepted, /health open, admin needs a key, keys never echoed\n");
+}
+
+void test_metrics_disabled(const std::string& model) {
+  ServerOptions so;
+  so.enable_metrics = false;
+  Fixture f(model, so);
+  auto c = f.client();
+  auto r = c.Get("/metrics");
+  CHECK(r && r->status == 404);
+  r = c.Get("/health");
+  CHECK(r && r->status == 200);
+  std::printf("  --disable-metrics: /metrics 404, /health still answers\n");
 }
 
 void test_key_loading(const std::filesystem::path& dir) {
@@ -208,9 +223,20 @@ void test_key_loading(const std::filesystem::path& dir) {
   auto k = load_api_key(file.string());
   CHECK(k.ok() && *k == "0123456789abcdef-good");
   CHECK(!load_api_key((dir / "missing").string()).ok());
+  const std::string multi = "# team keys\n0123456789abcdef-alice\r\n\n  0123456789abcdef-bob  \n";
+  CHECK(test::write_file(file.string(), std::vector<uint8_t>(multi.begin(), multi.end())));
+  auto ks = load_api_keys(file.string());
+  CHECK(ks.ok() && ks->size() == 2 && (*ks)[0] == "0123456789abcdef-alice" && (*ks)[1] == "0123456789abcdef-bob");
+  const std::string bad = "0123456789abcdef-alice\nshort\n";
+  CHECK(test::write_file(file.string(), std::vector<uint8_t>(bad.begin(), bad.end())));
+  CHECK(!load_api_keys(file.string()).ok());  // every key >= 16 characters
+  const std::string none = "# no keys\n\n";
+  CHECK(test::write_file(file.string(), std::vector<uint8_t>(none.begin(), none.end())));
+  CHECK(!load_api_keys(file.string()).ok());
+  CHECK(!load_api_keys((dir / "missing").string()).ok());
   CHECK(is_loopback_host("127.0.0.1") && is_loopback_host("localhost") && is_loopback_host("::1"));
   CHECK(!is_loopback_host("0.0.0.0") && !is_loopback_host("192.168.1.2") && !is_loopback_host("localhost.evil.com"));
-  std::printf("  API key loading (file, first line, >= 16 chars), loopback host classification\n");
+  std::printf("  API key loading (file, first line, >= 16 chars; multi-key file), loopback host classification\n");
 }
 
 }  // namespace
@@ -222,6 +248,7 @@ int main() {
   CHECK(test::write_file(model, test::tiny_model_gguf()));
   test_open_server(model);
   test_api_key(model);
+  test_metrics_disabled(model);
   test_key_loading(dir);
   std::filesystem::remove_all(dir);
   std::printf("all server tests passed (%d checks)\n", g_checks);
