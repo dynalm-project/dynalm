@@ -263,7 +263,7 @@ dynalm serve <model> [options]
 | `--batch N\|auto` | Max tokens per forward pass |
 | `--kv f16\|f32` | KV cache precision |
 | `--int8-decode N` | int8 activations for matmuls of ≤ N rows (default 4; 0 = off) |
-| `--max-active N` | Concurrent requests before answering 503 (default 64) |
+| `--max-active N` | Concurrent requests before answering 503 (default 64). The scheduler generates for at most 64 at once; above 64, the others wait in its queue until a stream finishes |
 | `--policy P` | `balanced` (default), `latency` (smooth streaming, slower first token under load) or `throughput` (fast first token, burstier streaming) |
 | `--http-threads N\|auto` | HTTP worker threads |
 | `--max-tokens N` | Default `max_tokens` per request (default 1024) |
