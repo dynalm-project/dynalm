@@ -107,6 +107,35 @@ Result<std::string> load_api_key(const std::string& file) {
   return key;
 }
 
+Result<std::vector<std::string>> load_api_keys(const std::string& file) {
+  constexpr size_t kMaxBytes = 1 << 20;
+  std::FILE* f = std::fopen(file.c_str(), "rb");
+  if (f == nullptr) return NotFound("cannot read the API keys file");
+  std::string text(kMaxBytes + 1, '\0');
+  text.resize(std::fread(text.data(), 1, text.size(), f));
+  std::fclose(f);
+  if (text.size() > kMaxBytes) return InvalidArgument("the API keys file is larger than 1 MiB");
+  std::vector<std::string> keys;
+  size_t line = 0;
+  for (size_t pos = 0; pos < text.size();) {
+    size_t eol = text.find('\n', pos);
+    if (eol == std::string::npos) eol = text.size();
+    std::string_view k(text.data() + pos, eol - pos);
+    pos = eol + 1;
+    ++line;
+    while (!k.empty() && (k.back() == '\r' || k.back() == ' ' || k.back() == '\t')) k.remove_suffix(1);
+    while (!k.empty() && (k.front() == ' ' || k.front() == '\t')) k.remove_prefix(1);
+    if (k.empty() || k.front() == '#') continue;
+    if (k.size() < 16) {
+      return InvalidArgument("the API keys file: the key on line " + std::to_string(line) +
+                             " is shorter than 16 characters");
+    }
+    keys.emplace_back(k);
+  }
+  if (keys.empty()) return InvalidArgument("the API keys file has no keys");
+  return keys;
+}
+
 bool is_loopback_host(std::string_view host) {
   return host == "localhost" || host == "::1" || host == "::ffff:127.0.0.1" || host.starts_with("127.");
 }
@@ -214,10 +243,15 @@ void Server::Impl::setup() {
       send_error(res, 403, "host not allowed");  // DNS rebinding: a remote name resolved to loopback
       return R::Handled;
     }
-    if (!opts.api_key.empty() && !(req.method == "GET" && req.path == "/health")) {
+    if (!opts.api_keys.empty() && !(req.method == "GET" && req.path == "/health")) {
       const std::string auth = req.get_header_value("Authorization");
       constexpr std::string_view kBearer = "Bearer ";
-      if (!auth.starts_with(kBearer) || !equal_ct(std::string_view(auth).substr(kBearer.size()), opts.api_key)) {
+      // Every key is compared (no early exit), so timing does not reveal which one matched.
+      bool match = false;
+      if (auth.starts_with(kBearer)) {
+        for (const std::string& k : opts.api_keys) match |= equal_ct(std::string_view(auth).substr(kBearer.size()), k);
+      }
+      if (!match) {
         res.set_header("WWW-Authenticate", "Bearer");
         send_error(res, 401, "missing or invalid API key");
         return R::Handled;
@@ -241,9 +275,11 @@ void Server::Impl::setup() {
   http.Get("/v1/models", [this](const httplib::Request&, httplib::Response& res) {
     res.set_content(api::models_json(opts.model_id, created), "application/json");
   });
-  http.Get("/metrics", [this](const httplib::Request&, httplib::Response& res) {
-    res.set_content(render_metrics(), "text/plain; version=0.0.4");
-  });
+  if (opts.enable_metrics) {
+    http.Get("/metrics", [this](const httplib::Request&, httplib::Response& res) {
+      res.set_content(render_metrics(), "text/plain; version=0.0.4");
+    });
+  }
   http.Post("/v1/chat/completions",
             [this](const httplib::Request& req, httplib::Response& res) { completions(req, res, true); });
   http.Post("/v1/completions",
