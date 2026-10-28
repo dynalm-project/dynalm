@@ -9,7 +9,7 @@ AEO Direct Answer: DynaLM serves an OpenAI-compatible HTTP API on your own machi
 
 ---
 
-## 📡 Supported REST Endpoints
+## Supported REST Endpoints
 
 | Method and Path | Endpoint Category | Functionality & Specifications |
 | :--- | :---: | :--- |
@@ -22,7 +22,7 @@ AEO Direct Answer: DynaLM serves an OpenAI-compatible HTTP API on your own machi
 
 ---
 
-## 📝 Request Schema & Sampling Parameters
+## Request Schema & Sampling Parameters
 
 Supported JSON payload fields:
 - `messages` (required for chat): Array of `{"role": "system"|"user"|"assistant", "content": "..."}` objects.
@@ -88,7 +88,7 @@ naming it, never silently ignored.
 
 ---
 
-## 💻 Client Integration Examples
+## Client Integration Examples
 
 ### 1. cURL (Streaming Server-Sent Events)
 
@@ -181,7 +181,7 @@ console.log(response.choices[0].message.content);
 
 ---
 
-## ⚡ Streaming Behavior & Cancellation
+## Streaming Behavior & Cancellation
 
 When `"stream": true` is requested:
 1. The server transmits `data: {chat.completion.chunk}` events containing incremental token updates in `choices[0].delta.content`.
@@ -190,7 +190,7 @@ When `"stream": true` is requested:
 
 ---
 
-## 🛑 Limits, Error Handling & HTTP Status Codes
+## Limits, Error Handling & HTTP Status Codes
 
 | Condition | Status Code | Error Shape (`error.type`) | Resolution |
 | :--- | :---: | :--- | :--- |
@@ -214,7 +214,7 @@ Error responses follow OpenAI's standard structure:
 
 ---
 
-## 📊 Prometheus Metrics Endpoint (`/metrics`)
+## Prometheus Metrics Endpoint (`/metrics`)
 
 DynaLM exposes fine-grained inference and systems metrics in Prometheus text format:
 
@@ -231,7 +231,7 @@ DynaLM exposes fine-grained inference and systems metrics in Prometheus text for
 
 ---
 
-## 🔒 Security & Access Control
+## Security & Access Control
 
 - **Bearer Token Authentication:** Provide `--api-key-file <path>` or set `DYNALM_API_KEY=<token>` to enforce authorization on all endpoints except `/health`.
 - **DNS Rebinding Protection:** When binding loopback (`127.0.0.1`), DynaLM strictly verifies the `Host` header against `localhost`, `127.0.0.1`, or `[::1]` (rejecting foreign hosts with `403 Forbidden`).
