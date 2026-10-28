@@ -4,7 +4,7 @@
 
 ---
 
-## 🎯 Vision & Core Principles
+## Vision & Core Principles
 
 1. **CPU-First Excellence:** Fast, accurate token generation on consumer laptops, desktop CPUs, and edge hardware without requiring dedicated GPUs. Measured results, including where llama.cpp is ahead, are in the README's [Speed](README.md#speed) section.
 2. **Zero-Friction Ergonomics:** Single statically linked native binary (C++20), zero Python/CUDA dependencies, with familiar Ollama-compatible CLI workflows (`pull`, `run`, `serve`).
@@ -13,7 +13,7 @@
 
 ---
 
-## 🧭 Milestone Timeline
+## Milestone Timeline
 
 ```mermaid
 timeline
@@ -27,7 +27,7 @@ timeline
 
 ---
 
-## 📍 Feature Status & Upcoming Capabilities
+## Feature Status & Upcoming Capabilities
 
 **Status labels** (this release; the same as the README's):
 - ✅ **Verified:** checked for this release on real hardware with real models (Apple M4 Pro, macOS 26):
@@ -111,7 +111,7 @@ README's [Speed](README.md#speed) section.
 
 ---
 
-## ⚠️ Known Limitations (this release)
+## Known Limitations (this release)
 
 - **Platforms:** verified on macOS on Apple Silicon only (one machine, M4 Pro). Linux and Windows
   are CI-tested; Vulkan and CUDA are Experimental.
@@ -131,7 +131,7 @@ README's [Speed](README.md#speed) section.
 
 ---
 
-## 🤝 How to Influence the Roadmap
+## How to Influence the Roadmap
 
 Community input directly shapes DynaLM's priorities:
 - Propose feature requests or report architectural enhancements via [GitHub Issues](https://github.com/dynalm-project/dynalm/issues).

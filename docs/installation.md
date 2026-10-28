@@ -11,7 +11,7 @@ It runs on your CPU everywhere, and on your GPU when you build it with GPU suppo
 
 ---
 
-## ⚡ Automated Quick Start
+## Automated Quick Start
 
 ### Linux & macOS (All Distros & Apple Silicon)
 
@@ -45,7 +45,7 @@ dynalm run qwen3:4b
 
 ---
 
-## 🔍 What the Automated Installers Do
+## What the Automated Installers Do
 
 1. **System & CPU Architecture Detection:** Detects operating system (Linux, macOS, Windows) and CPU instruction sets (`x86_64` vs. `arm64`).
 2. **Cryptographic Integrity Verification:** Downloads the binary release alongside official `SHA256SUMS` from GitHub Releases and validates checksums before installation.
@@ -56,7 +56,7 @@ dynalm run qwen3:4b
 
 ---
 
-## 📦 Official Release Archives & Platform Compatibility
+## Official Release Archives & Platform Compatibility
 
 Pre-compiled, statically linked binaries are provided for every major OS:
 
@@ -77,7 +77,7 @@ Pre-compiled, statically linked binaries are provided for every major OS:
 
 ---
 
-## 🛡️ Offline & Air-Gapped Manual Installation
+## Offline & Air-Gapped Manual Installation
 
 For secure, enterprise, or air-gapped environments with no public internet access:
 
@@ -106,7 +106,7 @@ chmod +x ~/.local/bin/dynalm ~/.local/bin/dynacorec
 
 ---
 
-## 🐳 Docker Deployment (CPU Multi-Arch)
+## Docker Deployment (CPU Multi-Arch)
 
 DynaLM provides an official lightweight, non-root CPU container image supporting both `linux/amd64` and `linux/arm64`:
 
@@ -125,7 +125,7 @@ docker run --rm -d \
 
 ---
 
-## 🔨 Building from Source
+## Building from Source
 
 To build from source with platform-specific compiler optimizations:
 
@@ -139,7 +139,7 @@ To build from source with platform-specific compiler optimizations:
 
 ---
 
-## 🛠️ Diagnostics & Troubleshooting
+## Diagnostics & Troubleshooting
 
 ### Diagnostic System Probe (`dynalm doctor`)
 
