@@ -263,7 +263,7 @@ dynalm serve <model> [options]
 | `--batch N\|auto` | Max tokens per forward pass |
 | `--kv f16\|f32` | KV cache precision |
 | `--int8-decode N` | int8 activations for matmuls of ≤ N rows (default 4; 0 = off) |
-| `--max-active N` | Concurrent requests before answering 503 (default 64) |
+| `--max-active N` | Concurrent requests before answering 503 (default 64). The scheduler generates for at most 64 at once; above 64, the others wait in its queue until a stream finishes |
 | `--policy P` | `balanced` (default), `latency` (smooth streaming, slower first token under load) or `throughput` (fast first token, burstier streaming) |
 | `--http-threads N\|auto` | HTTP worker threads |
 | `--max-tokens N` | Default `max_tokens` per request (default 1024) |
@@ -272,6 +272,8 @@ dynalm serve <model> [options]
 | `--shutdown-timeout S` | Time to finish in-flight requests on stop (default 30) |
 | `--disable-admin` | Turn off `POST /admin/shutdown` (used by `dynalm stop`) |
 | `--api-key-file FILE` | Require `Authorization: Bearer <key>` on every endpoint except `GET /health`; the key is the first line of FILE (or set `DYNALM_API_KEY`), at least 16 characters |
+| `--api-keys-file FILE` | Accept several keys, one per line (blank lines and lines starting with `#` are skipped; each at least 16 characters). Give each user or app its own key; to revoke one, delete its line and restart. Combines with `--api-key-file` and `DYNALM_API_KEY` |
+| `--disable-metrics` | Turn off `GET /metrics` (404) |
 | `--allow-unauthenticated` | Allow a non-loopback `--host` without a key (only behind an authenticating gateway; [deployment.md](deployment.md)) |
 | `--spec ngram\|DRAFT` | Speculative decoding for every stream, same output as without it. `ngram`: drafts from text already in the conversation (good for summaries, code edits, extraction). `DRAFT`: a small model with the same vocabulary, a file or a name (for a Qwen2.5 target, `qwen2.5:0.5b`); it drafts for all streams in a few batched passes on the same device. A stream whose drafts keep failing stops drafting for a while. `/metrics`: `dynalm_spec_drafted_tokens_total`, `dynalm_spec_accepted_tokens_total` |
 | `--spec-k K` | With `--spec`: most drafted tokens per stream and step (default 4) |

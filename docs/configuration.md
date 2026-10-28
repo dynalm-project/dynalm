@@ -49,6 +49,7 @@ server:
   request_timeout: 600       # seconds; 0 = none
   shutdown_timeout: 30       # seconds of draining on stop
   admin: true                # POST /admin/shutdown (used by `dynalm stop`)
+  metrics: true              # GET /metrics (Prometheus)
 ```
 
 `runtime.device: native-cpu`, from a configuration written for an earlier version, stops with
@@ -92,6 +93,7 @@ The older flat format, with one `key = value` per line using option names, still
 | server.request_timeout | `--request-timeout` | 600 |
 | server.shutdown_timeout | `--shutdown-timeout` | 30 |
 | server.admin | `--disable-admin` when false | true |
+| server.metrics | `--disable-metrics` when false | true |
 
 ## Logging
 

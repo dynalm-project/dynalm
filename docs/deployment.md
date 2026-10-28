@@ -25,7 +25,9 @@ dynalm serve qwen2.5:1.5b --host 0.0.0.0 --api-key-file ~/.dynalm/api-key
 
 - **Where the key can come from:**
   - `--api-key-file FILE` (first line), recommended;
-  - `DYNALM_API_KEY` (it is visible to the process environment).
+  - `DYNALM_API_KEY` (it is visible to the process environment);
+  - `--api-keys-file FILE` for several keys, one per line (`#` comments allowed), so each user
+    or app has its own key. To revoke a key, delete its line and restart the server.
 - **The key never goes on the command line,** where other users could see it in `ps`.
 - **Clients send** `Authorization: Bearer <key>`. OpenAI SDKs do this when you set their
   `api_key`.

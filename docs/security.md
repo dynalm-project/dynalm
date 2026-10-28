@@ -41,7 +41,7 @@ warning.
 
 | Threat | Control |
 |---|---|
-| Remote use of the API | Loopback bind by default. A non-loopback bind needs an API key (`load_api_key`, at least 16 characters). Every endpoint except `GET /health` then requires `Authorization: Bearer <key>`, compared in constant time. The key is never logged or echoed. |
+| Remote use of the API | Loopback bind by default. A non-loopback bind needs an API key (`load_api_key`, at least 16 characters; several keys with `--api-keys-file`, `load_api_keys`). Every endpoint except `GET /health` then requires `Authorization: Bearer <key>` for one of the keys, compared in constant time against every key. Keys are never logged or echoed. |
 | A web page driving the local API (CSRF), including `POST /admin/shutdown` | POST bodies must be `application/json` (415 otherwise). A browser cannot send that cross-origin without a CORS preflight, and the server never answers preflights with CORS headers. |
 | DNS rebinding (a remote name resolving to 127.0.0.1) | On a loopback bind, the `Host` header must be `localhost`, `127.x` or `[::1]` (403 otherwise). |
 | Shutting the server down | `/admin/shutdown` is loopback-only, needs JSON, needs the key when one is set, and can be turned off (`--disable-admin`). |
@@ -86,10 +86,10 @@ or the sanitizer CI jobs.
 ## Known residual risks (accepted for the documented deployments)
 
 - **No TLS.** Use a TLS-terminating reverse proxy for anything beyond a trusted network.
-- **One shared API key, no per-client rate limiting.** `--max-active` bounds concurrency
-  globally. Per-client limits belong in the gateway.
+- **No per-client rate limiting.** Several keys (`--api-keys-file`) give each client its own
+  key, but `--max-active` bounds concurrency globally. Per-client limits belong in the gateway.
 - **Unauthenticated loopback.** `/v1/models`, `/metrics` and the completion endpoints are open
-  to local processes when no key is set. Any local user can use the model. Set a key on
+  to local processes when no key is set (`--disable-metrics` turns `/metrics` off). Any local user can use the model. Set a key on
   multi-user machines.
 - **Untrusted model files.** The parsers are hardened and fuzzed, but not formally verified.
   The Metal backend reads weights through ggml, whose own parsing of DynaLM-provided tensors is
