@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-28
+
+Structured JSON output, several API keys, and checksum-verified model downloads. The engine's
+speed and defaults are unchanged from 0.3.2.
+
 ### Added
 - Structured output: `response_format` `json_object` and `json_schema` (OpenAI), and
   llama.cpp's `json_object` + `schema`. Only tokens that keep the answer valid JSON, matching the
@@ -18,6 +23,10 @@
 - `dynalm pull` checks a file from Hugging Face against the SHA-256 Hugging Face publishes for it
   (`X-Linked-ETag`) before moving it into the model store. A corrupt or altered download is
   deleted and the pull fails. Files from other servers are not checked, and pull says so.
+
+### Documentation
+- `--max-active` above 64: the scheduler generates for at most 64 requests at once; the others
+  wait in its queue.
 
 ## [0.3.2] - 2026-10-28
 
