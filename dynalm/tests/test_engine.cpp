@@ -35,6 +35,7 @@
 #include "api/json.h"
 #include "chat_template/chat_template.h"
 #include "sampling/json_constraint.h"
+#include "common/sha256.h"
 #include "diagnostics/doctor.h"
 #include "dynacore/cpu/qmm.h"
 #include "dynacore/gpu/ggml_device.h"
@@ -1434,6 +1435,49 @@ void test_json_constraint() {
   CHECK(done.complete() && done.allows(0) && !done.allows(1) && !done.allows(3));
 }
 
+// SHA-256 against the FIPS 180-4 / NIST test vectors, split updates, a file,
+// and the Hugging Face X-Linked-ETag header parse used by `dynalm pull`.
+void test_sha256(const std::filesystem::path& dir) {
+  auto hex = [](std::string_view s) {
+    Sha256 h;
+    h.update(s);
+    return h.hex_digest();
+  };
+  CHECK(hex("") == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+  CHECK(hex("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+  CHECK(hex("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq") ==
+        "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+  const std::string million(1000000, 'a');
+  CHECK(hex(million) == "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0");
+  // Every length 0..200 hashed whole equals the same bytes fed in odd-sized pieces.
+  std::string msg;
+  for (int i = 0; i < 200; ++i) msg.push_back(static_cast<char>(i * 7 + 3));
+  for (size_t len = 0; len <= msg.size(); ++len) {
+    Sha256 split;
+    for (size_t p = 0; p < len;) {
+      const size_t step = std::min<size_t>(len - p, 1 + (p * 13) % 71);
+      split.update(std::string_view(msg).substr(p, step));
+      p += step;
+    }
+    CHECK(split.hex_digest() == hex(std::string_view(msg).substr(0, len)));
+  }
+  const auto file = (dir / "sha.bin").string();
+  CHECK(test::write_file(file, std::vector<uint8_t>(million.begin(), million.end())));
+  auto fh = sha256_file(file);
+  CHECK(fh.ok() && *fh == "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0");
+  CHECK(!sha256_file((dir / "missing.bin").string()).ok());
+  // The header as curl -I -L writes it: a redirect response, then the CDN's.
+  const std::string headers =
+      "HTTP/2 302 \r\nlocation: https://cdn.example/x\r\nX-Linked-Size: 491400032\r\n"
+      "x-linked-etag: \"74A4DA8C9FDBCD15BD1F6D01D621410D31C6FC00986F5EB687824E7B93D7A9DB\"\r\n\r\n"
+      "HTTP/2 200 \r\netag: \"abc\"\r\n\r\n";
+  CHECK(linked_etag_sha256(headers) == "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db");
+  CHECK(linked_etag_sha256("HTTP/2 200\r\netag: \"abc\"\r\n").empty());  // no linked ETag (not an LFS file)
+  CHECK(linked_etag_sha256("x-linked-etag: \"0123456789abcdef0123456789abcdef01234567\"\r\n").empty());  // git SHA-1
+  CHECK(linked_etag_sha256("x-linked-etag: W/\"74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db\"\r\n").empty());
+  CHECK(linked_etag_sha256("x-linked-etag: \"zz a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db\"\r\n").empty());
+}
+
 int main() {
   const auto dir = std::filesystem::temp_directory_path() / ("dynalm-test-" + test::unique_suffix());
   std::filesystem::create_directories(dir);
@@ -1442,6 +1486,8 @@ int main() {
   int rc = 0;
   test_json_constraint();
   std::printf("structured output: JSON matcher, schema subset and refusals, vocabulary mask == per-token check\n");
+  test_sha256(dir);
+  std::printf("sha256: NIST vectors, split updates, file, Hugging Face X-Linked-ETag\n");
   test_device_plan();
   std::printf("device plan: auto / --gpu / cpu / exact / named, per model and build\n");
   test_predictive_mixed_budget();

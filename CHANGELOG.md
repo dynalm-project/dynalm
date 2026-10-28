@@ -10,6 +10,15 @@
   alternatives that start differently. Other keywords are refused with an error, never ignored.
   On an Apple M4 Pro (Qwen2.5-0.5B, CPU and Metal), throughput is unchanged.
 
+### Security
+- `serve --api-keys-file FILE`: several API keys, one per line (`#` comments allowed), so each
+  user or app can have its own key and one can be revoked without changing the others.
+  `--api-key-file` still reads the first line only.
+- `serve --disable-metrics` (`server.metrics: false`): turns off `GET /metrics`.
+- `dynalm pull` checks a file from Hugging Face against the SHA-256 Hugging Face publishes for it
+  (`X-Linked-ETag`) before moving it into the model store. A corrupt or altered download is
+  deleted and the pull fails. Files from other servers are not checked, and pull says so.
+
 ## [0.3.2] - 2026-10-28
 
 A performance patch for ARM CPUs: faster Q5_0 and Q5_1 weights. Results are bit-identical to 0.3.1.

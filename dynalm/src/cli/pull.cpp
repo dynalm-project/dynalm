@@ -5,7 +5,9 @@
 // Hugging Face file link (page or download form), the short form
 // <owner>/<repo>/<file>.gguf, or any direct http(s) URL. Before the full
 // download, the first 256 KiB are fetched and the architecture is checked, so
-// an unsupported model is refused in seconds instead of after many GB.
+// an unsupported model is refused in seconds instead of after many GB. A file
+// from Hugging Face is checked against the SHA-256 the server publishes for it
+// (X-Linked-ETag) before it is moved into the model store.
 //
 // Transfers use the system `curl` (shipped with Windows 10+, macOS and every
 // Linux distribution), which brings TLS, proxies, redirects, retries and
@@ -20,12 +22,14 @@
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <random>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include "cli/commands.h"
+#include "common/sha256.h"
 #include "loader/gguf/gguf_tokenizer.h"
 #include "loader/gguf/gguf.h"
 #include "loader/model_source.h"
@@ -265,7 +269,20 @@ int cmd_pull(std::span<const std::string_view> args) {
       return 1;
     }
 
-    // 2. Download to <name>.part (resumable), then rename into place.
+    // 2. The checksum Hugging Face publishes for the file (LFS/Xet files only).
+    std::string expected_sha;
+    if (url->starts_with("https://huggingface.co/")) {
+      TempFile head{temp_path("head")};
+      std::vector<std::string> hc = common;
+      hc.insert(hc.end(), {"-sS", "-I", "-o", head.path, *url});
+      if (run_process(hc) == 0) {
+        std::ifstream in(head.path, std::ios::binary);
+        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        expected_sha = linked_etag_sha256(text);
+      }
+    }
+
+    // 3. Download to <name>.part (resumable), check it, then rename into place.
     const std::string part = dest.string() + ".part";
     std::printf("downloading to %s\n", dest.string().c_str());
     std::fflush(stdout);
@@ -293,6 +310,26 @@ int cmd_pull(std::span<const std::string_view> args) {
       std::fprintf(stderr, "pull: %s\n      run the same command again to resume\n", curl_error(dl).c_str());
       return 1;
     }
+    if (expected_sha.empty()) {
+      std::printf("sha256: the server publishes no checksum for this file; not checked\n");
+    } else {
+      std::printf("checking sha256\n");
+      std::fflush(stdout);
+      auto got = sha256_file(part);
+      if (!got.ok()) {
+        std::fprintf(stderr, "pull: %s\n", got.status().message().c_str());
+        return 1;
+      }
+      if (*got != expected_sha) {
+        fs::remove(part, ec);
+        std::fprintf(stderr,
+                     "pull: the download is corrupt or was changed: sha256 %s, expected %s; the file was deleted, "
+                     "run the same command again\n",
+                     got->c_str(), expected_sha.c_str());
+        return 1;
+      }
+      std::printf("sha256 %s: ok\n", got->c_str());
+    }
     fs::rename(part, dest, ec);
     if (ec) {
       std::fprintf(stderr, "pull: cannot rename %s: %s\n", part.c_str(), ec.message().c_str());
@@ -302,7 +339,7 @@ int cmd_pull(std::span<const std::string_view> args) {
     std::printf("%s is already downloaded (use --force to download again)\n", dest.string().c_str());
   }
 
-  // 3. Full check of what arrived: metadata and every tensor type.
+  // 4. Full check of what arrived: metadata and every tensor type.
   auto f = gguf::GgufFile::open(dest.string());
   if (!f.ok()) {
     std::fprintf(stderr, "pull: the downloaded file is not a valid GGUF: %s\n", f.status().to_string().c_str());

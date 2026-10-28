@@ -18,8 +18,9 @@
 // clients only, unless disabled) asks the process to drain and exit.
 //
 // Access control (docs/security.md):
-//   - api_key set: every endpoint except GET /health requires
-//     "Authorization: Bearer <key>" (constant-time comparison; never logged).
+//   - api_keys set: every endpoint except GET /health requires
+//     "Authorization: Bearer <key>" for one of the keys (constant-time
+//     comparison against every key; never logged).
 //   - Bound to a loopback address: requests must carry a loopback Host header
 //     (localhost, 127.x, [::1]), which defeats DNS-rebinding pages.
 //   - POST bodies must be application/json: browsers cannot send that
@@ -31,6 +32,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "dynacore/base/status.h"
 #include "runtime/engine.h"
@@ -49,7 +51,8 @@ struct ServerOptions {
   float default_temperature = 1.0f;  // when a request omits it (OpenAI default; 0 = greedy)
   int64_t request_timeout_ms = 600000;  // per request, queued + generating (0 = none)
   bool enable_admin = true;             // POST /admin/shutdown from loopback
-  std::string api_key;                  // empty = no authentication (loopback deployments)
+  bool enable_metrics = true;           // GET /metrics (Prometheus)
+  std::vector<std::string> api_keys;    // empty = no authentication (loopback deployments)
   std::function<void()> on_shutdown_request;  // invoked by /admin/shutdown
 };
 
@@ -64,6 +67,11 @@ Status request_server_shutdown(const std::string& host, int port, const std::str
 // $DYNALM_API_KEY, else empty (no authentication). Keys shorter than 16
 // characters are refused. The key is never logged.
 Result<std::string> load_api_key(const std::string& file);
+
+// The keys of a multi-key file (`serve --api-keys-file`): one key per line,
+// blank lines and lines starting with '#' skipped, each at least 16
+// characters, at least one key. Keys are never logged.
+Result<std::vector<std::string>> load_api_keys(const std::string& file);
 
 // Whether `host` (a bind address or Host header without port) is loopback.
 bool is_loopback_host(std::string_view host);
