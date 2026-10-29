@@ -24,6 +24,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -36,6 +37,7 @@
 #include "bench/cpu_report.h"
 #include "chat_template/chat_template.h"
 #include "sampling/json_constraint.h"
+#include "common/process.h"
 #include "common/sha256.h"
 #include "diagnostics/doctor.h"
 #include "dynacore/cpu/qmm.h"
@@ -1479,6 +1481,38 @@ void test_sha256(const std::filesystem::path& dir) {
   CHECK(linked_etag_sha256("x-linked-etag: \"zz a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db\"\r\n").empty());
 }
 
+// ChildProcess: extra environment reaches the child, output goes to the log,
+// a finished child reports its exit code, and stop() ends a running one.
+void test_child_process(const std::filesystem::path& dir) {
+  const std::string log = (dir / "child.log").string();
+#if defined(_WIN32)
+  const char* comspec = std::getenv("COMSPEC");
+  const std::string sh = comspec != nullptr ? comspec : "C:\\Windows\\System32\\cmd.exe";
+  const std::vector<std::string> echo = {sh, "/c", "echo %DYNALM_CHILD_TEST%"};
+  const std::vector<std::string> sleeper = {sh, "/c", "ping -n 30 127.0.0.1 >NUL"};
+#else
+  const std::vector<std::string> echo = {"/bin/sh", "-c", "echo \"$DYNALM_CHILD_TEST\"; exit 3"};
+  const std::vector<std::string> sleeper = {"/bin/sh", "-c", "sleep 30"};
+#endif
+  auto c = ChildProcess::start(echo, {{"DYNALM_CHILD_TEST", "hello child"}}, log);
+  CHECK(c.ok());
+  for (int i = 0; i < 200 && (*c)->running(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  CHECK(!(*c)->running());
+#if !defined(_WIN32)
+  CHECK((*c)->stop() == 3);
+#endif
+  std::ifstream in(log);
+  std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  CHECK(text.find("hello child") != std::string::npos);
+  auto s = ChildProcess::start(sleeper, {}, "");
+  CHECK(s.ok() && (*s)->running());
+  const auto t0 = std::chrono::steady_clock::now();
+  (*s)->stop(2000);
+  CHECK(!(*s)->running());
+  CHECK(std::chrono::steady_clock::now() - t0 < std::chrono::seconds(5));
+  CHECK(!ChildProcess::start({(dir / "no-such-program").string()}, {}, "").ok());
+}
+
 // dynalm cpu-report: the measurement plan per CPU, model choice, the pinned
 // llama.cpp asset, the agreement verdict and the report.
 void test_cpu_report() {
@@ -1560,6 +1594,8 @@ int main() {
   int rc = 0;
   test_json_constraint();
   test_cpu_report();
+  test_child_process(dir);
+  std::printf("child processes: environment, log, exit code, stop\n");
   std::printf("cpu-report: plans for M4 / M3 / i7-class CPUs, models, llama.cpp assets, verdict, JSON and Markdown\n");
   std::printf("structured output: JSON matcher, schema subset and refusals, vocabulary mask == per-token check\n");
   test_sha256(dir);

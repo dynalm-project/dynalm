@@ -10,6 +10,7 @@ add_library(dynalm_runtime STATIC
   bench/cpu_report.cpp
   bench/perplexity.cpp
   chat_template/chat_template.cpp
+  common/process.cpp
   common/sha256.cpp
   config/config.cpp
   diagnostics/doctor.cpp
