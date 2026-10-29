@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "api/json.h"
+#include "bench/cpu_report.h"
 #include "chat_template/chat_template.h"
 #include "sampling/json_constraint.h"
 #include "common/sha256.h"
@@ -1478,6 +1479,79 @@ void test_sha256(const std::filesystem::path& dir) {
   CHECK(linked_etag_sha256("x-linked-etag: \"zz a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db\"\r\n").empty());
 }
 
+// dynalm cpu-report: the measurement plan per CPU, model choice, the pinned
+// llama.cpp asset, the agreement verdict and the report.
+void test_cpu_report() {
+  namespace cr = cpu_report;
+  auto ids = [](const std::vector<cr::Path>& p) {
+    std::string s;
+    for (const cr::Path& x : p) s += (s.empty() ? "" : ",") + x.id;
+    return s;
+  };
+  dynacore::CpuFeatures m4;  // Apple M4: SME, DynaCore already the default
+  m4.neon = m4.arm_dotprod = m4.arm_i8mm = m4.arm_sme = true;
+  auto p = cr::plan_paths(m4, true, 8);
+  CHECK(ids(p) == "default,ggml-cpu,qmm-neon_dot,sme-off,llama.cpp");
+  CHECK(p[0].score_device == "native" && p[1].score_device == "ggml-cpu" && p.back().llama && p.back().score_device.empty());
+  CHECK(p[3].env.size() == 1 && p[3].env[0].first == "DYNACORE_SME" && p[3].env[0].second == "0");
+  dynacore::CpuFeatures m3 = m4;  // Apple M3: no SME, ggml the default
+  m3.arm_sme = false;
+  p = cr::plan_paths(m3, false, 4);
+  CHECK(ids(p) == "default,dynacore,qmm-neon_dot,llama.cpp");
+  CHECK(p[0].score_device == "ggml-cpu" && p[1].score_device == "native");
+  CHECK(p[1].serve_args == std::vector<std::string>({"--backend", "cpu", "--mode", "exact", "-t", "4"}));
+  CHECK(p[2].serve_args == p[1].serve_args && p[2].env[0].second == "neon_dot");
+  dynacore::CpuFeatures i7;  // Intel Core i7-1255U: AVX2 + AVX-VNNI
+  i7.sse42 = i7.avx = i7.avx2 = i7.fma = i7.f16c = i7.avx_vnni = true;
+  p = cr::plan_paths(i7, false, 10);
+  CHECK(ids(p) == "default,dynacore,vnni,llama.cpp");
+  CHECK(p.back().serve_args == std::vector<std::string>({"-ngl", "0", "-t", "10"}));
+  CHECK(cr::feature_list(i7) == "sse4.2 avx2 fma f16c avx_vnni" && cr::feature_list(m4) == "neon dotprod i8mm sme");
+
+  auto c = cr::choose_models("", false, int64_t{16} << 30);
+  CHECK(c.run.size() == 3 && c.skipped.empty() && c.error.empty());
+  c = cr::choose_models("", true, int64_t{16} << 30);
+  CHECK(c.run.size() == 1 && c.run[0].id == "1.5b");
+  c = cr::choose_models("", false, int64_t{8} << 30);  // 8 GB: no 8B
+  CHECK(c.run.size() == 2 && c.skipped.size() == 1 && c.skipped[0].starts_with("8b: needs 12 GB"));
+  c = cr::choose_models("4b,3b", false, 0);
+  CHECK(!c.error.empty());
+
+  CHECK(cr::llama_asset("macos", "arm64").url.ends_with("llama-b11695-bin-macos-arm64.tar.gz"));
+  CHECK(cr::llama_asset("windows", "x86_64").zip && cr::llama_asset("windows", "x86_64").sha256.size() == 64);
+  CHECK(!cr::llama_asset("linux", "x86_64").zip);
+  CHECK(cr::llama_asset("freebsd", "x86_64").url.empty());
+
+  CHECK(cr::accuracy_pass(97.6, 17.66, 17.73));   // the M4 0.5B numbers
+  CHECK(!cr::accuracy_pass(93.9, 17.66, 17.73));  // top-1 below llama.cpp's self-agreement floor
+  CHECK(!cr::accuracy_pass(97.6, 17.95, 17.73));  // perplexity +1.2 %
+  CHECK(!cr::accuracy_pass(97.6, 17.66, 0));       // no llama.cpp perplexity: no pass
+
+  cr::Report r;
+  r.dynalm_version = "0.4.0";
+  r.cpu_name = "Test CPU";
+  r.os = "testos";
+  r.features = cr::feature_list(i7);
+  r.threads = 10;
+  r.llama_source = "b11695";
+  r.paths = cr::plan_paths(i7, false, 10);
+  r.models = {"1.5b"};
+  r.workload.users = {1};
+  for (int round = 0; round < 2; ++round) {
+    r.points.push_back({"default", "1.5b", 1, round, 50.0 + round, 300, 15, 20, 4, 0});
+    r.points.push_back({"llama.cpp", "1.5b", 1, round, 40.0 + round, 400, 16, 18, 4, 0});
+  }
+  r.accuracy.push_back({"dynacore", "1.5b", true, "", 97.5, 0.0016, 10.1, 10.0, 2550, true});
+  r.accuracy.push_back({"vnni", "1.5b", false, "server failed", 0, 0, 0, 0, 0, false});
+  const std::string md = cr::to_markdown(r);
+  CHECK(md.find("| DynaLM default (ggml kernels) | 1 | 50.5 | 1.25× | 300 ms | 15.0 / 20.0 ms |") != std::string::npos);
+  CHECK(md.find("| llama.cpp (llama-server, CPU) | 1 | 40.5 | – |") != std::string::npos);
+  CHECK(md.find("97.50 %") != std::string::npos && md.find("not run: server failed") != std::string::npos);
+  auto j = json::parse(cr::to_json(r));
+  CHECK(j.ok() && j->find("points")->as_array().size() == 4 && j->find("controlled")->as_bool());
+  CHECK(j->find("agreement_with_llama_cpp")->as_array()[0].find("pass")->as_bool());
+}
+
 int main() {
   const auto dir = std::filesystem::temp_directory_path() / ("dynalm-test-" + test::unique_suffix());
   std::filesystem::create_directories(dir);
@@ -1485,6 +1559,8 @@ int main() {
   CHECK(test::write_file(g_model, test::tiny_model_gguf()));
   int rc = 0;
   test_json_constraint();
+  test_cpu_report();
+  std::printf("cpu-report: plans for M4 / M3 / i7-class CPUs, models, llama.cpp assets, verdict, JSON and Markdown\n");
   std::printf("structured output: JSON matcher, schema subset and refusals, vocabulary mask == per-token check\n");
   test_sha256(dir);
   std::printf("sha256: NIST vectors, split updates, file, Hugging Face X-Linked-ETag\n");

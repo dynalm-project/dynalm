@@ -65,12 +65,17 @@ switch (as `DYNACORE_VNNI` does today), so the report can compare them in the sa
    - 2 rounds, engine order alternated between rounds;
    - threads: DynaLM's default (physical performance cores); llama.cpp gets the same count;
    - `dynalm benchmark --url` is the client for every server.
-6. **Accuracy.** For every DynaLM path, on the 1.5B model: the same next token as llama.cpp
-   (top-1 agreement) and the mean KL divergence over 10 × 512 tokens of a fixed text, the
-   DD-053 check used for the M4 results. A path that fails it is reported as **failed**, whatever
-   its speed. This needs `llama-perplexity --kl-divergence-base` (from the same llama.cpp release)
-   and a perplexity scorer inside `dynalm` (today `bench_ppl`, which is not shipped; see Open
-   questions).
+6. **Agreement with llama.cpp.** For every DynaLM path, on the 1.5B model, compared on the same
+   tokens with llama.cpp's log-probabilities (10 × 512 tokens of wikitext-2, the method of
+   docs/perf/cpu-model-sweep.md):
+   - **Reported:** top-1 agreement, mean KL divergence and both perplexities.
+   - **Pass:** top-1 agreement of at least 94% (llama.cpp reaches 94–100% against itself with only
+     its batch size changed) and a perplexity at most 1% above llama.cpp's.
+   - **Fail:** a path that fails is reported as **failed**, whatever its speed.
+
+   This measures agreement with llama.cpp, not DD-053, which compares against DynaLM's own fp32
+   reference. It needs `llama-perplexity --kl-divergence-base`, from the same llama.cpp release,
+   and the scorer inside `dynalm` (see Decisions).
 
 ## The report
 
