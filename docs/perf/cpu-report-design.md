@@ -1,6 +1,6 @@
 # `dynalm cpu-report`: CPU benchmark reports from testers (design)
 
-Status: design reviewed (decisions below); implementation in progress.
+Status: implemented (`dynalm cpu-report`); decisions below.
 
 ## Goal
 

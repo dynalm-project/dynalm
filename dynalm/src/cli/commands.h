@@ -23,6 +23,7 @@ int cmd_stop(std::span<const std::string_view> args);
 int cmd_doctor(std::span<const std::string_view> args);
 int cmd_config(std::span<const std::string_view> args);
 int cmd_autotune(std::span<const std::string_view> args);
+int cmd_cpu_report(std::span<const std::string_view> args);  // needs the server build (ENGINE_HAS_SERVER)
 
 // Path of the model a reference names (file, directory or registry name).
 // A registry name that is not downloaded yet is pulled first when

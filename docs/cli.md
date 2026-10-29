@@ -335,6 +335,40 @@ Request fields: `messages` / `prompt`, `max_tokens`, `temperature`, `top_p`, `to
 
 Configuration keys and precedence: [configuration.md](configuration.md).
 
+### `dynalm cpu-report`: measure DynaLM against llama.cpp on this CPU
+
+```text
+dynalm cpu-report [--quick] [--models 1.5b,4b,8b] [--llama DIR] [--out DIR]
+                  [--rounds N] [--threads N] [--anonymous] [--dry-run]
+```
+
+Measures DynaLM's CPU paths against llama.cpp on this machine, on the same model files with the
+same client, and writes `cpu-report-<host>-<time>.json` and `.md` to attach to
+[issue #31](https://github.com/dynalm-project/dynalm/issues/31). CPU only.
+
+- **Paths, picked from the CPU's features:**
+  - DynaLM's default;
+  - the other kernel family: ggml's kernels where DynaLM's own are the default, DynaLM's own
+    (`--mode exact`) elsewhere;
+  - each further DynaCore tier the CPU has (NEON dot-product without i8mm, SME off, AVX-VNNI on);
+  - llama.cpp's `llama-server`.
+- **Workload:** Qwen2.5-1.5B, Qwen3-4B and Qwen3-8B (Q4_K_M), 512-token prompts, 128 output
+  tokens, 1 and 4 users, 2 rounds with the engine order alternated.
+- **Agreement with llama.cpp:** for every DynaLM path, on the 1.5B model, the same tokens of
+  wikitext-2 are scored by both engines. A path passes with top-1 agreement of at least 94% and a
+  perplexity at most 1% above llama.cpp's.
+- **Downloads, each checked against its SHA-256:**
+  - the models: 1.1, 2.5 and 5.0 GB;
+  - llama.cpp b11695, about 15 MB (`--llama DIR` uses your own build instead);
+  - wikitext-2: 5 MB.
+- **Uncontrolled runs:** a run on battery, or with a busy machine, is marked **uncontrolled** in
+  the report.
+- **Time:** about 1–2 hours. `--quick`: the 1.5B model, 1 round, about 15–20 minutes.
+- **Privacy:** prompts and outputs are not stored. `--anonymous` keeps the host name out of the
+  report.
+
+Design and decisions: [docs/perf/cpu-report-design.md](perf/cpu-report-design.md).
+
 ### Execution modes and AutoTune
 
 `run`, `chat`, `serve` and `benchmark` take `--mode` (config key `runtime.mode`,

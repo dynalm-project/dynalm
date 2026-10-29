@@ -309,7 +309,7 @@ std::string to_markdown(const Report& r) {
         md << "| " << label << " | " << a.model << " | – | – | – | not run: " << a.error << " |\n";
         continue;
       }
-      md << "| " << label << " | " << a.model << " | " << fmt("%.2f %%", a.top1_pct) << " | " << fmt("%.5f", a.kl_mean)
+      md << "| " << label << " | " << a.model << " | " << fmt("%.2f %%", a.top1_pct) << " | " << fmt("%.5f", std::max(0.0, a.kl_mean))  // rounding can leave -0.00000 for identical results
          << " | " << fmt("%.4f", a.ppl) << " (" << fmt("%.4f", a.llama_ppl) << ") | " << (a.pass ? "pass" : "**FAIL**")
          << " |\n";
     }
