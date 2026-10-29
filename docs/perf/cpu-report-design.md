@@ -1,6 +1,6 @@
 # `dynalm cpu-report`: CPU benchmark reports from testers (design)
 
-Status: design, for review. Nothing here is implemented yet.
+Status: design reviewed (decisions below); implementation in progress.
 
 ## Goal
 
@@ -103,13 +103,12 @@ can be replaced by `--anonymous`.
 | Intel AMX | Missing | Xeon Sapphire Rapids+ (cloud) |
 | ARM SVE, ARM Linux servers | Missing | AWS Graviton (cloud) |
 
-## Open questions (for review)
+## Decisions (2026-10-29)
 
-1. **Perplexity scorer in `dynalm`.** Accuracy needs `bench_ppl`'s scorer in the shipped binary,
-   for example `dynalm cpu-report` calling it internally (not a new user-facing command).
-2. **llama.cpp download.** Pinning one llama.cpp release and its sha256 per platform in DynaLM's
-   source adds a dependency to keep current. The alternative, `--llama PATH` to a llama.cpp the
-   tester installed, is simpler but less comparable. Proposal: both, with the pinned download as
-   the default.
-3. **Run time.** 3 models × about 5 paths × 2 rounds × 2 user counts is about 1–2 hours on a
-   laptop. Proposal: `--quick` (1.5B only, 1 round), about 15 minutes, for first reports.
+1. **Accuracy scorer:** `bench_ppl`'s scorer moves into the `dynalm` library and `cpu-report`
+   calls it internally. There is no new user-facing command.
+2. **llama.cpp:** by default, a pinned llama.cpp release per platform is downloaded and checked
+   against a sha256 recorded in DynaLM's source. `--llama PATH` uses a llama.cpp the tester
+   already has; the report records which one was used.
+3. **Run length:** the full run is the default (about 1–2 hours). `--quick` runs the 1.5B model
+   only, for 1 round, in about 15 minutes.

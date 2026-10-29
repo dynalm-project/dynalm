@@ -7,6 +7,7 @@ add_library(dynalm_runtime STATIC
   api/openai.cpp
   bench/analysis.cpp
   bench/loadgen.cpp
+  bench/perplexity.cpp
   chat_template/chat_template.cpp
   common/sha256.cpp
   config/config.cpp
