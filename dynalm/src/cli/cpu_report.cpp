@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdarg>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -82,6 +83,65 @@ void usage() {
                "(5 MB), each checked against its SHA-256. Prompts and outputs are not stored.\n");
 }
 
+// Progress output: every step and result on its own line, prefixed with the
+// time since the start, so a tester can follow what runs and how long it takes.
+const auto g_start = std::chrono::steady_clock::now();
+
+#if defined(__GNUC__)
+__attribute__((format(printf, 2, 0)))
+#endif
+void vsay(const char* indent, const char* f, va_list ap) {
+  const long long s = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - g_start).count();
+  if (indent == nullptr) {
+    std::printf("[+%02lld:%02lld:%02lld] ", s / 3600, s / 60 % 60, s % 60);
+  } else {
+    std::printf("%s", indent);
+  }
+  std::vprintf(f, ap);
+  std::printf("\n");
+  std::fflush(stdout);
+}
+
+// A timestamped line ("[+00:12:03] ...").
+#if defined(__GNUC__)
+__attribute__((format(printf, 1, 2)))
+#endif
+void say(const char* f, ...) {
+  va_list ap;
+  va_start(ap, f);
+  vsay(nullptr, f, ap);
+  va_end(ap);
+}
+
+// A detail line under the last timestamped one.
+#if defined(__GNUC__)
+__attribute__((format(printf, 1, 2)))
+#endif
+void detail(const char* f, ...) {
+  va_list ap;
+  va_start(ap, f);
+  vsay("             ", f, ap);
+  va_end(ap);
+}
+
+constexpr int kSteps = 7;
+void step(int n, const char* title) {
+  std::printf("\n");
+  say("[%d/%d] %s", n, kSteps, title);
+}
+
+double seconds_since(std::chrono::steady_clock::time_point t) {
+  return std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count();
+}
+
+double gib(int64_t bytes) { return static_cast<double>(bytes) / (int64_t{1} << 30); }
+
+std::string join(const std::vector<std::string>& v, const char* sep = " ") {
+  std::string s;
+  for (const std::string& x : v) s += (s.empty() ? "" : sep) + x;
+  return s;
+}
+
 std::string read_file(const std::string& path) {
   std::ifstream in(path, std::ios::binary);
   return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
@@ -126,12 +186,16 @@ std::string which(const std::string& name) {
 Status fetch(const std::string& url, const std::string& sha, const fs::path& dest, const std::string& log) {
   std::error_code ec;
   if (fs::exists(dest, ec)) {
-    if (auto h = sha256_file(dest.string()); h.ok() && *h == sha) return Status::Ok();
+    if (auto h = sha256_file(dest.string()); h.ok() && *h == sha) {
+      detail("already downloaded: %s (sha256 checked)", dest.string().c_str());
+      return Status::Ok();
+    }
   }
   const std::string curl = which("curl");
   if (curl.empty()) return Unsupported("curl is needed to download " + url);
-  std::printf("  downloading %s\n", url.c_str());
-  std::fflush(stdout);
+  detail("downloading %s", url.c_str());
+  detail("        to %s", dest.string().c_str());
+  const auto t0 = std::chrono::steady_clock::now();
   if (run_wait({curl, "-fL", "--retry", "3", "-sS", "-o", dest.string(), url}, {}, log) != 0) {
     return IoError("download failed: " + url + " (log: " + log + ")");
   }
@@ -141,6 +205,8 @@ Status fetch(const std::string& url, const std::string& sha, const fs::path& des
     fs::remove(dest, ec);
     return IoError("sha256 mismatch for " + url + ": got " + *h + ", expected " + sha);
   }
+  detail("downloaded in %.0f s, %.1f MB, sha256 %s... matches", seconds_since(t0),
+         static_cast<double>(fs::file_size(dest, ec)) / 1e6, sha.substr(0, 16).c_str());
   return Status::Ok();
 }
 
@@ -224,8 +290,10 @@ bool wait_for_quiet(double limit) {
   for (int i = 0; i < 12; ++i) {
     const double l = load_average();
     if (l < 0 || l < limit) return true;
+    if (i == 0) detail("machine busy (1-minute load %.2f, limit %.2f): waiting up to 60 s", l, limit);
     std::this_thread::sleep_for(std::chrono::seconds(5));
   }
+  detail("machine still busy after 60 s: continuing, the report is marked uncontrolled");
   return false;
 }
 
@@ -336,7 +404,11 @@ int cmd_cpu_report(std::span<const std::string_view> args) {
       return 1;
     }
   }
+  std::printf("dynalm cpu-report %s: DynaLM's CPU paths against llama.cpp on this machine (CPU only)\n",
+              ENGINE_VERSION_STRING);
+  step(1, "Detecting this machine");
   const dynacore::CpuInfo& ci = cpu_info();
+  const bool threads_given = threads > 0;
   if (threads <= 0) threads = ci.performance_cores > 0 ? ci.performance_cores : ci.physical_cores;
   if (rounds <= 0) rounds = quick ? 1 : 2;
 
@@ -361,16 +433,63 @@ int cmd_cpu_report(std::span<const std::string_view> args) {
     return 1;
   }
 
-  std::printf("cpu-report: %s, %s\n  features: %s\n  threads %d, %d round(s), models:", rep.cpu_name.c_str(),
-              rep.os.c_str(), rep.features.c_str(), threads, rounds);
-  for (const std::string& m : rep.models) std::printf(" %s", m.c_str());
-  std::printf("\n  paths:\n");
-  for (const cr::Path& p : rep.paths) {
-    std::printf("    %-14s %s", p.id.c_str(), p.label.c_str());
-    for (const auto& [k, v] : p.env) std::printf("  [%s=%s]", k.c_str(), v.c_str());
-    std::printf("\n");
+  detail("CPU:          %s%s", rep.cpu_name.c_str(), ci.vendor.empty() ? "" : (" (" + ci.vendor + ")").c_str());
+  detail("OS:           %s", rep.os.c_str());
+  detail("cores:        %d physical, %d logical%s", ci.physical_cores, ci.logical_cores,
+         ci.performance_cores > 0
+             ? (", " + std::to_string(ci.performance_cores) + " performance + " + std::to_string(ci.efficiency_cores) +
+                " efficiency")
+                   .c_str()
+             : "");
+  detail("memory:       %.1f GB total, %.1f GB free now", gib(rep.ram_bytes), gib(memory_info().available_bytes));
+  if (ci.l2_bytes > 0 || ci.l3_bytes > 0) {
+    auto kb = [](int64_t b) { return b > 0 ? std::to_string(b >> 10) + " KB" : std::string("unknown"); };
+    detail("cache:        L1d %s, L2 %s, L3 %s", kb(ci.l1d_bytes).c_str(), kb(ci.l2_bytes).c_str(), kb(ci.l3_bytes).c_str());
   }
-  if (dry_run) return 0;
+  detail("features:     %s", rep.features.empty() ? "(none detected)" : rep.features.c_str());
+  detail("family:       %s", cr::cpu_family(ci.features).c_str());
+  detail("DynaLM's default CPU kernels here: %s",
+         native_cpu_default() ? "DynaCore (this CPU has SME)" : "ggml (DynaCore kernels are measured as a separate path)");
+  detail("threads:      %d (%s)", threads,
+         threads_given                 ? "set with --threads"
+         : ci.performance_cores > 0    ? "one per performance core; efficiency cores are left out"
+                                       : "one per physical core");
+
+  step(2, "Planning what to measure");
+  detail("models (Q4_K_M, from Hugging Face; %s):", quick ? "--quick: 1.5b only" : models_arg.empty() ? "all three" : "--models");
+  for (const cr::ModelSpec& m : mc.run) {
+    std::error_code ec0;
+    const bool have = fs::exists(fs::path(models_dir()) / fs::path(m.ref).filename(), ec0);
+    detail("  run   %-5s %s, %.1f GB download, needs %lld GB RAM%s", m.id.c_str(), m.ref.c_str(), static_cast<double>(m.bytes) / 1e9,
+           static_cast<long long>(m.min_ram_bytes >> 30), have ? " (already downloaded)" : "");
+  }
+  for (const std::string& sk : mc.skipped) detail("  skip  %s", sk.c_str());
+  detail("paths (each one is a separate server, same model, same threads):");
+  for (const cr::Path& p : rep.paths) {
+    std::string cmd = p.llama ? "llama-server -m <model>" : "dynalm serve <model>";
+    for (const std::string& a : p.serve_args) cmd += " " + a;
+    for (const auto& [k, v] : p.env) cmd = k + "=" + v + " " + cmd;
+    detail("  %-14s %s", p.id.c_str(), p.label.c_str());
+    detail("  %-14s   %s", "", cmd.c_str());
+  }
+  detail("workload:     %d-token prompts, %d output tokens, users %s, %d round(s), engine order alternating per round",
+         rep.workload.prompt_tokens, rep.workload.output_tokens,
+         [&] {
+           std::vector<std::string> u;
+           for (int32_t x : rep.workload.users) u.push_back(std::to_string(x));
+           return join(u, " and ");
+         }()
+             .c_str(),
+         rounds);
+  detail("accuracy:     %s",
+         std::find(rep.models.begin(), rep.models.end(), "1.5b") != rep.models.end()
+             ? "1.5b, each DynaLM path against llama.cpp on wikitext-2 (top-1 >= 94 %, perplexity <= llama.cpp + 1 %)"
+             : "not checked (needs the 1.5b model)");
+  detail("speed runs:   %zu (models x paths x rounds)", mc.run.size() * rep.paths.size() * static_cast<size_t>(rounds));
+  if (dry_run) {
+    std::printf("\n--dry-run: nothing downloaded or run\n");
+    return 0;
+  }
 
   // Work directory: downloads and logs.
   const fs::path work = fs::path(models_dir()).parent_path() / "cpu-report";
@@ -379,6 +498,8 @@ int cmd_cpu_report(std::span<const std::string_view> args) {
   const std::string log_dl = (work / "logs" / "download.log").string();
 
   // llama.cpp.
+  step(3, "Getting llama.cpp (the reference)");
+  detail("work directory: %s (downloads and logs)", work.string().c_str());
   fs::path llama_server, llama_ppl;
   if (!llama_dir.empty()) {
     llama_server = find_file(llama_dir, exe("llama-server"));
@@ -425,33 +546,52 @@ int cmd_cpu_report(std::span<const std::string_view> args) {
     const std::string v = read_file(vlog.string());
     const size_t b = v.find("version:");
     if (b != std::string::npos) rep.notes.push_back("llama.cpp " + v.substr(b, v.find('\n', b) - b));
+    detail("llama-server:     %s", llama_server.string().c_str());
+    detail("llama-perplexity: %s", llama_ppl.empty() ? "not found (accuracy check skipped)" : llama_ppl.string().c_str());
+    detail("%s", b != std::string::npos ? v.substr(b, v.find('\n', b) - b).c_str() : "version: unknown (llama-server --version printed none)");
   }
 
   // Preconditions.
+  step(4, "Checking the machine is ready (power, load)");
   if (const std::string p = power_problem(); !p.empty()) {
     rep.controlled = false;
     rep.notes.push_back("uncontrolled: " + p);
-    std::printf("  warning: %s; the report is marked uncontrolled\n", p.c_str());
+    detail("WARNING: %s; plug in the charger for comparable numbers. The report is marked uncontrolled.", p.c_str());
+  } else {
+    detail("power: on mains (or no battery)");
   }
   const double load_limit = std::max(1.0, 0.25 * ci.physical_cores);
-  if (load_average() < 0) rep.notes.push_back("machine load not checked (not available on this OS)");
+  if (const double l = load_average(); l < 0) {
+    rep.notes.push_back("machine load not checked (not available on this OS)");
+    detail("load: not available on this OS; close other programs before the run");
+  } else {
+    detail("load: %.2f now, limit %.2f (checked again before every speed run)", l, load_limit);
+  }
 
   // Models.
+  step(5, "Getting the models");
   std::vector<std::string> model_paths;
   for (const cr::ModelSpec& m : mc.run) {
+    const auto t0 = std::chrono::steady_clock::now();
+    say("model %s: %s (%.1f GB)", m.id.c_str(), m.ref.c_str(), static_cast<double>(m.bytes) / 1e9);
     const std::string_view pa[] = {m.ref};
     if (cmd_pull(pa) != 0) {
       std::fprintf(stderr, "cpu-report: could not download %s\n", m.ref.c_str());
       return 1;
     }
     model_paths.push_back((fs::path(models_dir()) / fs::path(m.ref).filename()).string());
+    detail("ready in %.0f s: %s", seconds_since(t0), model_paths.back().c_str());
   }
 
   // Agreement with llama.cpp (1.5B only).
+  step(6, "Checking accuracy against llama.cpp");
   const auto it15 = std::find(rep.models.begin(), rep.models.end(), "1.5b");
-  if (it15 != rep.models.end() && !llama_ppl.empty()) {
+  if (it15 == rep.models.end() || llama_ppl.empty()) {
+    detail("skipped: %s", llama_ppl.empty() ? "llama-perplexity not found" : "the 1.5b model is not in this run");
+  } else {
     const std::string model = model_paths[static_cast<size_t>(it15 - rep.models.begin())];
-    std::printf("agreement with llama.cpp (1.5b, %d x %d tokens of wikitext-2)\n", kScoreChunks, kScoreCtx);
+    detail("model 1.5b, %d chunks x %d tokens of wikitext-2; pass = top-1 >= %.0f %% and perplexity <= llama.cpp + %.0f %%",
+           kScoreChunks, kScoreCtx, cr::kMinTop1Pct, cr::kMaxPplIncreasePct);
     const fs::path wzip = work / "wikitext-2-raw-v1.zip";
     fs::path wiki = find_file(work / "wikitext", "wiki.test.raw");
     Status st = Status::Ok();
@@ -470,6 +610,8 @@ int cmd_cpu_report(std::span<const std::string_view> args) {
     const std::string plog = (work / "logs" / "llama-perplexity.log").string();
     double llama_pplx = 0;
     if (st.ok()) {
+      say("llama.cpp: perplexity and reference logits (log: %s)", plog.c_str());
+      const auto t0 = std::chrono::steady_clock::now();
       fs::remove(plog, ec);
       const int rc = run_wait({llama_ppl.string(), "-m", model, "-f", wiki.string(), "-c", std::to_string(kScoreCtx),
                                "--chunks", std::to_string(kScoreChunks), "-ngl", "0", "-t", std::to_string(threads),
@@ -477,7 +619,9 @@ int cmd_cpu_report(std::span<const std::string_view> args) {
                               llama_env, plog);
       llama_pplx = parse_llama_ppl(read_file(plog));
       if (rc != 0 || llama_pplx <= 0) st = IoError("llama-perplexity failed (log: " + plog + ")");
+      if (st.ok()) detail("perplexity %.4f, %.0f s", llama_pplx, seconds_since(t0));
     }
+    if (!st.ok()) detail("FAILED: %s", st.message().c_str());
     for (const cr::Path& p : rep.paths) {
       if (p.llama || p.score_device.empty()) continue;
       cr::Accuracy acc;
@@ -490,6 +634,9 @@ int cmd_cpu_report(std::span<const std::string_view> args) {
         continue;
       }
       const fs::path slog = work / "logs" / ("score-" + p.id + ".log");
+      say("%s: scoring on the %s kernels (log: %s)", p.id.c_str(), p.score_device == "native" ? "DynaCore" : "ggml",
+          slog.string().c_str());
+      const auto t0 = std::chrono::steady_clock::now();
       fs::remove(slog, ec);
       run_wait({executable_path(), "cpu-report", "--score", p.score_device, model, wiki.string(), kld.string(),
                 std::to_string(threads)},
@@ -507,15 +654,24 @@ int cmd_cpu_report(std::span<const std::string_view> args) {
         acc.positions = static_cast<int64_t>(j->find("positions")->as_number());
         acc.pass = cr::accuracy_pass(acc.top1_pct, acc.ppl, acc.llama_ppl);
       }
-      std::printf("  %-14s %s\n", p.id.c_str(),
-                  acc.ran ? (std::to_string(acc.top1_pct).substr(0, 5) + " % top-1, " + (acc.pass ? "pass" : "FAIL")).c_str()
-                          : ("not run: " + acc.error).c_str());
+      if (acc.ran) {
+        detail("top-1 %.2f %%, mean KL %.5f, perplexity %.4f (llama.cpp %.4f, %+.2f %%), %lld positions, %.0f s: %s",
+               acc.top1_pct, std::max(0.0, acc.kl_mean), acc.ppl, acc.llama_ppl,
+               acc.llama_ppl > 0 ? 100.0 * (acc.ppl / acc.llama_ppl - 1.0) : 0.0, static_cast<long long>(acc.positions),
+               seconds_since(t0), acc.pass ? "PASS" : "FAIL");
+      } else {
+        detail("not run: %s", acc.error.c_str());
+      }
       rep.accuracy.push_back(acc);
     }
     fs::remove(kld, ec);  // ~0.8 GB for a 151k-token vocabulary; only needed for the scores above
   }
 
   // Speed.
+  step(7, "Measuring speed");
+  const size_t total_runs = mc.run.size() * rep.paths.size() * static_cast<size_t>(rounds);
+  size_t run_no = 0;
+  bool load_noted = false;
   int32_t prompt_base = 0;
   const int32_t max_users = *std::max_element(rep.workload.users.begin(), rep.workload.users.end());
   for (size_t mi = 0; mi < mc.run.size(); ++mi) {
@@ -533,7 +689,8 @@ int cmd_cpu_report(std::span<const std::string_view> args) {
       for (const cr::Path& p : rep.paths) order.push_back(&p);
       if (round % 2 == 1) std::reverse(order.begin(), order.end());  // engine order alternates
       for (const cr::Path* p : order) {
-        if (!wait_for_quiet(load_limit) && rep.controlled) {
+        if (!wait_for_quiet(load_limit) && !load_noted) {
+          load_noted = true;  // once, whatever else already made the run uncontrolled
           rep.controlled = false;
           rep.notes.push_back("uncontrolled: machine load stayed above " + std::to_string(load_limit).substr(0, 4));
         }
@@ -551,18 +708,22 @@ int cmd_cpu_report(std::span<const std::string_view> args) {
         argv.insert(argv.end(), p->serve_args.begin(), p->serve_args.end());
         const fs::path slog = work / "logs" / ("server-" + mc.run[mi].id + "-" + p->id + "-r" + std::to_string(round) + ".log");
         fs::remove(slog, ec);
-        std::printf("%s  round %d  %-14s ", mc.run[mi].id.c_str(), round + 1, p->id.c_str());
-        std::fflush(stdout);
+        ++run_no;
+        say("run %zu/%zu: model %s, round %d/%d, path %s", run_no, total_runs, mc.run[mi].id.c_str(), round + 1, rounds,
+            p->id.c_str());
+        detail("starting %s on port %d (log: %s)", p->llama ? "llama-server" : "dynalm serve", port, slog.string().c_str());
+        const auto t_start = std::chrono::steady_clock::now();
         auto proc = ChildProcess::start(argv, env, slog.string());
         if (!proc.ok() || !wait_ready(**proc, port, 600000)) {
-          std::printf("server did not start (log: %s)\n", slog.string().c_str());
+          detail("FAILED: the server did not start; see the log above");
           rep.notes.push_back(mc.run[mi].id + " " + p->id + " round " + std::to_string(round + 1) +
                               ": server did not start");
           continue;
         }
+        detail("server ready in %.1f s", seconds_since(t_start));
         auto target = bench::make_http_target("http://127.0.0.1:" + std::to_string(port), mc.run[mi].id);
         if (!target.ok()) {
-          std::printf("%s\n", target.status().message().c_str());
+          detail("FAILED: %s", target.status().message().c_str());
           continue;
         }
         for (int32_t u : rep.workload.users) {
@@ -574,20 +735,24 @@ int cmd_cpu_report(std::span<const std::string_view> args) {
           cfg.warmup_requests = 1;
           cfg.prompt_base = prompt_base;
           prompt_base += 1000;  // unique prompts: no prompt or prefix cache hits across points
+          const auto t_point = std::chrono::steady_clock::now();
           const bench::PointResult r = bench::run_point(**target, **tok, cfg);
           cr::Point pt{p->id, mc.run[mi].id, u, round, r.output_tok_s, r.ttft_ms.p50, r.itl_ms.p50, r.itl_ms.p99,
                        r.completed, r.errors};
           rep.points.push_back(pt);
-          std::printf(" %du %.1f tok/s", u, r.output_tok_s);
-          std::fflush(stdout);
+          detail("%d user%s: %7.1f tok/s | first token p50 %6.0f ms | per token p50 %5.1f ms, p99 %5.1f ms | %d/%d ok%s | %.0f s",
+                 u, u == 1 ? " " : "s", r.output_tok_s, r.ttft_ms.p50, r.itl_ms.p50, r.itl_ms.p99, r.completed,
+                 cfg.requests, r.errors > 0 ? (", " + std::to_string(r.errors) + " errors").c_str() : "",
+                 seconds_since(t_point));
         }
-        std::printf("\n");
         (*proc)->stop();
       }
     }
   }
 
   // The report.
+  std::printf("\n");
+  say("done in %.0f minutes", seconds_since(g_start) / 60.0);
   rep.machine_json = format_doctor_json(collect_doctor_report());
   const std::string base =
       "cpu-report-" + (anonymous ? std::string("anonymous") : safe_name(host_name())) + "-" + timestamp();

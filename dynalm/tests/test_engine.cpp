@@ -1541,6 +1541,13 @@ void test_cpu_report() {
   CHECK(ids(p) == "default,dynacore,vnni,llama.cpp");
   CHECK(p.back().serve_args == std::vector<std::string>({"-ngl", "0", "-t", "10"}));
   CHECK(cr::feature_list(i7) == "sse4.2 avx2 fma f16c avx_vnni" && cr::feature_list(m4) == "neon dotprod i8mm sme");
+  CHECK(cr::cpu_family(m4) == "ARM64 NEON + dotprod + i8mm + SME" && cr::cpu_family(m3) == "ARM64 NEON + dotprod + i8mm");
+  CHECK(cr::cpu_family(i7) == "x86-64 AVX2 + AVX-VNNI");
+  dynacore::CpuFeatures xeon = i7;  // Sapphire Rapids class
+  xeon.avx512f = xeon.avx512_vnni = true;
+  CHECK(cr::cpu_family(xeon) == "x86-64 AVX-512 + VNNI");
+  xeon.amx_int8 = true;
+  CHECK(cr::cpu_family(xeon) == "x86-64 AMX" && cr::cpu_family(dynacore::CpuFeatures{}) == "other (no AVX2 or NEON)");
 
   auto c = cr::choose_models("", false, int64_t{16} << 30);
   CHECK(c.run.size() == 3 && c.skipped.empty() && c.error.empty());
