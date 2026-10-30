@@ -86,6 +86,22 @@ std::string feature_list(const dynacore::CpuFeatures& f) {
   return s;
 }
 
+std::string cpu_family(const dynacore::CpuFeatures& f) {
+  if (f.neon) {
+    if (f.arm_sme) return "ARM64 NEON + dotprod + i8mm + SME";
+    if (f.arm_sve) return "ARM64 SVE";
+    if (f.arm_dotprod && f.arm_i8mm) return "ARM64 NEON + dotprod + i8mm";
+    if (f.arm_dotprod) return "ARM64 NEON + dotprod";
+    return "ARM64 NEON";
+  }
+  if (f.amx_int8) return "x86-64 AMX";
+  if (f.avx512f && f.avx512_vnni) return "x86-64 AVX-512 + VNNI";
+  if (f.avx512f) return "x86-64 AVX-512";
+  if (f.avx2 && f.avx_vnni) return "x86-64 AVX2 + AVX-VNNI";
+  if (f.avx2) return "x86-64 AVX2";
+  return "other (no AVX2 or NEON)";
+}
+
 std::vector<Path> plan_paths(const dynacore::CpuFeatures& f, bool native_default, int threads) {
   const std::string t = std::to_string(threads);
   std::vector<Path> p;

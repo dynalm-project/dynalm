@@ -366,6 +366,24 @@ same client, and writes `cpu-report-<host>-<time>.json` and `.md` to attach to
 - **Time:** about 1–2 hours. `--quick`: the 1.5B model, 1 round, about 15–20 minutes.
 - **Privacy:** prompts and outputs are not stored. `--anonymous` keeps the host name out of the
   report.
+- **Progress:** the run prints seven numbered steps, each line stamped with the time since the
+  start (`[+00:12:03]`):
+  1. Detecting the machine: CPU, OS, cores (performance and efficiency), memory, caches,
+     features, CPU family (for example `x86-64 AVX2 + AVX-VNNI`), DynaLM's default kernels, and
+     the thread count with the reason for it.
+  2. Planning: each model to run or skip (with the RAM it needs), each path with its exact
+     command and environment, the workload, and the number of speed runs. `--dry-run` stops
+     here.
+  3. Getting llama.cpp: the download, its SHA-256 check and its version.
+  4. Checking power and machine load.
+  5. Getting the models.
+  6. Checking accuracy: llama.cpp's perplexity, then each path's top-1 agreement, KL divergence,
+     perplexity and verdict.
+  7. Measuring speed: for each run, the server's start time, then per user count the throughput,
+     time to first token, time per token (p50, p99), completed requests and errors.
+
+  Each server's output and each download go to a log file under `~/.dynalm/cpu-report/logs`; the
+  progress lines name the log to look at when something fails.
 
 Design and decisions: [docs/perf/cpu-report-design.md](perf/cpu-report-design.md).
 

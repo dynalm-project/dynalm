@@ -7,6 +7,9 @@
   DynaCore tier the CPU has) against a pinned llama.cpp release on Qwen2.5-1.5B, Qwen3-4B and
   Qwen3-8B, checks each path's agreement with llama.cpp on wikitext-2, and writes a JSON and
   Markdown report for issue #31. `--quick` runs the 1.5B model for one round.
+- `dynalm cpu-report` prints its progress in seven numbered, timestamped steps: what it detected
+  about the CPU (family, cores, features, default kernels, threads), what it plans to run, each
+  download, each accuracy score and each speed measurement, with the log file for every server.
 
 ## [0.4.0] - 2026-10-28
 

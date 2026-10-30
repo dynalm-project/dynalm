@@ -114,5 +114,8 @@ std::string to_json(const Report& r);
 std::string to_markdown(const Report& r);
 // The CPU features cpu_info detects, as a space-separated list.
 std::string feature_list(const dynacore::CpuFeatures& f);
+// The CPU family these features make it, for the progress output:
+// "ARM64 NEON + dotprod + i8mm + SME", "x86-64 AVX2 + AVX-VNNI", ...
+std::string cpu_family(const dynacore::CpuFeatures& f);
 
 }  // namespace dynalm::cpu_report
