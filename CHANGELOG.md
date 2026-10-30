@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-30
+
+`dynalm cpu-report`: one command that measures DynaLM against llama.cpp on any CPU and writes a
+report to share. The engine's speed and defaults are unchanged from 0.4.0.
+
 ### Added
 - `dynalm cpu-report`: measures DynaLM's CPU paths (default, the other kernel family, each
   DynaCore tier the CPU has) against a pinned llama.cpp release on Qwen2.5-1.5B, Qwen3-4B and
@@ -10,6 +15,14 @@
 - `dynalm cpu-report` prints its progress in seven numbered, timestamped steps: what it detected
   about the CPU (family, cores, features, default kernels, threads), what it plans to run, each
   download, each accuracy score and each speed measurement, with the log file for every server.
+
+### Documentation
+- `docs/perf/cpu-experiments.md`: decode is slower for about 110 ms after a prompt processed with
+  SME (measured on an Apple M4 Pro), which explains DynaLM's higher p99 token gap than
+  llama.cpp's at one user.
+
+### Tests
+- `test_qmm` prints the differing value and its position when a weight panel check fails.
 
 ## [0.4.0] - 2026-10-28
 
