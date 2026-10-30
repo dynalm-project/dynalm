@@ -71,6 +71,7 @@ void print_usage() {
       "  inspect <model>         architecture, parameters, quantization, memory estimate\n"
       "  benchmark <model>       throughput and latency (in-process or --url server)\n"
       "  doctor [--json]         system report: CPU, ISA, RAM, GPU, backends, AutoTune, status\n"
+      "  cpu-report              measure DynaLM against llama.cpp on this CPU; report for issue #31\n"
       "  autotune [--run MODEL]  kernels and modes for this machine; tune CPU threads (--clear)\n"
       "  config [show|path|init] effective configuration and ~/.dynalm/config.yaml\n"
       "  stop                    ask a local server to drain and exit (--host, --port)\n"
@@ -165,6 +166,7 @@ int main(int argc, char** argv) {
   if (cmd == "chat") return dynalm::cli::cmd_run(rest);  // run without -p
 #if ENGINE_HAS_SERVER
   if (cmd == "serve") return dynalm::cli::cmd_serve(rest);
+  if (cmd == "cpu-report") return dynalm::cli::cmd_cpu_report(rest);
 #else
   if (cmd == "serve") {
     std::fprintf(stderr, "dynalm: built without the server (ENABLE_SERVER=OFF)\n");

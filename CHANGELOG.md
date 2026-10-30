@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+- `dynalm cpu-report`: measures DynaLM's CPU paths (default, the other kernel family, each
+  DynaCore tier the CPU has) against a pinned llama.cpp release on Qwen2.5-1.5B, Qwen3-4B and
+  Qwen3-8B, checks each path's agreement with llama.cpp on wikitext-2, and writes a JSON and
+  Markdown report for issue #31. `--quick` runs the 1.5B model for one round.
+
 ## [0.4.0] - 2026-10-28
 
 Structured JSON output, several API keys, and checksum-verified model downloads. The engine's

@@ -7,7 +7,10 @@ add_library(dynalm_runtime STATIC
   api/openai.cpp
   bench/analysis.cpp
   bench/loadgen.cpp
+  bench/cpu_report.cpp
+  bench/perplexity.cpp
   chat_template/chat_template.cpp
+  common/process.cpp
   common/sha256.cpp
   config/config.cpp
   diagnostics/doctor.cpp
@@ -117,7 +120,8 @@ if(ENABLE_SERVER)
   if(WIN32)
     target_link_libraries(dynalm_server PRIVATE ws2_32)
   endif()
-  target_sources(dynalm PRIVATE cli/serve.cpp)
+  target_sources(dynalm PRIVATE cli/serve.cpp cli/cpu_report.cpp)
+  target_include_directories(dynalm SYSTEM PRIVATE ${_httplib_dir})
   target_link_libraries(dynalm PRIVATE dynalm_server)
   target_compile_definitions(dynalm PRIVATE ENGINE_HAS_SERVER=1)
   set(ENGINE_HTTPLIB_DIR ${_httplib_dir} CACHE INTERNAL "cpp-httplib include dir")
