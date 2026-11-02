@@ -127,6 +127,10 @@ def plan(ids: list[str], ram: int, free: int, have: dict[str, bool], download: b
             out.append((m, "run"))
         elif not download:
             out.append((m, "skip: not downloaded (use --download)"))
+        elif left - size < DISK_MARGIN and delete_after:
+            # Earlier models are deleted before it, and space may be freed meanwhile: decided then.
+            out.append((m, f"download if {(size + DISK_MARGIN) / GB:.0f} GB are free by then "
+                           f"({left / GB:.1f} GB free now)"))
         elif left - size < DISK_MARGIN:
             out.append((m, f"skip: needs {size / GB:.1f} GB of disk, {left / GB:.1f} GB free "
                            f"(keeps {DISK_MARGIN // GB} GB free)"))
@@ -364,6 +368,10 @@ def main() -> int:
            "llama": str(bench) if bench else "not run", "dynalm_version": dyn_version,
            "workloads": {"in_ram": IN_RAM, "from_ssd": FROM_SSD}, "results": [], "skipped": [], "notes": []}
 
+    if sys.platform == "darwin" and "Battery Power" in subprocess.run(
+            ["pmset", "-g", "batt"], capture_output=True, text=True).stdout:
+        rep["notes"].append("uncontrolled: ran on battery")
+        say("WARNING: on battery; plug in the charger for comparable numbers", True)
     say("[3/4] Models and runs")
     for m, action in p:
         size = model_bytes(m)
@@ -372,6 +380,16 @@ def main() -> int:
             continue
         downloaded = []
         say(f"{m[0]}: {m[1]}")
+        # Disk again now: earlier models may have been deleted (--delete-after) or space freed.
+        missing = sum(f[1] for f in m[5] if not ((work / m[2].replace("/", "__") / f[0]).exists() and
+                                                 (work / m[2].replace("/", "__") / f[0]).stat().st_size == f[1]))
+        free_now = shutil.disk_usage(work).free
+        if missing and free_now - missing < DISK_MARGIN:
+            why = (f"needs {missing / GB:.1f} GB more disk, {free_now / GB:.1f} GB free now "
+                   f"(keeps {DISK_MARGIN // GB} GB free)")
+            say(f"skipped: {why}", True)
+            rep["skipped"].append({"model": m[0], "label": m[1], "size": size, "why": why})
+            continue
         err = ""
         for path, nbytes, sha in m[5]:
             dest = work / m[2].replace("/", "__") / path
