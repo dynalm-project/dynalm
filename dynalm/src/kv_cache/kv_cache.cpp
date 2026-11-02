@@ -85,6 +85,34 @@ void KvBlockPool::copy_block(int32_t dst, int32_t src) {
   }
 }
 
+bool KvBlockPool::host_kv() const { return backend_->device().type == dynacore::DeviceType::kCpu; }
+
+void KvBlockPool::read_block(int32_t block, std::byte* dst) const {
+  backend_->synchronize();
+  const auto kb = static_cast<size_t>(geom_.k_block_bytes());
+  const auto vb = static_cast<size_t>(geom_.v_block_bytes());
+  for (int32_t l = 0; l < geom_.num_layers; ++l) {
+    const auto* k = static_cast<const std::byte*>(k_[static_cast<size_t>(l)]->data());
+    const auto* v = static_cast<const std::byte*>(v_[static_cast<size_t>(l)]->data());
+    std::memcpy(dst, k + static_cast<size_t>(block) * kb, kb);
+    std::memcpy(dst + kb, v + static_cast<size_t>(block) * vb, vb);
+    dst += kb + vb;
+  }
+}
+
+void KvBlockPool::write_block(int32_t block, const std::byte* src) {
+  backend_->synchronize();
+  const auto kb = static_cast<size_t>(geom_.k_block_bytes());
+  const auto vb = static_cast<size_t>(geom_.v_block_bytes());
+  for (int32_t l = 0; l < geom_.num_layers; ++l) {
+    auto* k = static_cast<std::byte*>(k_[static_cast<size_t>(l)]->data());
+    auto* v = static_cast<std::byte*>(v_[static_cast<size_t>(l)]->data());
+    std::memcpy(k + static_cast<size_t>(block) * kb, src, kb);
+    std::memcpy(v + static_cast<size_t>(block) * vb, src + kb, vb);
+    src += kb + vb;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // KvBlockTable
 

@@ -30,6 +30,7 @@
 #include <mutex>
 #include <string_view>
 #include <span>
+#include <string>
 #include <vector>
 
 #include "dynacore/base/status.h"
@@ -231,6 +232,12 @@ struct SchedulerConfig {
   bool enable_prefix_cache = true;
   PrefixCacheKind prefix_cache_kind = PrefixCacheKind::kRadix;
   int32_t prefix_cache_max_blocks = 0;  // 0 = bounded only by the KV pool
+  // The prompt cache on disk (make_disk_prefix_cache): full KV blocks kept as
+  // files here and loaded for prompts that start the same way, also after a
+  // restart. Empty = off. The engine makes it a directory per model and KV
+  // format. Host-memory KV only (the CPU); elsewhere ignored with a warning.
+  std::string prompt_cache_dir;
+  int64_t prompt_cache_max_bytes = 0;  // 0 = unbounded
 };
 
 // DD-079 predictive mode: the prefill rows that keep a mixed step within

@@ -53,6 +53,7 @@ void usage() {
                "  --int8-decode N       int8 activations for matmuls of <= N rows (in-process; 0 = off)\n"
                "  --experts-from-disk   MoE models larger than RAM: experts read from the file into a RAM cache\n"
                "                        (in-process, CPU; same outputs). --expert-cache SIZE sets it (e.g. 8GB)\n"
+               "  --prompt-cache DIR    keep prompt KV blocks on disk and reuse them across runs (in-process, CPU)\n"
                "  --prefill-budget N    prompt tokens per scheduler step (in-process, default 64; Metal 256)\n"
                "  --decode-budget N     decode rows per scheduler step (in-process, default 64)\n"
                "  --chunk N             max prompt tokens per sequence per step (0 = budget; default 32; Metal 128)\n"
@@ -101,6 +102,7 @@ int cmd_benchmark(std::span<const std::string_view> args) {
   bool diag = true;
   int requests = 0, threads = 0, ctx = 32768, int8_rows = -1;
   int64_t expert_cache = 0;  // --experts-from-disk / --expert-cache: -1 auto, > 0 bytes
+  std::string prompt_cache;  // --prompt-cache DIR
   int prefill_budget = -1, decode_budget = -1, chunk = -1, batch = -1, solo_chunk = -1;
   bool spec_on = false;  // --spec ngram|DRAFT.gguf
   std::string draft_path;
@@ -144,6 +146,7 @@ int cmd_benchmark(std::span<const std::string_view> args) {
     else if (a == "--int8-decode") ok = parse_int(value(), int8_rows) && int8_rows >= 0;
     else if (a == "--experts-from-disk") expert_cache = expert_cache > 0 ? expert_cache : -1;
     else if (a == "--expert-cache") ok = cli::parse_byte_size(value(), expert_cache);
+    else if (a == "--prompt-cache") ok = !(prompt_cache = std::string(value())).empty();
     else if (a == "--prefill-budget") ok = parse_int(value(), prefill_budget) && prefill_budget > 0;
     else if (a == "--decode-budget") ok = parse_int(value(), decode_budget) && decode_budget > 0;
     else if (a == "--chunk") ok = parse_int(value(), chunk) && chunk >= 0;
@@ -251,6 +254,7 @@ int cmd_benchmark(std::span<const std::string_view> args) {
     o.kv_tokens = ctx;
     o.int8_decode_rows = int8_rows;
     o.expert_cache_bytes = expert_cache;
+    o.scheduler.prompt_cache_dir = prompt_cache;
     if (Status st = apply_tune_mode(mode, o); !st.ok()) {
       std::fprintf(stderr, "benchmark: %s\n", st.message().c_str());
       return 1;

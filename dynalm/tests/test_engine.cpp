@@ -1666,6 +1666,57 @@ void test_expert_cache(const std::filesystem::path& dir) {
   CHECK(!d.ok() && d.status().message().find("not a mixture-of-experts model") != std::string::npos);
 }
 
+// Prompt cache on disk (--prompt-cache): a second engine (a restart) loads
+// the prompt's KV blocks from files and writes the same text as an engine
+// without any cache; files from another model are never used.
+void test_prompt_cache_disk(const std::filesystem::path& dir) {
+  const std::filesystem::path pc = dir / "prompt-cache";
+  std::filesystem::remove_all(pc);
+  const std::string path = (dir / "tiny-pc.gguf").string();
+  CHECK(test::write_file(path, test::tiny_model_gguf()));
+  auto open = [&](bool cache) {
+    EngineOptions o;
+    o.model_path = path;
+    o.backend = DeviceKind::kCpu;
+    o.threads = 2;
+    o.kv_tokens = 2048;
+    o.int8_decode_rows = 0;  // outputs independent of how rows are batched (DD-031)
+    if (cache) o.scheduler.prompt_cache_dir = pc.string();
+    auto e = Engine::create(o);
+    CHECK(e.ok());
+    return std::move(*e);
+  };
+  const std::string prompt = kPrompts[3] + " " + kShared + kPrompts[0];  // several full blocks
+  auto ref = open(false);
+  const std::string want = gen(*ref, prompt, 16).text;
+  {
+    auto first = open(true);
+    CHECK(gen(*first, prompt, 16).text == want);
+    CHECK(first->stats().prefix.disk_loaded_blocks == 0);
+  }  // destroying the engine writes every queued block
+  size_t files = 0;
+  for (const auto& d : std::filesystem::recursive_directory_iterator(pc)) files += d.path().extension() == ".kvb";
+  CHECK(files >= 8);
+  auto second = open(true);
+  CHECK(gen(*second, prompt, 16).text == want);
+  CHECK(second->stats().prefix.disk_loaded_blocks >= 8);
+  // Another model: its own directory, nothing loaded.
+  test::TinyModelSpec other;
+  other.seed = 99;
+  const std::string other_path = (dir / "tiny-pc-other.gguf").string();
+  CHECK(test::write_file(other_path, test::tiny_model_gguf(other)));
+  EngineOptions o;
+  o.model_path = other_path;
+  o.backend = DeviceKind::kCpu;
+  o.threads = 2;
+  o.kv_tokens = 2048;
+  o.scheduler.prompt_cache_dir = pc.string();
+  auto third = Engine::create(o);
+  CHECK(third.ok());
+  (void)gen(**third, prompt, 4);
+  CHECK((*third)->stats().prefix.disk_loaded_blocks == 0);
+}
+
 // Cost-aware draft length (SchedulerConfig::spec_cost_aware).
 void test_choose_draft_length() {
   std::vector<double> none(9, 0.0);
@@ -1769,6 +1820,8 @@ int main() {
   test_cpu_report();
   test_expert_cache(dir);
   test_choose_draft_length();
+  test_prompt_cache_disk(dir);
+  std::printf("prompt cache on disk: restart loads the KV blocks, same text; per-model directories\n");
   std::printf("expert cache: bit-identical logits with evictions, same text at 1 and 4 requests, size checks; "
               "cost-aware draft length\n");
   test_child_process(dir);

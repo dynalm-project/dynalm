@@ -38,6 +38,7 @@ add_library(dynalm_runtime STATIC
   loader/model_source.cpp
   prefix_cache/hash_prefix_cache.cpp
   prefix_cache/radix_prefix_cache.cpp
+  prefix_cache/disk_prefix_cache.cpp
   registry/model_registry.cpp
   runtime/device_select.cpp
   runtime/autotune.cpp

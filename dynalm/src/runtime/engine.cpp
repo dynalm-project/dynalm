@@ -7,8 +7,11 @@
 #include "dynacore/gpu/ggml_device.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 
 #include "dynacore/base/timer.h"
 #include "logging/log.h"
@@ -473,6 +476,34 @@ Result<std::unique_ptr<Engine>> Engine::create_on(EngineOptions opts) {
   }
   if (!gpu_device && !segment_device && opts.scheduler.prefix_cache_max_blocks == 0) {
     opts.scheduler.prefix_cache_max_blocks = std::max<int32_t>(1, e->kv_->num_blocks() / kCpuPrefixCacheShare);
+  }
+  if (!opts.scheduler.prompt_cache_dir.empty()) {
+    // One directory per model file and KV format: blocks saved for another
+    // model or KV layout are never looked at.
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const fs::path mp(opts.model_path);
+    uint64_t h = 1469598103934665603ull;
+    auto add = [&](const void* p, size_t n) {
+      for (size_t i = 0; i < n; ++i) h = (h ^ static_cast<const unsigned char*>(p)[i]) * 1099511628211ull;
+    };
+    const std::string name = mp.filename().string();
+    add(name.data(), name.size());
+    const auto size = static_cast<uint64_t>(fs::file_size(mp, ec));
+    add(&size, sizeof(size));
+    {
+      std::ifstream in(mp, std::ios::binary);  // the header and metadata start
+      std::vector<char> head(1 << 16);
+      in.read(head.data(), static_cast<std::streamsize>(head.size()));
+      add(head.data(), static_cast<size_t>(in.gcount()));
+    }
+    const int64_t geo[] = {kv_geom.num_layers, kv_geom.block_size, kv_geom.k_block_bytes(), kv_geom.v_block_bytes(),
+                           static_cast<int64_t>(kv_geom.layout), static_cast<int64_t>(opts.kv_dtype)};
+    add(geo, sizeof(geo));
+    char hex[17];
+    std::snprintf(hex, sizeof(hex), "%016llx", static_cast<unsigned long long>(h));
+    opts.scheduler.prompt_cache_dir = (fs::path(opts.scheduler.prompt_cache_dir) / (mp.stem().string() + "-" + hex)).string();
+    LOG_INFO("Prompt cache on disk: {}", opts.scheduler.prompt_cache_dir);
   }
   e->scheduler_ = std::make_unique<Scheduler>(*e->transformer_, *e->kv_, *e->model_->tokenizer, opts.scheduler);
   if (e->drafter_) e->scheduler_->set_draft_model(e->drafter_.get());

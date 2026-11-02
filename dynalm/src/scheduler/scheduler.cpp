@@ -151,6 +151,14 @@ Scheduler::Scheduler(Transformer& model, KvBlockPool& kv, const Tokenizer& token
     prefix_cache_ = config_.prefix_cache_kind == PrefixCacheKind::kRadix
                          ? make_radix_prefix_cache(kv_, config_.prefix_cache_max_blocks)
                          : make_hash_prefix_cache(kv_, config_.prefix_cache_max_blocks);
+    if (!config_.prompt_cache_dir.empty()) {
+      if (kv_.host_kv()) {
+        prefix_cache_ = make_disk_prefix_cache(std::move(prefix_cache_), kv_, config_.prompt_cache_dir,
+                                               config_.prompt_cache_max_bytes);
+      } else {
+        LOG_WARN("--prompt-cache: the KV cache is in GPU memory; the prompt cache on disk needs the CPU (ignored)");
+      }
+    }
   }
 }
 
