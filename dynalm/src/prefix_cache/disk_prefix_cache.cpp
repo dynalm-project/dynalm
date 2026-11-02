@@ -18,6 +18,9 @@
 // - Size: at most max_bytes of files; the oldest are deleted first.
 //
 // Not thread-safe for callers (the scheduler thread); the writer is internal.
+// Block contents are copied out (read_block) on the caller's thread, while
+// the caller's sequence still holds the block: only that thread releases
+// pool blocks, and the writer never touches the pool, only its own copies.
 
 #include <algorithm>
 #include <atomic>

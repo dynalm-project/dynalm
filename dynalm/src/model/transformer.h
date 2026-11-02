@@ -153,6 +153,7 @@ class Transformer {
   std::unique_ptr<ExpertCache> expert_cache_;
   std::vector<int32_t> active_experts_;
   std::vector<const ExpertCache::Parts*> cached_parts_;
+  std::vector<const ExpertCache::Parts*> cached_by_expert_;  // [expert] -> its cached views this step
   // Expert prediction (DYNALM_EXPERT_PREFETCH=0 turns it off): the next
   // layer's router applied to this layer's FFN input picks experts to read
   // ahead, while this layer computes.

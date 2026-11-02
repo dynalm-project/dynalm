@@ -348,6 +348,10 @@ void Transformer::moe_mlp(const Layer& L, const TensorView& xn, const TensorView
       backend_.fill(out, 0.0f);
       return;
     }
+    cached_by_expert_.assign(static_cast<size_t>(ne), nullptr);
+    for (size_t i = 0; i < active_experts_.size(); ++i) {
+      cached_by_expert_[static_cast<size_t>(active_experts_[i])] = cached_parts_[i];
+    }
     // Predict the next MoE layer's experts from this layer's FFN input and
     // start reading them; they arrive while this layer and the next layer's
     // attention compute. A wrong guess costs a read, never a result.
@@ -397,7 +401,6 @@ void Transformer::moe_mlp(const Layer& L, const TensorView& xn, const TensorView
   gather_idx_.clear();
   scatter_w_.clear();
   int64_t off = 0;
-  size_t active = 0;
   for (int32_t e = 0; e < ne; ++e) {
     const auto& rows = expert_rows_[static_cast<size_t>(e)];
     if (rows.empty()) continue;
@@ -406,7 +409,7 @@ void Transformer::moe_mlp(const Layer& L, const TensorView& xn, const TensorView
       gather_idx_.push_back(r);
       scatter_w_.push_back(wgt);
     }
-    const auto& W = expert_cache_ != nullptr ? *cached_parts_[active++] : L.experts[static_cast<size_t>(e)];
+    const auto& W = expert_cache_ != nullptr ? *cached_by_expert_[static_cast<size_t>(e)] : L.experts[static_cast<size_t>(e)];
     const TensorView xe = slice(xp, off, cnt), ae = slice(ap, off, cnt), be = slice(bp, off, cnt);
     up_jobs_.push_back({xe, W[0], cols_of(ae, 0, fe)});
     up_jobs_.push_back({xe, W[1], cols_of(ae, fe, fe)});
