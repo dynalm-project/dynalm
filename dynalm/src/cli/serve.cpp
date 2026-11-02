@@ -35,7 +35,8 @@ constexpr OptionSpec kServeOptions[] = {
     {"max-active"},   {"request-timeout"}, {"temperature"}, {"backend"}, {"cpu", false}, {"gpu", false}, {"execution"}, {"shutdown-timeout"}, {"disable-admin", false}, {"int8-decode"}, {"policy"},
     {"api-key-file"}, {"api-keys-file"}, {"allow-unauthenticated", false}, {"disable-metrics", false},
     {"solo-prefill-chunk"}, {"solo-prefill-split", false}, {"prefill-order"}, {"prefill-aging-ms"},
-    {"spec"}, {"spec-k"}, {"mode"},
+    {"spec"}, {"spec-k"}, {"mode"}, {"experts-from-disk", false}, {"expert-cache"}, {"prompt-cache"},
+    {"prompt-cache-size"}, {"spec-eagle"},
 };
 
 void usage() {

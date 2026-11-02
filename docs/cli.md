@@ -279,7 +279,12 @@ dynalm serve <model> [options]
 | `--disable-metrics` | Turn off `GET /metrics` (404) |
 | `--allow-unauthenticated` | Allow a non-loopback `--host` without a key (only behind an authenticating gateway; [deployment.md](deployment.md)) |
 | `--spec ngram\|DRAFT` | Speculative decoding for every stream, same output as without it. `ngram`: drafts from text already in the conversation (good for summaries, code edits, extraction). `DRAFT`: a small model with the same vocabulary, a file or a name (for a Qwen2.5 target, `qwen2.5:0.5b`); it drafts for all streams in a few batched passes on the same device. A stream whose drafts keep failing stops drafting for a while. `/metrics`: `dynalm_spec_drafted_tokens_total`, `dynalm_spec_accepted_tokens_total` |
-| `--spec-k K` | With `--spec`: most drafted tokens per stream and step (default 4) |
+| `--spec-k K` | With `--spec` or `--spec-eagle`: most drafted tokens per stream and step (default 4) |
+| `--spec-eagle DIR` | Speculative decoding with an EAGLE-3 head trained for this model (a directory with `config.json` and `model.safetensors`, for example `AngelSlim/Qwen3-4B_eagle3`). The head reads the model's own features and drafts for every stream; output is the same as without it. CPU only |
+| `--experts-from-disk` | Mixture-of-experts models larger than RAM: the experts are read from the model file into a RAM cache when the router picks them, the rest of the model stays in RAM. Same output as with the whole model in RAM. Runs on DynaCore's CPU kernels. [perf/moe-ssd-plan.md](perf/moe-ssd-plan.md) |
+| `--expert-cache SIZE` | The expert cache's size (`8GB`, `512MB`; implies `--experts-from-disk`). Default: three quarters of RAM minus the rest of the model and 2 GiB. At least one layer's experts |
+| `--prompt-cache DIR` | Keep the KV cache of prompts as files in DIR and reuse it for prompts that start the same way, also after a restart; a request paused for lack of KV memory resumes from these files instead of recomputing. CPU only |
+| `--prompt-cache-size SIZE` | The most the prompt cache files take; the oldest are deleted first (default: no limit) |
 
 Every option can also be set as `DYNALM_<OPTION>` (e.g. `DYNALM_PORT=9000`) or in the config file.
 Precedence: command line > environment > file.
@@ -449,6 +454,7 @@ nothing is downloaded or compiled.
 | `DYNALM_LOG_LEVEL` | Default log level |
 | `DYNALM_AUTOTUNE` | `0`: ignore the tuning cache |
 | `DYNALM_AUTOTUNE_CACHE` | Tuning cache file (default `~/.dynalm/autotune.json`) |
+| `DYNALM_EXPERT_PREFETCH` | `0`: with `--experts-from-disk`, do not read the next layer's predicted experts ahead (A/B measurements) |
 | `DYNALM_<OPTION>` | Any configurable `serve`/`run` option, e.g. `DYNALM_PORT`, `DYNALM_HOST`, `DYNALM_THREADS` |
 | `HF_TOKEN` | Hugging Face token for gated models (`pull`) |
 

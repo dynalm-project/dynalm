@@ -201,7 +201,8 @@ int run_speculative(const std::string& path, const std::string& spec, int k, boo
 // Options `run` takes from the config file and DYNALM_* (config/config.h).
 constexpr OptionSpec kRunConfigOptions[] = {
     {"model"}, {"threads"}, {"ctx"}, {"batch"}, {"kv"}, {"backend"}, {"cpu", false}, {"gpu", false}, {"execution"}, {"int8-decode"}, {"temperature"},
-    {"max-tokens"}, {"mode"},
+    {"max-tokens"}, {"mode"}, {"experts-from-disk", false}, {"expert-cache"}, {"prompt-cache"}, {"prompt-cache-size"},
+    {"spec-eagle"},
 };
 
 int cmd_run(std::span<const std::string_view> raw_args) {

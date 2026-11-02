@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Added
+- `--experts-from-disk` (`run`, `serve`, `benchmark`): mixture-of-experts models larger than RAM
+  run on the CPU. The routed experts are read from the model file into a RAM cache
+  (`--expert-cache SIZE`) when the router picks them, bypassing the OS file cache; the next
+  layer's experts are predicted and read ahead. Output is bit-identical to the model held in RAM.
+  `dynalm benchmark` reports how many experts were resident when needed and the GB read per token.
+- `--prompt-cache DIR`: the KV cache of prompts is kept as files and reused for prompts that start
+  the same way, also after a restart. A request preempted for lack of KV memory writes its blocks
+  there and resumes from them instead of recomputing. CPU only.
+- `--spec-eagle DIR`: speculative decoding with an EAGLE-3 head trained for the model (for example
+  `AngelSlim/Qwen3-4B_eagle3`). Output is unchanged. CPU only.
+- With `--experts-from-disk`, speculative drafts are sized by their measured cost (more draft rows
+  read more experts).
+
 ## [0.5.0] - 2026-10-30
 
 `dynalm cpu-report`: one command that measures DynaLM against llama.cpp on any CPU and writes a
