@@ -360,6 +360,13 @@ bool Scheduler::preempt_one(const Entry* keep) {
     if (!victim || e.admit_order > victim->admit_order) victim = &e;
   }
   if (!victim) return false;
+  // Its computed full blocks: kept outside the KV pool where the prefix
+  // cache can (the prompt cache on disk writes them now), so resuming loads
+  // them instead of recomputing.
+  if (prefix_cache_) {
+    const int32_t full = std::min(victim->seq->num_computed() / kv_.geometry().block_size, victim->cached_blocks);
+    if (full > 0) prefix_cache_->spill(victim->seq->tokens(), victim->seq->block_table(), full);
+  }
   victim->seq->reset_for_recompute();
   victim->cached_blocks = 0;
   ++stats_.preemptions;

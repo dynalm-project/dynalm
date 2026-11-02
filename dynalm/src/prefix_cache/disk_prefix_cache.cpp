@@ -113,6 +113,14 @@ class DiskPrefixCache final : public PrefixCache {
       while (end < avail && on_disk_.count(keys_[static_cast<size_t>(end)]) != 0) ++end;
     }
     if (end == have) return m;
+    // Load only when the pool has room for these blocks and the rest of the
+    // sequence (+1 block of headroom), as the scheduler's admission requires;
+    // otherwise the request waits and loading now would be undone by
+    // eviction (and redone on every retry).
+    const auto rest = static_cast<int32_t>((static_cast<int64_t>(tokens.size()) - static_cast<int64_t>(end) * bs + bs - 1) / bs);
+    const int32_t need = (end - have) + rest + 1;
+    if (pool_.free_blocks() < need) inner_->evict(need - pool_.free_blocks());
+    if (pool_.free_blocks() < need) return m;
     // Replace a partial last block (radix) with full blocks from disk.
     if (static_cast<int32_t>(m.blocks.size()) > have) {
       for (size_t i = static_cast<size_t>(have); i < m.blocks.size(); ++i) pool_.release(m.blocks[i]);
@@ -171,6 +179,30 @@ class DiskPrefixCache final : public PrefixCache {
   }
 
   int32_t evict(int32_t n) override { return inner_->evict(n); }
+
+  void spill(std::span<const TokenId> tokens, std::span<const int32_t> blocks, int32_t num_full) override {
+    const int32_t bs = pool_.geometry().block_size;
+    uint64_t parent = 0;
+    std::unique_lock<std::mutex> lock(mu_);
+    for (int32_t i = 0; i < num_full; ++i) {
+      const uint64_t key = chain_hash(parent, tokens.subspan(static_cast<size_t>(i) * bs, static_cast<size_t>(bs)));
+      // Queued by insert(): wait for the writer (it holds its own copy).
+      idle_cv_.wait(lock, [&] { return queued_.count(key) == 0; });
+      if (on_disk_.count(key) == 0) {
+        Job j;
+        j.key = key;
+        j.parent = parent;
+        j.tokens.assign(tokens.begin() + static_cast<ptrdiff_t>(i) * bs, tokens.begin() + static_cast<ptrdiff_t>(i + 1) * bs);
+        j.data.resize(static_cast<size_t>(pool_.block_bytes()));
+        lock.unlock();
+        pool_.read_block(blocks[static_cast<size_t>(i)], j.data.data());
+        const int64_t size = write_file(j);
+        lock.lock();
+        if (size > 0) written(key, size, lock);
+      }
+      parent = key;
+    }
+  }
   const PrefixCacheStats& stats() const override {
     merged_ = inner_->stats();
     merged_.disk_loaded_blocks = disk_blocks_;
@@ -212,6 +244,51 @@ class DiskPrefixCache final : public PrefixCache {
     return static_cast<bool>(in.read(reinterpret_cast<char*>(buf_.data()), static_cast<std::streamsize>(buf_.size())));
   }
 
+  // Writes one block file (via a temporary name); its size, 0 on failure.
+  int64_t write_file(const Job& j) const {
+    const fs::path p = path_of(j.key), tmp = fs::path(p.string() + ".tmp");
+    bool ok = false;
+    {
+      std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+      Header h{};
+      std::memcpy(h.magic, kMagic, sizeof(kMagic));
+      h.key = j.key;
+      h.parent = j.parent;
+      h.block_size = static_cast<int64_t>(j.tokens.size());
+      h.bytes = static_cast<int64_t>(j.data.size());
+      out.write(reinterpret_cast<const char*>(&h), sizeof(h));
+      out.write(reinterpret_cast<const char*>(j.tokens.data()), static_cast<std::streamsize>(j.tokens.size() * sizeof(TokenId)));
+      out.write(reinterpret_cast<const char*>(j.data.data()), static_cast<std::streamsize>(j.data.size()));
+      ok = static_cast<bool>(out);
+    }
+    std::error_code ec;
+    if (ok) fs::rename(tmp, p, ec);
+    if (!ok || ec) {
+      fs::remove(tmp, ec);
+      return 0;
+    }
+    return static_cast<int64_t>(sizeof(Header) + j.tokens.size() * sizeof(TokenId) + j.data.size());
+  }
+
+  // Records a written file and deletes the oldest beyond max_bytes (lock held).
+  void written(uint64_t key, int64_t size, std::unique_lock<std::mutex>& lock) {
+    on_disk_.insert(key);
+    order_.push_back(key);
+    bytes_ += size;
+    std::error_code ec;
+    while (max_bytes_ > 0 && bytes_ > max_bytes_ && !order_.empty()) {
+      const uint64_t old = order_.front();
+      order_.pop_front();
+      on_disk_.erase(old);
+      lock.unlock();
+      const fs::path op = path_of(old);
+      const auto n = static_cast<int64_t>(fs::file_size(op, ec));
+      fs::remove(op, ec);
+      lock.lock();
+      if (!ec) bytes_ -= n;
+    }
+  }
+
   void write_loop() {
     std::unique_lock<std::mutex> lock(mu_);
     for (;;) {
@@ -221,46 +298,13 @@ class DiskPrefixCache final : public PrefixCache {
       jobs_.pop_front();
       writing_ = true;
       lock.unlock();
-      const fs::path p = path_of(j.key), tmp = fs::path(p.string() + ".tmp");
-      bool ok = false;
-      {
-        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-        Header h{};
-        std::memcpy(h.magic, kMagic, sizeof(kMagic));
-        h.key = j.key;
-        h.parent = j.parent;
-        h.block_size = static_cast<int64_t>(j.tokens.size());
-        h.bytes = static_cast<int64_t>(j.data.size());
-        out.write(reinterpret_cast<const char*>(&h), sizeof(h));
-        out.write(reinterpret_cast<const char*>(j.tokens.data()), static_cast<std::streamsize>(j.tokens.size() * sizeof(TokenId)));
-        out.write(reinterpret_cast<const char*>(j.data.data()), static_cast<std::streamsize>(j.data.size()));
-        ok = static_cast<bool>(out);
-      }
-      std::error_code ec;
-      if (ok) fs::rename(tmp, p, ec);
-      if (!ok || ec) fs::remove(tmp, ec);
-      const int64_t size = static_cast<int64_t>(sizeof(Header) + j.tokens.size() * sizeof(TokenId) + j.data.size());
+      const int64_t size = write_file(j);
       lock.lock();
       pending_bytes_ -= static_cast<int64_t>(j.data.size());
       queued_.erase(j.key);
-      if (ok && !ec) {
-        on_disk_.insert(j.key);
-        order_.push_back(j.key);
-        bytes_ += size;
-        while (max_bytes_ > 0 && bytes_ > max_bytes_ && !order_.empty()) {
-          const uint64_t old = order_.front();
-          order_.pop_front();
-          on_disk_.erase(old);
-          lock.unlock();
-          const fs::path op = path_of(old);
-          const auto n = static_cast<int64_t>(fs::file_size(op, ec));
-          fs::remove(op, ec);
-          lock.lock();
-          if (!ec) bytes_ -= n;
-        }
-      }
+      if (size > 0) written(j.key, size, lock);
       writing_ = false;
-      if (jobs_.empty()) idle_cv_.notify_all();
+      idle_cv_.notify_all();
     }
   }
 

@@ -47,6 +47,7 @@
 #include "dynacore/device/device_registry.h"
 #include "kv_cache/kv_cache.h"
 #include "model/expert_cache.h"
+#include "prefix_cache/prefix_cache.h"
 #include "model/transformer.h"
 #include "runtime/sequence.h"
 #include "model/architecture.h"
@@ -1717,6 +1718,105 @@ void test_prompt_cache_disk(const std::filesystem::path& dir) {
   CHECK((*third)->stats().prefix.disk_loaded_blocks == 0);
 }
 
+// KV spilled to disk (#13): with a KV pool too small for 4 concurrent
+// requests, the scheduler preempts; a preempted request's full blocks (prompt
+// and generated) were saved by the prompt cache, so on resuming they come
+// back from disk instead of being recomputed. Text equals a roomy engine's.
+void test_kv_spill_disk(const std::filesystem::path& dir) {
+  const std::filesystem::path pc = dir / "kv-spill";
+  std::filesystem::remove_all(pc);
+  const std::string path = (dir / "tiny-spill.gguf").string();
+  CHECK(test::write_file(path, test::tiny_model_gguf()));
+  auto open = [&](int64_t kv_tokens, bool cache) {
+    EngineOptions o;
+    o.model_path = path;
+    o.backend = DeviceKind::kCpu;
+    o.threads = 2;
+    o.kv_tokens = kv_tokens;
+    o.int8_decode_rows = 0;  // outputs independent of batching (DD-031)
+    if (cache) o.scheduler.prompt_cache_dir = pc.string();
+    auto e = Engine::create(o);
+    CHECK(e.ok());
+    return std::move(*e);
+  };
+  auto roomy = open(4096, false), tight = open(320, true);
+  std::vector<std::string> prompts;
+  for (int i = 0; i < 4; ++i) prompts.push_back(kPrompts[static_cast<size_t>(i)] + " " + kShared.substr(0, 40 + 10 * i));
+  auto run = [&](Engine& e) {
+    std::vector<std::shared_ptr<RequestStream>> ss;
+    for (const std::string& p : prompts) {
+      auto s = e.generate_text(p, false, greedy(48));
+      CHECK(s.ok());
+      ss.push_back(*s);
+    }
+    std::vector<std::string> out;
+    for (auto& s : ss) out.push_back(drain(s).text);
+    return out;
+  };
+  CHECK(run(*roomy) == run(*tight));
+  const EngineStats st = tight->stats();
+  CHECK(st.scheduler.preemptions > 0);
+  // Whether the preempted request had full blocks to save depends on timing
+  // (it may be preempted during its prompt); the spill itself is checked
+  // deterministically below.
+  // Loads happen once per resume, not on every admission retry (a request
+  // holds at most 320 / 16 = 20 blocks).
+  CHECK(st.prefix.disk_loaded_blocks <= st.scheduler.preemptions * 20);
+
+  // Spill itself, deterministically: blocks written at preemption come back
+  // byte-identical from disk after the memory copies are gone and the pool
+  // has been overwritten.
+  auto model = load_model(path);
+  CHECK(model.ok());
+  ThreadPool tp(1);
+  auto dev = create_device(DeviceKind::kCpu, tp);
+  CHECK(dev.ok());
+  auto kv = KvBlockPool::create(kv_geometry_for((*model)->config, DType::kF16, 16, 8 * 16), **dev);
+  CHECK(kv.ok());
+  KvBlockPool& pool = **kv;
+  const std::filesystem::path sd = dir / "spill-unit";
+  std::filesystem::remove_all(sd);
+  auto cache = make_disk_prefix_cache(make_radix_prefix_cache(pool), pool, sd.string(), 0);
+  std::vector<TokenId> toks;
+  for (int i = 0; i < 49; ++i) toks.push_back(static_cast<TokenId>((i * 13 + 5) % 256));
+  std::vector<int32_t> blocks;
+  std::vector<std::vector<std::byte>> want;
+  for (int b = 0; b < 3; ++b) {
+    auto blk = pool.allocate();
+    CHECK(blk.ok());
+    blocks.push_back(*blk);
+    std::vector<std::byte> data(static_cast<size_t>(pool.block_bytes()));
+    for (size_t i = 0; i < data.size(); ++i) data[i] = static_cast<std::byte>((i * 7 + static_cast<size_t>(b) * 31) & 0xff);
+    pool.write_block(*blk, data.data());
+    want.push_back(std::move(data));
+  }
+  cache->insert(toks, blocks, 0, 3);
+  cache->spill(toks, blocks, 3);
+  for (int32_t b : blocks) pool.release(b);
+  CHECK(cache->evict(100) == 3);  // memory copies gone: the pool is all free
+  CHECK(pool.free_blocks() == pool.num_blocks());
+  {
+    std::vector<int32_t> all;
+    std::vector<std::byte> zero(static_cast<size_t>(pool.block_bytes()));
+    for (int i = 0; i < pool.num_blocks(); ++i) {
+      auto b = pool.allocate();
+      CHECK(b.ok());
+      pool.write_block(*b, zero.data());
+      all.push_back(*b);
+    }
+    for (int32_t b : all) pool.release(b);
+  }
+  const PrefixCache::Match m = cache->lookup(toks, 48);
+  CHECK(m.tokens == 48 && m.blocks.size() == 3);
+  std::vector<std::byte> got(static_cast<size_t>(pool.block_bytes()));
+  for (size_t b = 0; b < m.blocks.size(); ++b) {
+    pool.read_block(m.blocks[b], got.data());
+    CHECK(got == want[b]);
+  }
+  CHECK(cache->stats().disk_loaded_blocks == 3);
+  for (int32_t b : m.blocks) pool.release(b);
+}
+
 // Cost-aware draft length (SchedulerConfig::spec_cost_aware).
 void test_choose_draft_length() {
   std::vector<double> none(9, 0.0);
@@ -1821,6 +1921,8 @@ int main() {
   test_expert_cache(dir);
   test_choose_draft_length();
   test_prompt_cache_disk(dir);
+  test_kv_spill_disk(dir);
+  std::printf("KV spilled to disk: preempted requests resume from saved blocks, same text\n");
   std::printf("prompt cache on disk: restart loads the KV blocks, same text; per-model directories\n");
   std::printf("expert cache: bit-identical logits with evictions, same text at 1 and 4 requests, size checks; "
               "cost-aware draft length\n");

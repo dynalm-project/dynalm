@@ -68,6 +68,14 @@ class PrefixCache {
                       int32_t num_full_blocks) = 0;
   // Frees up to `n` blocks that only the cache references. Returns the count.
   virtual int32_t evict(int32_t n) = 0;
+  // A sequence is preempted (KV pressure): make sure its first `num_full`
+  // blocks survive the KV release if this cache can keep them outside the
+  // KV pool (the prompt cache on disk writes them now). Default: nothing.
+  virtual void spill(std::span<const TokenId> tokens, std::span<const int32_t> blocks, int32_t num_full) {
+    (void)tokens;
+    (void)blocks;
+    (void)num_full;
+  }
   virtual const PrefixCacheStats& stats() const = 0;
 };
 
