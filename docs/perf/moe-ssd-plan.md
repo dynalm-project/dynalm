@@ -1,6 +1,6 @@
 # MoE models larger than RAM, on the CPU: plan
 
-Status: plan and baseline script only. Nothing here is implemented in the engine yet.
+Status: phases 1, 2 and 4 implemented (`--experts-from-disk`); phase 3 dropped on measurement; phases 5 and 6 in progress.
 
 ## Goal
 
@@ -52,9 +52,19 @@ run, and if it is measurably faster than the phase before.
      before the matrix multiplications.
 2. **Expert prediction:** while a layer computes, read the experts the next layer will probably
    need (its router applied to the current input).
-3. **Compressed experts on disk:** lossless compression, unpacked on the CPU. Kept only if
-   measured at least 10% faster.
-4. **Shared reads across users:** one read of an expert serves every request in the step.
+3. **Compressed experts on disk: dropped.** Lossless compression, unpacked on the CPU, was to
+   be kept only if measured at least 10% faster. Measured on Qwen3-8B Q4_K_M, 16 MiB samples at
+   30%, 50% and 70% of the file (2026-11-02):
+   - zlib level 6: 98.0–98.2% of the original size;
+   - xz preset 1: 98.5–98.7%;
+   - 4-bit values: entropy 3.90 bits of 4, so even an ideal coder saves at most 2.5%.
+
+   Quantized weights are already close to random bits, so reading fewer bytes this way cannot
+   reach the 10% bar.
+4. **Shared reads across users: by design.** A batched step routes every row of every request
+   first, then acquires each layer's experts once. An expert is read at most once per step,
+   however many requests use it (test: one step of 4 sequences, reads <= experts per layer x
+   layers).
 5. **Speculative decoding:** prompt lookup, EAGLE-3 heads, and drafts that limit how many new
    experts they need. This extends `runtime/speculative.cpp`.
 6. **Saved prompt caches on disk and KV cache spilled to SSD.** These apply to every model.

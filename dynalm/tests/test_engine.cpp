@@ -1596,6 +1596,34 @@ void test_expert_cache(const std::filesystem::path& dir) {
   CHECK(st.misses > 0 && st.evictions > 0 && st.bytes_read > 0 && st.hits > 0);
   CHECK(st.prefetched > 0);  // next-layer prediction ran (DYNALM_EXPERT_PREFETCH unset)
 
+  // Shared reads across users (#6): one step of 4 sequences reads each
+  // expert of each layer at most once, whatever number of rows use it.
+  {
+    auto t = Transformer::create(c, (*model)->weights, **dev, 64, 512);
+    CHECK(t.ok());
+    ExpertCache::Options big;
+    big.budget_bytes = slot * 16 * c.num_layers;  // every expert fits: no eviction
+    CHECK((*t)->enable_expert_cache(big).ok());
+    auto kv = KvBlockPool::create(kv_geometry_for(c, DType::kF16, 16, 256), **dev);
+    CHECK(kv.ok());
+    std::vector<std::vector<int32_t>> tables(4);
+    std::vector<std::vector<TokenId>> toks(4);
+    std::vector<SeqBatch> seqs;
+    for (int s = 0; s < 4; ++s) {
+      auto blk = (*kv)->allocate();
+      CHECK(blk.ok());
+      tables[static_cast<size_t>(s)] = {*blk};
+      for (int i = 0; i < 6; ++i) toks[static_cast<size_t>(s)].push_back(static_cast<TokenId>((s * 61 + i * 7) % 256));
+    }
+    for (int s = 0; s < 4; ++s) seqs.push_back({toks[static_cast<size_t>(s)], 0, tables[static_cast<size_t>(s)], true, 1});
+    std::vector<float> logits(static_cast<size_t>(4 * c.vocab_size));
+    CHECK((*t)->forward_batch(seqs, **kv, logits).ok());
+    const ExpertCache::Stats one = (*t)->expert_cache()->stats();
+    const int64_t reads = one.misses + one.prefetched;  // every expert read is one of these
+    CHECK(reads > 0 && reads <= 16 * c.num_layers);
+    CHECK(one.bytes_read <= 16 * c.num_layers * slot);
+  }
+
   // Engine level: same text with and without the cache, alone and 4 at once.
   auto open = [&](int64_t cache) {
     EngineOptions o;
