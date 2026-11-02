@@ -29,6 +29,7 @@
 #include <memory>
 #include <mutex>
 #include <string_view>
+#include <span>
 #include <vector>
 
 #include "dynacore/base/status.h"
@@ -219,6 +220,13 @@ struct SchedulerConfig {
   // again. 0 = off. `dynalm serve --spec ngram|DRAFT.gguf --spec-k K`.
   int32_t spec_k = 0;
   int32_t spec_probe_steps = 32;
+  // Cost-aware draft length: each stream drafts the k <= spec_k that
+  // maximizes expected tokens per step time, from its acceptance and the
+  // measured time of decode steps by row count. For steps whose cost grows
+  // fast with rows (experts read from disk: more rows, more distinct
+  // experts) it drafts less. Output is unchanged (the draft length never
+  // changes what is accepted). On with --experts-from-disk.
+  bool spec_cost_aware = false;
   // Reuse KV of shared prompt prefixes across requests (DD-029).
   bool enable_prefix_cache = true;
   PrefixCacheKind prefix_cache_kind = PrefixCacheKind::kRadix;
@@ -232,6 +240,14 @@ struct SchedulerConfig {
 // [min_rows, max_rows].
 int32_t predict_mixed_prefill_budget(double decode_ms, double row_ms, double target, int32_t min_rows,
                                      int32_t max_rows);
+
+// spec_cost_aware: the draft length 0..k_max with the most expected tokens
+// (1 + accept + accept^2 + ... + accept^k) per step time, where
+// `step_ms[r]` is the measured decode-step time with r rows (0 = unknown)
+// and the step already has `base_rows` rows besides this stream's.
+// Unknown times are interpolated / extrapolated linearly from known ones;
+// with fewer than two known, k_max (measure first).
+int32_t choose_draft_length(double accept, int32_t k_max, std::span<const double> step_ms, int32_t base_rows);
 
 struct SchedulerStats {
   uint64_t steps = 0;
@@ -345,7 +361,8 @@ class Scheduler {
     uint64_t spec_resume_step = 0;
   };
   // Drafts for e's decode row, at most `room` (SchedulerConfig::spec_k).
-  int32_t plan_drafts(Entry& e, int32_t room, uint64_t step_no);
+  // `base_rows`: decode rows already planned in this step.
+  int32_t plan_drafts(Entry& e, int32_t room, uint64_t step_no, int32_t base_rows);
   // Draft-model drafts of every eligible decoding stream, once per step.
   void draft_with_model(uint64_t step_no);
   BatchDrafter* draft_ = nullptr;
@@ -360,6 +377,8 @@ class Scheduler {
 
   // Decode-protected prefill state (DD-079).
   double decode_step_ema_ms_ = 0;
+  // spec_cost_aware: decode-only step time (EMA, ms) by decode rows.
+  std::vector<double> decode_ms_by_rows_;
   double prefill_row_ema_ms_ = 0;  // predictive mode: cost of one prefill row in a mixed step
   int32_t mixed_prefill_budget_ = 0;
   // Trace (SchedulerConfig::trace), handed over by take_*_trace from any thread.

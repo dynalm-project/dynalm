@@ -300,6 +300,9 @@ Result<std::unique_ptr<Engine>> Engine::create_on(EngineOptions opts) {
       opts.expert_cache_bytes = std::max<int64_t>(ram / 4 * 3 - other - (int64_t{2} << 30), int64_t{256} << 20);
     }
     opts.expert_cache_bytes = std::min(opts.expert_cache_bytes, expert_bytes);
+    // More draft rows mean more distinct experts to read: size drafts by
+    // their measured cost (SchedulerConfig::spec_cost_aware).
+    opts.scheduler.spec_cost_aware = true;
     resident_bytes = other + opts.expert_cache_bytes;
   } else {
     prefault_weights(e->model_->weights, e->model_->weight_bytes, *e->pool_);

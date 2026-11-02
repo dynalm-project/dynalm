@@ -41,6 +41,41 @@ bool parse_scheduler_policy(std::string_view s, SchedulerPolicy& out) {
   return true;
 }
 
+int32_t choose_draft_length(double accept, int32_t k_max, std::span<const double> step_ms, int32_t base_rows) {
+  if (k_max <= 0) return 0;
+  // Known points (rows, ms).
+  std::vector<std::pair<double, double>> known;
+  for (size_t r = 1; r < step_ms.size(); ++r) {
+    if (step_ms[r] > 0) known.emplace_back(static_cast<double>(r), step_ms[r]);
+  }
+  if (known.size() < 2) return k_max;
+  auto cost = [&](int32_t rows) {
+    const auto r = static_cast<size_t>(rows);
+    if (r < step_ms.size() && step_ms[r] > 0) return step_ms[r];
+    // The two known points around `rows` (or the nearest two at an end).
+    size_t hi = 0;
+    while (hi < known.size() && known[hi].first < rows) ++hi;
+    if (hi == 0) hi = 1;
+    if (hi == known.size()) hi = known.size() - 1;
+    const auto& [x0, y0] = known[hi - 1];
+    const auto& [x1, y1] = known[hi];
+    return std::max(1e-3, y0 + (y1 - y0) * (rows - x0) / (x1 - x0));
+  };
+  const double a = std::clamp(accept, 0.0, 1.0);
+  int32_t best = 0;
+  double best_rate = -1, tokens = 0, term = 1;
+  for (int32_t k = 0; k <= k_max; ++k) {
+    tokens += term;  // expected tokens with k drafts: 1 + a + ... + a^k
+    term *= a;
+    const double rate = tokens / cost(base_rows + 1 + k);
+    if (rate > best_rate * (1 + 1e-9)) {
+      best_rate = rate;
+      best = k;
+    }
+  }
+  return best;
+}
+
 int32_t predict_mixed_prefill_budget(double decode_ms, double row_ms, double target, int32_t min_rows,
                                      int32_t max_rows) {
   min_rows = std::max(1, std::min(min_rows, max_rows));
@@ -447,7 +482,7 @@ bool Scheduler::step() {
       if (!decode && prefill_chunk > 0) n = std::min(n, prefill_chunk);
       if (n <= 0) continue;
       e->spec_drafts = 0;
-      if (decode && config_.spec_k > 0) n += plan_drafts(*e, budget - used - 1, step_no);
+      if (decode && config_.spec_k > 0) n += plan_drafts(*e, budget - used - 1, step_no, used);
       const int64_t t_kv = now_ns();
       const Status st = e->seq->reserve_kv(n);
       stats_.kv_reserve_ms += static_cast<double>(now_ns() - t_kv) * 1e-6;
@@ -547,6 +582,12 @@ bool Scheduler::step() {
     ++stats_.steps_decode_only;
     stats_.forward_decode_only_ms += fwd_ms;
     decode_step_ema_ms_ = decode_step_ema_ms_ == 0 ? fwd_ms : 0.8 * decode_step_ema_ms_ + 0.2 * fwd_ms;
+    if (config_.spec_cost_aware) {
+      const auto r = static_cast<size_t>(stats_.last_decode_rows);
+      if (decode_ms_by_rows_.size() <= r) decode_ms_by_rows_.resize(r + 1, 0.0);
+      double& m = decode_ms_by_rows_[r];
+      m = m == 0 ? fwd_ms : 0.8 * m + 0.2 * fwd_ms;
+    }
     if (config_.decode_protect_predictive && prefill_row_ema_ms_ > 0) {
       mixed_prefill_budget_ =
           predict_mixed_prefill_budget(decode_step_ema_ms_, prefill_row_ema_ms_, config_.decode_latency_target,
@@ -699,13 +740,17 @@ bool Scheduler::step() {
   return true;
 }
 
-int32_t Scheduler::plan_drafts(Entry& e, int32_t room, uint64_t step_no) {
+int32_t Scheduler::plan_drafts(Entry& e, int32_t room, uint64_t step_no, int32_t base_rows) {
   const SequenceState& q = *e.seq;
   // Up to the tokens this request may still generate after the next one.
   const int32_t left = q.stop().max_new_tokens - q.generated() - 1;
-  const int32_t k = std::min({config_.spec_k, room, left});
+  int32_t k = std::min({config_.spec_k, room, left});
   if (k <= 0 || step_no < e.spec_resume_step || e.constraint) return 0;
   if (e.spec_accept_ema < 0.25) e.spec_accept_ema = 0.5;  // probing again after a pause
+  if (config_.spec_cost_aware) {
+    k = choose_draft_length(e.spec_accept_ema, k, decode_ms_by_rows_, base_rows);
+    if (k <= 0) return 0;
+  }
   e.spec_feed.assign(1, q.tokens().back());
   std::vector<TokenId> drafts;
   if (draft_ != nullptr) {

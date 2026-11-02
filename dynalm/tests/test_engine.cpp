@@ -1625,13 +1625,14 @@ void test_expert_cache(const std::filesystem::path& dir) {
   }
 
   // Engine level: same text with and without the cache, alone and 4 at once.
-  auto open = [&](int64_t cache) {
+  auto open = [&](int64_t cache, int32_t spec_k = 0) {
     EngineOptions o;
     o.model_path = path;
     o.backend = DeviceKind::kCpu;
     o.threads = 2;
     o.kv_tokens = 1024;
     o.expert_cache_bytes = cache;
+    o.scheduler.spec_k = spec_k;
     auto e = Engine::create(o);
     if (!e.ok()) std::fprintf(stderr, "expert cache engine: %s\n", e.status().to_string().c_str());
     CHECK(e.ok());
@@ -1639,6 +1640,13 @@ void test_expert_cache(const std::filesystem::path& dir) {
   };
   auto ref = open(0), ec = open(slot * 17);
   for (const std::string& p : kPrompts) CHECK(gen(*ref, p, 12).text == gen(*ec, p, 12).text);
+  {
+    // Prompt-lookup drafts sized by cost (spec_cost_aware, on with the cache): same text.
+    auto spec = open(slot * 17, 4);
+    const std::string rep_prompt = "one two three four one two three four one two three";
+    CHECK(gen(*ref, rep_prompt, 24).text == gen(*spec, rep_prompt, 24).text);
+    for (const std::string& p : kPrompts) CHECK(gen(*ref, p, 12).text == gen(*spec, p, 12).text);
+  }
   std::vector<std::shared_ptr<RequestStream>> rs, es;
   for (const std::string& p : kPrompts) {
     auto x = ref->generate_text(p, false, greedy(10));
@@ -1656,6 +1664,21 @@ void test_expert_cache(const std::filesystem::path& dir) {
   dense.expert_cache_bytes = int64_t{1} << 30;
   auto d = Engine::create(dense);
   CHECK(!d.ok() && d.status().message().find("not a mixture-of-experts model") != std::string::npos);
+}
+
+// Cost-aware draft length (SchedulerConfig::spec_cost_aware).
+void test_choose_draft_length() {
+  std::vector<double> none(9, 0.0);
+  CHECK(choose_draft_length(0.8, 6, none, 0) == 6);  // nothing measured: k_max
+  std::vector<double> flat = {0, 50, 50, 50};
+  CHECK(choose_draft_length(0.8, 6, flat, 0) == 6);  // extra rows free: draft all
+  std::vector<double> steep = {0, 10, 20, 30};
+  CHECK(choose_draft_length(0.5, 6, steep, 0) == 0);  // each row costs a full step: no drafts
+  std::vector<double> mild = {0, 100, 110};  // +10 ms per row, extrapolated
+  CHECK(choose_draft_length(0.7, 8, mild, 0) == 4);  // 2.773 tokens / 140 ms is the best rate
+  CHECK(choose_draft_length(0.0, 8, mild, 0) == 0);  // nothing accepted: drafts only cost
+  CHECK(choose_draft_length(0.7, 2, mild, 0) == 2);  // capped by k_max
+  CHECK(choose_draft_length(0.7, 0, mild, 0) == 0);
 }
 
 void test_cpu_report() {
@@ -1745,7 +1768,9 @@ int main() {
   test_json_constraint();
   test_cpu_report();
   test_expert_cache(dir);
-  std::printf("expert cache: bit-identical logits with evictions, same text at 1 and 4 requests, size checks\n");
+  test_choose_draft_length();
+  std::printf("expert cache: bit-identical logits with evictions, same text at 1 and 4 requests, size checks; "
+              "cost-aware draft length\n");
   test_child_process(dir);
   std::printf("child processes: environment, log, exit code, stop\n");
   std::printf("cpu-report: plans for M4 / M3 / i7-class CPUs, models, llama.cpp assets, verdict, JSON and Markdown\n");
