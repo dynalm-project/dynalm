@@ -21,15 +21,20 @@
 namespace dynacore {
 
 namespace {
-// Live mappings (start -> end), for release_file_pages.
+// Live mappings (start -> end and the file), for release_file_pages and
+// locate_mapped_bytes.
+struct LiveMap {
+  const std::byte* end;
+  std::string path;
+};
 std::mutex g_maps_mu;
-std::map<const std::byte*, const std::byte*>& live_maps() {
-  static auto* m = new std::map<const std::byte*, const std::byte*>();
+std::map<const std::byte*, LiveMap>& live_maps() {
+  static auto* m = new std::map<const std::byte*, LiveMap>();
   return *m;
 }
-void add_map(const std::byte* p, size_t n) {
+void add_map(const std::byte* p, size_t n, const std::string& path) {
   std::lock_guard<std::mutex> lock(g_maps_mu);
-  live_maps()[p] = p + n;
+  live_maps()[p] = {p + n, path};
 }
 void remove_map(const std::byte* p) {
   std::lock_guard<std::mutex> lock(g_maps_mu);
@@ -40,7 +45,7 @@ bool inside_map(const std::byte* b, const std::byte* e) {
   auto it = live_maps().upper_bound(b);
   if (it == live_maps().begin()) return false;
   --it;
-  return b >= it->first && e <= it->second;
+  return b >= it->first && e <= it->second.end;
 }
 }  // namespace
 
@@ -80,7 +85,7 @@ Result<std::shared_ptr<MappedFile>> MappedFile::open(const std::string& path) {
   void* view = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
   if (!view) return IoError("cannot map view of " + path + ": " + last_error());
   f->data_ = static_cast<const std::byte*>(view);
-  add_map(f->data_, f->size_);
+  add_map(f->data_, f->size_, f->path_);
   return f;
 }
 
@@ -116,7 +121,7 @@ Result<std::shared_ptr<MappedFile>> MappedFile::open(const std::string& path) {
   void* p = mmap(nullptr, f->size_, PROT_READ, MAP_SHARED, f->fd_, 0);
   if (p == MAP_FAILED) return IoError("cannot mmap " + path + ": " + std::strerror(errno));
   f->data_ = static_cast<const std::byte*>(p);
-  add_map(f->data_, f->size_);
+  add_map(f->data_, f->size_, f->path_);
   return f;
 }
 
@@ -136,6 +141,17 @@ void MappedFile::prefetch(size_t offset, size_t len) const {
 }
 
 #endif
+
+std::optional<MappedLocation> locate_mapped_bytes(const void* p, size_t len) {
+  const auto* b = static_cast<const std::byte*>(p);
+  if (b == nullptr) return std::nullopt;
+  std::lock_guard<std::mutex> lock(g_maps_mu);
+  auto it = live_maps().upper_bound(b);
+  if (it == live_maps().begin()) return std::nullopt;
+  --it;
+  if (b < it->first || b + len > it->second.end) return std::nullopt;
+  return MappedLocation{it->second.path, static_cast<uint64_t>(b - it->first)};
+}
 
 size_t release_file_pages(const void* p, size_t len) {
 #if ENGINE_OS_WINDOWS

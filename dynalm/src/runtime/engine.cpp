@@ -215,6 +215,16 @@ Status apply_backend_choice(std::string_view choice, EngineOptions& o) {
 }
 
 Result<std::unique_ptr<Engine>> Engine::create(EngineOptions opts) {
+  if (opts.expert_cache_bytes != 0) {
+    // The expert cache needs host-side routing: DynaCore's CPU device only.
+    if (opts.backend_require_gpu || (!opts.backend_auto && opts.backend != DeviceKind::kCpu)) {
+      return InvalidArgument("--experts-from-disk runs on the CPU (DynaCore's kernels); drop --gpu / --backend " +
+                             std::string(device_kind_name(opts.backend)));
+    }
+    opts.backend_auto = opts.backend_require_gpu = opts.cpu_ggml = false;
+    opts.backend = DeviceKind::kCpu;
+    return create_on(std::move(opts));
+  }
   const bool choose = opts.backend_auto || (opts.backend == DeviceKind::kCpu && opts.cpu_ggml);
   if (!choose) return create_on(std::move(opts));
   // Pick devices (runtime/device_select.h), then open them in order.
@@ -269,7 +279,31 @@ Result<std::unique_ptr<Engine>> Engine::create_on(EngineOptions opts) {
   }
   e->pool_ = std::make_unique<ThreadPool>(threads);
   e->kind_ = opts.backend;
-  prefault_weights(e->model_->weights, e->model_->weight_bytes, *e->pool_);
+  // With the expert cache, the weights that stay in RAM: all but the routed
+  // experts, plus the cache. Nothing may touch the experts' mapped pages
+  // (no prefault): they are read into the cache instead.
+  int64_t resident_bytes = e->model_->weight_bytes;
+  if (opts.expert_cache_bytes != 0) {
+    int64_t expert_bytes = 0;
+    for (int l = 0; l < c.num_layers; ++l) {
+      for (TensorRole r : {TensorRole::kFfnGateExperts, TensorRole::kFfnUpExperts, TensorRole::kFfnDownExperts}) {
+        if (const Tensor* t = e->model_->weights.find(r, l)) expert_bytes += t->view().span_bytes();
+      }
+    }
+    if (expert_bytes == 0) return InvalidArgument("--experts-from-disk: this is not a mixture-of-experts model");
+    const int64_t other = e->model_->weight_bytes - expert_bytes;
+    if (opts.expert_cache_bytes < 0) {
+      // Auto: three quarters of RAM, minus the other weights and 2 GiB for
+      // the KV cache and scratch; ExpertCache::create reports a minimum
+      // above this.
+      const int64_t ram = memory_info().total_bytes;
+      opts.expert_cache_bytes = std::max<int64_t>(ram / 4 * 3 - other - (int64_t{2} << 30), int64_t{256} << 20);
+    }
+    opts.expert_cache_bytes = std::min(opts.expert_cache_bytes, expert_bytes);
+    resident_bytes = other + opts.expert_cache_bytes;
+  } else {
+    prefault_weights(e->model_->weights, e->model_->weight_bytes, *e->pool_);
+  }
   ENGINE_ASSIGN_OR_RETURN(e->backend_, create_device(opts.backend, *e->pool_));
   Device* device = e->backend_.get();
   // A device that runs whole recorded steps (the GPU, docs/gpu-backend.md)
@@ -351,9 +385,9 @@ Result<std::unique_ptr<Engine>> Engine::create_on(EngineOptions opts) {
   // it, so the KV cache also gets at most what the cap leaves.
   const int64_t scratch = estimate_memory(c, 0, 0, opts.kv_dtype, opts.max_batch_tokens).activation_bytes;
   const int64_t kv_budget = device_kv_budget(dev_mem.working_set_bytes, dev_mem.allocated_bytes,
-                                             e->model_->weight_bytes, dev_mem.workspace_limit_bytes, scratch);
+                                             resident_bytes, dev_mem.workspace_limit_bytes, scratch);
   int64_t kv_tokens = opts.kv_tokens > 0 ? opts.kv_tokens
-                                         : auto_kv_tokens(c, opts.kv_dtype, e->model_->weight_bytes, available);
+                                         : auto_kv_tokens(c, opts.kv_dtype, resident_bytes, available);
   if (opts.kv_tokens <= 0 && kv_budget >= 0) {
     const int64_t fit = kv_tokens_within(c, opts.kv_dtype, kv_budget);
     if (fit >= std::min<int64_t>(kMinAutoKvTokens, c.context_length) && fit < kv_tokens) {
@@ -381,17 +415,27 @@ Result<std::unique_ptr<Engine>> Engine::create_on(EngineOptions opts) {
     // now (other apps, file cache): a warning; macOS frees file cache on demand.
     const int64_t kv_need = static_cast<int64_t>(kv_geom.total_bytes());
     const int64_t dev_free = device->memory_stats().free_bytes;
-    ENGINE_RETURN_IF_ERROR(check_memory_fit(e->model_->weight_bytes, kv_need, c.kv_bytes_per_token(opts.kv_dtype),
+    ENGINE_RETURN_IF_ERROR(check_memory_fit(resident_bytes, kv_need, c.kv_bytes_per_token(opts.kv_dtype),
                                             memory_info().total_bytes, dev_free, kv_budget));
-    if (const int64_t avail = memory_info().available_bytes; avail > 0 && e->model_->weight_bytes + kv_need > avail) {
+    if (const int64_t avail = memory_info().available_bytes; avail > 0 && resident_bytes + kv_need > avail) {
       LOG_WARN("Memory: the model and KV cache need {} MiB; {} MiB is available now (other apps may be swapped out)",
-               (e->model_->weight_bytes + kv_need) >> 20, avail >> 20);
+               (resident_bytes + kv_need) >> 20, avail >> 20);
     }
   }
   ENGINE_ASSIGN_OR_RETURN(e->kv_, KvBlockPool::create(kv_geom, *device));
   ENGINE_ASSIGN_OR_RETURN(e->transformer_, Transformer::create(c, e->model_->weights, *device, opts.max_batch_tokens,
                                                                   std::min<int64_t>(kv_tokens, c.context_length)));
   ENGINE_RETURN_IF_ERROR(device->take_error());
+  if (opts.expert_cache_bytes > 0) {
+    ExpertCache::Options eo;
+    eo.budget_bytes = opts.expert_cache_bytes;
+    eo.io_threads = opts.expert_io_threads;
+    ENGINE_RETURN_IF_ERROR(e->transformer_->enable_expert_cache(eo));
+    const ExpertCache& ec = *e->transformer_->expert_cache();
+    LOG_INFO("Experts from disk: {} MiB of experts, a {} MiB cache ({} slots of {} KiB); in RAM: {} MiB",
+             ec.expert_bytes() >> 20, (ec.slots() * ec.slot_bytes()) >> 20, ec.slots(), ec.slot_bytes() >> 10,
+             resident_bytes >> 20);
+  }
   if (int8_rows >= 0) {
     KernelPlan base = KernelPlan::defaults();
     base.int8_decode_max_rows = int8_rows;

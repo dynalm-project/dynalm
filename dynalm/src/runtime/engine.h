@@ -86,6 +86,12 @@ struct EngineOptions {
   // (KernelPlan, 4; kNeonInt8Rows on ARM64), 0 = never. 0 makes outputs independent of how requests
   // are batched (DD-031); the int8 path is faster for 1-4 concurrent rows.
   int32_t int8_decode_rows = -1;
+  // MoE models larger than RAM (--experts-from-disk, docs/perf/moe-ssd-plan.md):
+  // > 0 = the routed experts are read from the model file into a RAM cache of
+  // this many bytes (ExpertCache) instead of being mapped; runs on DynaCore's
+  // CPU kernels. Only the other weights, the cache and the KV cache must fit.
+  int64_t expert_cache_bytes = 0;
+  int expert_io_threads = 8;
   SchedulerConfig scheduler;
   // Apply the device's scheduling profile to the balanced policy (GPU: see
   // kGpuMixedPrefillBudget). False when the caller set step budgets itself.

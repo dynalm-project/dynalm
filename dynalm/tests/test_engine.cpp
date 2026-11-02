@@ -44,6 +44,11 @@
 #include "dynacore/gpu/ggml_device.h"
 #include "dynacore/hardware/process_stats.h"
 #include "loader/model_loader.h"
+#include "dynacore/device/device_registry.h"
+#include "kv_cache/kv_cache.h"
+#include "model/expert_cache.h"
+#include "model/transformer.h"
+#include "runtime/sequence.h"
 #include "model/architecture.h"
 #include "loader/model_source.h"
 #include "loader/gguf/gguf_tokenizer.h"
@@ -1515,6 +1520,115 @@ void test_child_process(const std::filesystem::path& dir) {
 
 // dynalm cpu-report: the measurement plan per CPU, model choice, the pinned
 // llama.cpp asset, the agreement verdict and the report.
+// The expert cache (--experts-from-disk) changes where expert weights are
+// read from, never what is computed: logits are bit-identical to the mapped
+// weights, with a cache so small that every step evicts, through prefill
+// chunks and decode steps; text through the engine at 1 and 4 concurrent
+// requests is identical too; a cache below one layer's experts is refused.
+void test_expert_cache(const std::filesystem::path& dir) {
+  test::TinyModelSpec spec;
+  spec.experts = 16;
+  spec.experts_used = 4;
+  spec.layers = 3;
+  const std::string path = (dir / "tiny-moe.gguf").string();
+  CHECK(test::write_file(path, test::tiny_model_gguf(spec)));
+
+  // Transformer level: the same tokens through two instances, one with the cache.
+  auto model = load_model(path);
+  CHECK(model.ok());
+  const ModelConfig& c = (*model)->config;
+  CHECK(c.moe.num_experts == 16 && c.moe.experts_per_token == 4);
+  ThreadPool pool(2);
+  auto dev = create_device(DeviceKind::kCpu, pool);
+  CHECK(dev.ok());
+  auto plain = Transformer::create(c, (*model)->weights, **dev, 64, 512);
+  auto cached = Transformer::create(c, (*model)->weights, **dev, 64, 512);
+  CHECK(plain.ok() && cached.ok());
+  ExpertCache::Options eo;
+  eo.budget_bytes = 1;  // too small: refused with the minimum
+  Status small = (*cached)->enable_expert_cache(eo);
+  CHECK(!small.ok() && small.message().find("--expert-cache is too small") != std::string::npos);
+  // One layer's experts plus 2 slots: almost every acquire evicts.
+  eo.budget_bytes = int64_t{1} << 40;
+  CHECK((*cached)->enable_expert_cache(eo).ok());
+  const int64_t slot = (*cached)->expert_cache()->slot_bytes();
+  eo.budget_bytes = slot * (16 + 2);
+  eo.chunk_bytes = 1 << 16;  // several chunks per expert part
+  CHECK((*cached)->enable_expert_cache(eo).ok());
+  CHECK((*cached)->expert_cache()->slots() == 18);
+  CHECK((*cached)->expert_cache()->expert_bytes() > 0);
+
+  auto run = [&](Transformer& t, std::vector<std::vector<float>>& all) {
+    auto kv = KvBlockPool::create(kv_geometry_for(c, DType::kF16, 16, 256), **dev);
+    CHECK(kv.ok());
+    std::vector<int32_t> blocks;
+    for (int i = 0; i < 16; ++i) {
+      auto b = (*kv)->allocate();
+      CHECK(b.ok());
+      blocks.push_back(*b);
+    }
+    std::vector<float> logits(static_cast<size_t>(c.vocab_size));
+    // A 40-token prompt in chunks of 17 / 23, then 12 decode steps.
+    std::vector<TokenId> toks;
+    for (int i = 0; i < 40; ++i) toks.push_back(static_cast<TokenId>((i * 37 + 11) % 256));
+    std::vector<int32_t> pos(40);
+    for (int i = 0; i < 40; ++i) pos[static_cast<size_t>(i)] = i;
+    CHECK(t.forward(std::span(toks).first(17), std::span(pos).first(17), **kv, blocks, logits).ok());
+    all.push_back(logits);
+    CHECK(t.forward(std::span(toks).subspan(17), std::span(pos).subspan(17), **kv, blocks, logits).ok());
+    all.push_back(logits);
+    for (int32_t p = 40; p < 52; ++p) {
+      const auto next = static_cast<TokenId>(std::max_element(logits.begin(), logits.end()) - logits.begin());
+      const TokenId tk[1] = {next};
+      const int32_t ps[1] = {p};
+      CHECK(t.forward(tk, ps, **kv, blocks, logits).ok());
+      all.push_back(logits);
+    }
+  };
+  std::vector<std::vector<float>> a, b;
+  run(**plain, a);
+  run(**cached, b);
+  CHECK(a.size() == b.size());
+  for (size_t i = 0; i < a.size(); ++i) {
+    CHECK(std::memcmp(a[i].data(), b[i].data(), a[i].size() * sizeof(float)) == 0);
+  }
+  const ExpertCache::Stats st = (*cached)->expert_cache()->stats();
+  CHECK(st.misses > 0 && st.evictions > 0 && st.bytes_read > 0 && st.hits > 0);
+
+  // Engine level: same text with and without the cache, alone and 4 at once.
+  auto open = [&](int64_t cache) {
+    EngineOptions o;
+    o.model_path = path;
+    o.backend = DeviceKind::kCpu;
+    o.threads = 2;
+    o.kv_tokens = 1024;
+    o.expert_cache_bytes = cache;
+    auto e = Engine::create(o);
+    if (!e.ok()) std::fprintf(stderr, "expert cache engine: %s\n", e.status().to_string().c_str());
+    CHECK(e.ok());
+    return std::move(*e);
+  };
+  auto ref = open(0), ec = open(slot * 17);
+  for (const std::string& p : kPrompts) CHECK(gen(*ref, p, 12).text == gen(*ec, p, 12).text);
+  std::vector<std::shared_ptr<RequestStream>> rs, es;
+  for (const std::string& p : kPrompts) {
+    auto x = ref->generate_text(p, false, greedy(10));
+    auto y = ec->generate_text(p, false, greedy(10));
+    CHECK(x.ok() && y.ok());
+    rs.push_back(*x);
+    es.push_back(*y);
+  }
+  for (size_t i = 0; i < rs.size(); ++i) CHECK(drain(rs[i]).text == drain(es[i]).text);
+  // Not a MoE model: refused.
+  const std::string dense_path = (dir / "tiny-dense-for-experts.gguf").string();
+  CHECK(test::write_file(dense_path, test::tiny_model_gguf()));
+  EngineOptions dense;
+  dense.model_path = dense_path;
+  dense.expert_cache_bytes = int64_t{1} << 30;
+  auto d = Engine::create(dense);
+  CHECK(!d.ok() && d.status().message().find("not a mixture-of-experts model") != std::string::npos);
+}
+
 void test_cpu_report() {
   namespace cr = cpu_report;
   auto ids = [](const std::vector<cr::Path>& p) {
@@ -1601,6 +1715,8 @@ int main() {
   int rc = 0;
   test_json_constraint();
   test_cpu_report();
+  test_expert_cache(dir);
+  std::printf("expert cache: bit-identical logits with evictions, same text at 1 and 4 requests, size checks\n");
   test_child_process(dir);
   std::printf("child processes: environment, log, exit code, stop\n");
   std::printf("cpu-report: plans for M4 / M3 / i7-class CPUs, models, llama.cpp assets, verdict, JSON and Markdown\n");

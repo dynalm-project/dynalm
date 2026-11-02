@@ -12,6 +12,7 @@
 
 #include "dynacore/device/device_registry.h"
 #include "cli/commands.h"
+#include "cli/size_arg.h"
 #include "config/config.h"
 #include "registry/model_registry.h"
 #include "logging/log.h"
@@ -48,6 +49,9 @@ void usage() {
                "  -c, --ctx N|auto        KV cache capacity in tokens (auto: from free RAM)\n"
                "  --batch N|auto          max tokens per forward pass (auto: 256)\n"
                "  --kv f16|f32|q8_0       KV cache dtype (default f16; q8_0 halves its memory)\n"
+               "  --experts-from-disk     MoE models larger than RAM: read the experts from the model file into a\n"
+               "                          RAM cache (CPU, DynaCore kernels; same outputs). --expert-cache SIZE sets\n"
+               "                          the cache (e.g. 8GB; default: what RAM leaves)\n"
                "  --int8-decode N         native CPU: int8 activations for matmuls of <= N rows (default 4, 64 on ARM; 0 = off;\n"
                "                          off makes outputs independent of batching, DD-053)\n"
                "  --policy P              balanced (default) | latency | throughput: first-token wait vs\n"
@@ -128,6 +132,8 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
     else if (a == "-c" || a == "--ctx") ok = parse_int_or_auto(value(), ctx);
     else if (a == "--batch") ok = parse_int_or_auto(value(), batch);
     else if (a == "--int8-decode") ok = parse_int(value(), eo.int8_decode_rows) && eo.int8_decode_rows >= 0;
+    else if (a == "--experts-from-disk") eo.expert_cache_bytes = eo.expert_cache_bytes > 0 ? eo.expert_cache_bytes : -1;
+    else if (a == "--expert-cache") ok = cli::parse_byte_size(value(), eo.expert_cache_bytes);
     else if (a == "--policy") ok = parse_scheduler_policy(value(), eo.scheduler.policy);
     else if (a == "--solo-prefill-chunk") ok = parse_int(value(), eo.scheduler.solo_prefill_chunk) && eo.scheduler.solo_prefill_chunk >= 0;
     else if (a == "--solo-prefill-split") eo.scheduler.solo_prefill_split = true;

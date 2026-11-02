@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 
@@ -54,5 +55,15 @@ class MappedFile {
 // released (0 where unsupported: Windows). For weights a device has copied
 // into another layout and no longer reads (CpuDevice packed qmm copies).
 size_t release_file_pages(const void* p, size_t len);
+
+// The file and offset of [p, p + len) when the whole range lies inside a live
+// MappedFile; nullopt otherwise. For reading weights with ordinary file I/O
+// instead of through the mapping (the expert cache reads experts this way so
+// their pages never enter the mapping).
+struct MappedLocation {
+  std::string path;
+  uint64_t offset = 0;
+};
+std::optional<MappedLocation> locate_mapped_bytes(const void* p, size_t len);
 
 }  // namespace dynacore

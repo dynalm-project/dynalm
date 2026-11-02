@@ -24,6 +24,7 @@ add_library(dynalm_runtime STATIC
   model/arch_qwen.cpp
   model/architecture.cpp
   model/transformer.cpp
+  model/expert_cache.cpp
   model_ir/model_config.cpp
   model_ir/tensor_registry.cpp
   loader/gguf/gguf.cpp

@@ -65,6 +65,17 @@ Result<std::unique_ptr<Transformer>> Transformer::create(const ModelConfig& conf
   return t;
 }
 
+Status Transformer::enable_expert_cache(const ExpertCache::Options& options) {
+  if (backend_.supports_moe_ffn()) {
+    return Unsupported("the expert cache needs DynaCore's CPU kernels (--backend cpu --mode exact), not " +
+                       std::string(backend_.name()));
+  }
+  std::vector<std::vector<ExpertCache::Parts>> experts;
+  for (const Layer& L : layers_) experts.push_back(L.experts);
+  ENGINE_ASSIGN_OR_RETURN(expert_cache_, ExpertCache::create(experts, options));
+  return Status::Ok();
+}
+
 void Transformer::set_kernel_base(const KernelPlan& base) {
   planner_ = std::make_unique<BatchPlanner>(config_, planner_->hardware(), base);
 }
@@ -315,6 +326,21 @@ void Transformer::moe_mlp(const Layer& L, const TensorView& xn, const TensorView
   }
   mark(ForwardOp::kMoeRoute);
 
+  // Expert cache: make this step's experts resident (read from the file on a
+  // miss); their views replace the mapped ones below, same bytes and layout.
+  if (expert_cache_ != nullptr) {
+    active_experts_.clear();
+    for (int32_t e = 0; e < ne; ++e) {
+      if (!expert_rows_[static_cast<size_t>(e)].empty()) active_experts_.push_back(e);
+    }
+    const auto li = static_cast<int32_t>(&L - layers_.data());
+    if (Status st = expert_cache_->acquire(li, active_experts_, cached_parts_); !st.ok()) {
+      if (moe_error_.ok()) moe_error_ = st;
+      backend_.fill(out, 0.0f);
+      return;
+    }
+  }
+
   // 2. Pack the routed rows by expert into one buffer ([sum of counts, d]),
   //    run every active expert's gate+up as one batch of matmuls, one
   //    activation over all packed rows, every down projection as one batch,
@@ -334,6 +360,7 @@ void Transformer::moe_mlp(const Layer& L, const TensorView& xn, const TensorView
   gather_idx_.clear();
   scatter_w_.clear();
   int64_t off = 0;
+  size_t active = 0;
   for (int32_t e = 0; e < ne; ++e) {
     const auto& rows = expert_rows_[static_cast<size_t>(e)];
     if (rows.empty()) continue;
@@ -342,7 +369,7 @@ void Transformer::moe_mlp(const Layer& L, const TensorView& xn, const TensorView
       gather_idx_.push_back(r);
       scatter_w_.push_back(wgt);
     }
-    const auto& W = L.experts[static_cast<size_t>(e)];
+    const auto& W = expert_cache_ != nullptr ? *cached_parts_[active++] : L.experts[static_cast<size_t>(e)];
     const TensorView xe = slice(xp, off, cnt), ae = slice(ap, off, cnt), be = slice(bp, off, cnt);
     up_jobs_.push_back({xe, W[0], cols_of(ae, 0, fe)});
     up_jobs_.push_back({xe, W[1], cols_of(ae, fe, fe)});
@@ -634,6 +661,12 @@ Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& c
   }
   // Devices that execute deferred (compiled steps, GPU) report a failed step
   // here: its logits must not be used.
+  if (!moe_error_.ok()) {
+    Status st = moe_error_;
+    moe_error_ = Status::Ok();
+    (void)backend_.take_error();
+    return st;
+  }
   return backend_.take_error();
 }
 

@@ -32,6 +32,9 @@ struct TinyModelSpec {
   // -1 absent (the loader's default applies). With BOS: <|endoftext|>.
   std::string pre = "qwen2";
   int add_bos = 0;
+  // Routed mixture of experts (qwen3moe, implies qwen3): `experts` experts of
+  // FFN `expert_ffn` per layer, `experts_used` per token, no dense FFN.
+  int32_t experts = 0, experts_used = 2, expert_ffn = 64;
 };
 
 class GgufWriter {
@@ -186,7 +189,8 @@ inline std::vector<std::string> byte_tokens() {
 
 inline std::vector<uint8_t> tiny_model_gguf(const TinyModelSpec& m = {}) {
   GgufWriter w;
-  const std::string a = m.qwen3 ? "qwen3" : "qwen2";
+  const bool moe = m.experts > 0;
+  const std::string a = moe ? "qwen3moe" : m.qwen3 ? "qwen3" : "qwen2";
   w.kv_str("general.architecture", a);
   w.kv_str("general.name", "dynalm-tiny-test");
   w.kv_u32(a + ".block_count", static_cast<uint32_t>(m.layers));
@@ -197,6 +201,11 @@ inline std::vector<uint8_t> tiny_model_gguf(const TinyModelSpec& m = {}) {
   w.kv_u32(a + ".attention.head_count_kv", static_cast<uint32_t>(m.kv_heads));
   w.kv_f32(a + ".rope.freq_base", 10000.0f);
   w.kv_f32(a + ".attention.layer_norm_rms_epsilon", 1e-6f);
+  if (moe) {
+    w.kv_u32(a + ".expert_count", static_cast<uint32_t>(m.experts));
+    w.kv_u32(a + ".expert_used_count", static_cast<uint32_t>(m.experts_used));
+    w.kv_u32(a + ".expert_feed_forward_length", static_cast<uint32_t>(m.expert_ffn));
+  }
   std::vector<std::string> toks = byte_tokens();
   std::vector<int32_t> types(toks.size(), 1);
   for (const char* special : {"<|endoftext|>", "<|im_start|>", "<|im_end|>"}) {
@@ -246,7 +255,7 @@ inline std::vector<uint8_t> tiny_model_gguf(const TinyModelSpec& m = {}) {
       w.tensor(p + "attn_k.weight", 8, {H, kvd}, q8_0_bytes(wk));
       w.tensor(p + "attn_v.weight", 8, {H, kvd}, q8_0_bytes(wv));
     }
-    if (m.qwen3) {
+    if (m.qwen3 || moe) {
       w.tensor(p + "attn_q_norm.weight", 0, {hd}, f32_bytes(ones(hd)));
       w.tensor(p + "attn_k_norm.weight", 0, {hd}, f32_bytes(ones(hd)));
     } else {
@@ -263,6 +272,14 @@ inline std::vector<uint8_t> tiny_model_gguf(const TinyModelSpec& m = {}) {
     }
     w.tensor(p + "attn_output.weight", 8, {H, H}, q8_0_bytes(rnd(H * H, 0.1f)));
     w.tensor(p + "ffn_norm.weight", 0, {H}, f32_bytes(ones(H)));
+    if (moe) {
+      const auto E = static_cast<uint64_t>(m.experts), EF = static_cast<uint64_t>(m.expert_ffn);
+      w.tensor(p + "ffn_gate_inp.weight", 0, {H, E}, f32_bytes(rnd(H * E, 0.5f)));
+      w.tensor(p + "ffn_gate_exps.weight", 8, {H, EF, E}, q8_0_bytes(rnd(H * EF * E, 0.12f)));
+      w.tensor(p + "ffn_up_exps.weight", 8, {H, EF, E}, q8_0_bytes(rnd(H * EF * E, 0.12f)));
+      w.tensor(p + "ffn_down_exps.weight", 8, {EF, H, E}, q8_0_bytes(rnd(EF * H * E, 0.08f)));
+      continue;
+    }
     w.tensor(p + "ffn_gate.weight", 8, {H, F}, q8_0_bytes(rnd(H * F, 0.12f)));
     w.tensor(p + "ffn_up.weight", 8, {H, F}, q8_0_bytes(rnd(H * F, 0.12f)));
     w.tensor(p + "ffn_down.weight", 8, {F, H}, q8_0_bytes(rnd(F * H, 0.08f)));

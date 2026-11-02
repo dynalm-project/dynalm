@@ -20,6 +20,7 @@
 #include "dynacore/base/status.h"
 #include "execution/batch_planner.h"
 #include "kv_cache/kv_cache.h"
+#include "model/expert_cache.h"
 #include "model_ir/model_config.h"
 #include "model/seq_batch.h"
 #include "model_ir/tensor_registry.h"
@@ -78,6 +79,12 @@ class Transformer {
   // Replaces the planner's base kernel settings (before serving starts).
   void set_kernel_base(const KernelPlan& base);
 
+  // MoE models: read the routed experts from the model file into a RAM cache
+  // (ExpertCache) instead of through the mapping. Needs a device that routes
+  // on the host (DynaCore's CPU device); outputs are unchanged.
+  Status enable_expert_cache(const ExpertCache::Options& options);
+  const ExpertCache* expert_cache() const { return expert_cache_.get(); }
+
   void set_profiling(bool on) { profiling_ = on; }
   const ForwardProfile& profile() const { return profile_; }
   void reset_profile() { profile_ = ForwardProfile{}; }
@@ -134,6 +141,11 @@ class Transformer {
   std::vector<Device::MatmulJob> up_jobs_, down_jobs_;
   std::vector<int32_t> gather_idx_;  // host-side row indices for gather/scatter ops
   std::vector<float> scatter_w_, router_host_;
+  // Expert cache (enable_expert_cache): the experts of the current layer.
+  std::unique_ptr<ExpertCache> expert_cache_;
+  std::vector<int32_t> active_experts_;
+  std::vector<const ExpertCache::Parts*> cached_parts_;
+  Status moe_error_;  // the first expert-cache failure of this forward pass
   Tensor logits_dev_;                // device logits rows (non-host-accessible backends)
   // Per-call batch metadata (reused, capacity max_batch).
   std::vector<TokenId> batch_tokens_;
