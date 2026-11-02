@@ -1,6 +1,6 @@
 # MoE models larger than RAM, on the CPU: plan
 
-Status: phases 1, 2 and 4 implemented (`--experts-from-disk`); phase 3 dropped on measurement; phases 5 and 6 in progress.
+Status: phases 1, 2, 4, 5 and 6 implemented; phase 3 dropped on measurement. First measurements below.
 
 ## Goal
 
@@ -71,3 +71,27 @@ run, and if it is measurably faster than the phase before.
 
 DeepSeek-V3 / Kimi (deepseek2, with MLA attention) need the architecture added first: separate
 work.
+
+## First measurements (2026-11-02, uncontrolled)
+
+These are not results: an Apple M4 Pro (24 GB) on battery, with other apps (Docker) leaving about 5 GB
+of RAM free, one round each. The model file had just been downloaded and hashed, so some expert
+reads may have been served from the OS file cache rather than the SSD.
+
+Qwen3-30B-A3B Q4_K_M (18.6 GB; 16.7 GB of experts), `dynalm benchmark --cpu`, 128-token
+prompts, 64 output tokens:
+
+| Setup | 1 user tok/s | 4 users tok/s | Experts resident when needed | GB read per token (1 user) |
+|---|---|---|---|---|
+| Whole model mapped (default) | 5.6 | 10.3 | – | – |
+| `--expert-cache 4GB` | 10.9 | 18.4 | 97.0% | 0.240 |
+| `--expert-cache 8GB` | 12.7 | 19.8 | 98.7% | 0.133 |
+| `--expert-cache 12GB` | 10.3 | 23.1 | 99.6% | 0.046 |
+
+- **The mapped model was the slowest** here: 18.6 GB of mapped weights with about 5 GB free
+  means the OS keeps evicting and re-reading pages. The expert cache keeps a fixed working set.
+- **Expert prediction**, 8 GB cache, 1 user, alternated off / on / off / on: 12.9, 14.2, 13.9 and
+  14.7 tok/s. With prediction, waiting on reads fell from about 6.4 s to 2.6 s per run, and 98.7%
+  of experts were resident vs 92.6% without it, for 16% more bytes read. A first, single A/B
+  run had shown the opposite (14.1 off vs 12.7 on); the alternated runs did not repeat it.
+- **Output** was identical, word for word, with the whole model in RAM and with a 4 GB cache.
