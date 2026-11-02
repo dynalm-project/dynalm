@@ -40,7 +40,10 @@ struct TinyModelSpec {
 class GgufWriter {
  public:
   // GGUF value types.
-  enum : uint32_t { kU32 = 4, kI32 = 5, kF32 = 6, kBool = 7, kStr = 8, kArr = 9 };
+  enum : uint32_t { kU16 = 2, kU32 = 4, kI32 = 5, kF32 = 6, kBool = 7, kStr = 8, kArr = 9 };
+
+  void kv_u16(const std::string& k, uint16_t v) { key(k, kU16); put(v); ++n_kv_; }
+  void kv_i32(const std::string& k, int32_t v) { key(k, kI32); put(v); ++n_kv_; }
 
   void kv_u32(const std::string& k, uint32_t v) { key(k, kU32); put(v); ++n_kv_; }
   void kv_f32(const std::string& k, float v) { key(k, kF32); put(v); ++n_kv_; }
@@ -63,6 +66,28 @@ class GgufWriter {
   // ggml type ids: 0 = f32, 8 = q8_0. dims innermost first.
   void tensor(const std::string& name, uint32_t type, std::vector<uint64_t> dims, const std::vector<uint8_t>& data) {
     tensors_.push_back({name, type, std::move(dims), data});
+  }
+
+  // The model as llama.cpp's gguf-split writes it: `parts` files, the first
+  // with all metadata, each with split.no / split.count /
+  // split.tensors.count and its share of the tensors (in order).
+  std::vector<std::vector<uint8_t>> split(int parts) const {
+    std::vector<std::vector<uint8_t>> out;
+    const size_t per = (tensors_.size() + static_cast<size_t>(parts) - 1) / static_cast<size_t>(parts);
+    for (int p = 0; p < parts; ++p) {
+      GgufWriter w;
+      if (p == 0) {
+        w.meta_ = meta_;
+        w.n_kv_ = n_kv_;
+      }
+      w.kv_u16("split.no", static_cast<uint16_t>(p));
+      w.kv_u16("split.count", static_cast<uint16_t>(parts));
+      w.kv_i32("split.tensors.count", static_cast<int32_t>(tensors_.size()));
+      const size_t b = static_cast<size_t>(p) * per, e = std::min(tensors_.size(), b + per);
+      for (size_t i = b; i < e; ++i) w.tensors_.push_back(tensors_[i]);
+      out.push_back(w.bytes());
+    }
+    return out;
   }
 
   std::vector<uint8_t> bytes() const {
@@ -187,7 +212,7 @@ inline std::vector<std::string> byte_tokens() {
   return out;
 }
 
-inline std::vector<uint8_t> tiny_model_gguf(const TinyModelSpec& m = {}) {
+inline GgufWriter tiny_model_writer(const TinyModelSpec& m = {}) {
   GgufWriter w;
   const bool moe = m.experts > 0;
   const std::string a = moe ? "qwen3moe" : m.qwen3 ? "qwen3" : "qwen2";
@@ -284,8 +309,10 @@ inline std::vector<uint8_t> tiny_model_gguf(const TinyModelSpec& m = {}) {
     w.tensor(p + "ffn_up.weight", 8, {H, F}, q8_0_bytes(rnd(H * F, 0.12f)));
     w.tensor(p + "ffn_down.weight", 8, {F, H}, q8_0_bytes(rnd(F * H, 0.08f)));
   }
-  return w.bytes();
+  return w;
 }
+
+inline std::vector<uint8_t> tiny_model_gguf(const TinyModelSpec& m = {}) { return tiny_model_writer(m).bytes(); }
 
 // A unique suffix for per-test temporary directories (portable: no getpid).
 inline std::string unique_suffix() {

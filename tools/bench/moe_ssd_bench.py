@@ -9,7 +9,7 @@
 Models (fixed; GGUF from Hugging Face, each file checked against its SHA-256):
   30b      Qwen3-30B-A3B Q4_K_M        18.6 GB   qwen3moe   3.3B active
   mixtral  Mixtral-8x7B-Instruct Q4_K_M 26.4 GB  llama (MoE) 12.9B active
-  235b     Qwen3-235B-A22B Q2_K         85.7 GB  qwen3moe   22B active (2 split files)
+  235b     Qwen3-235B-A22B Q4_K_M      142.2 GB  qwen3moe   22B active (3 split files)
   671b     DeepSeek-V3-0324 UD-IQ1_S   186.2 GB  deepseek2  37B active (4 split files)
 
 Engines, CPU only (no GPU), the same threads:
@@ -18,8 +18,9 @@ Engines, CPU only (no GPU), the same threads:
              would copy every weight into RAM).
   dynalm     dynalm benchmark --backend cpu (in-process); prompt tok/s = prompt / time to first
              token, generate tok/s = 1000 / median gap between tokens (as llama-bench's pp and tg).
-             DynaLM refuses models larger than 90% of RAM today; that is recorded as "refused",
-             with its message.
+             Without the expert cache DynaLM refuses models larger than 90% of RAM; that is
+             recorded as "refused", with its message.
+  dynalm-disk  the same with --experts-from-disk (the expert cache, auto size): any model size.
 
 Workload (fixed before any result): a model that fits in RAM: 512-token prompt, 128 generated
 tokens, 2 repetitions. A model that does not: 128 and 32, 1 repetition (each token reads GBs).
@@ -57,11 +58,15 @@ MODELS = [
     ("mixtral", "Mixtral-8x7B-Instruct Q4_K_M", "TheBloke/Mixtral-8x7B-Instruct-v0.1-GGUF", "llama (MoE)", "12.9B", [
         ("mixtral-8x7b-instruct-v0.1.Q4_K_M.gguf", 26441533376,
          "9193684683657e90707087bd1ed19fd0b277ab66358d19edeadc26d6fdec4f53")]),
-    ("235b", "Qwen3-235B-A22B Q2_K", "unsloth/Qwen3-235B-A22B-GGUF", "qwen3moe", "22B", [
-        ("Q2_K/Qwen3-235B-A22B-Q2_K-00001-of-00002.gguf", 49906752544,
-         "06507d563a4bbbb5704c9ee84151d621bbcb52c88e2246959d6c2d04f08f76a2"),
-        ("Q2_K/Qwen3-235B-A22B-Q2_K-00002-of-00002.gguf", 35784249568,
-         "fd2ce2d857b731bf598e1a207e7df6dc0c9d84e4970ee6f0857fb1700d4ab858")]),
+    # Q4_K_M, not Q2_K: close to the original quality, and DynaCore has fast kernels for Q4_K / Q6_K
+    # (none for Q2_K).
+    ("235b", "Qwen3-235B-A22B Q4_K_M", "unsloth/Qwen3-235B-A22B-GGUF", "qwen3moe", "22B", [
+        ("Q4_K_M/Qwen3-235B-A22B-Q4_K_M-00001-of-00003.gguf", 49944699648,
+         "a8bc43ded2ef4868ea31302ddbfa8cd45dbbeecb476f4372337f41fe51b8a1cb"),
+        ("Q4_K_M/Qwen3-235B-A22B-Q4_K_M-00002-of-00003.gguf", 49930349824,
+         "a1131375023518eb494c951708e79a3a82405e96ddc093c44994a96d0f001927"),
+        ("Q4_K_M/Qwen3-235B-A22B-Q4_K_M-00003-of-00003.gguf", 42279026016,
+         "5d33367138d337305f8f12395f3f2ed850afa0935e98cfcf4d7247143599c500")]),
     ("671b", "DeepSeek-V3-0324 UD-IQ1_S", "unsloth/DeepSeek-V3-0324-GGUF", "deepseek2", "37B", [
         ("UD-IQ1_S/DeepSeek-V3-0324-UD-IQ1_S-00001-of-00004.gguf", 48618624960,
          "a0a6642eb5f4cd378fdb2b637b89126a88e8ab2a510cf05224b5f300d983d98d"),
@@ -256,12 +261,15 @@ def run_llama(bench: Path, model: Path, wl: dict, threads: int, in_ram: bool, lo
     return r
 
 
-def run_dynalm(dynalm: str, model: Path, wl: dict, threads: int, log: Path, timeout_s: int) -> dict:
+def run_dynalm(dynalm: str, model: Path, wl: dict, threads: int, log: Path, timeout_s: int,
+               experts_from_disk: bool = False) -> dict:
     jsonl = log.with_suffix(".jsonl")
     jsonl.unlink(missing_ok=True)
     cmd = [dynalm, "benchmark", str(model), "--backend", "cpu", "-t", str(threads), "-c", "4096", "--concurrency", "1",
            "--prompt", str(wl["prompt"]), "--output", str(wl["gen"]), "--requests", str(max(1, wl["reps"])),
            "--warmup-requests", "1" if wl is IN_RAM else "0", "--out", str(jsonl)]
+    if experts_from_disk:
+        cmd.append("--experts-from-disk")
     rc, out, err = timed(cmd, log, timeout_s)
     r = {"status": "ok" if rc == 0 else ("timeout" if rc == -2 else f"failed (exit {rc})")}
     if rc not in (0, -2):
@@ -313,7 +321,7 @@ def main() -> int:
     ap.add_argument("--llama", default=str(Path.home() / ".dynalm/cpu-report/llama-b11695"),
                     help="a directory containing llama-bench (default: the build dynalm cpu-report downloads)")
     ap.add_argument("--dynalm", default=shutil.which("dynalm") or "dynalm")
-    ap.add_argument("--engines", default="llama.cpp,dynalm")
+    ap.add_argument("--engines", default="llama.cpp,dynalm,dynalm-disk")
     ap.add_argument("--work", default=str(Path.home() / ".dynalm/moe-bench"))
     ap.add_argument("--out", default=".")
     ap.add_argument("--timeout-min", type=int, default=120, help="per run")
@@ -361,7 +369,7 @@ def main() -> int:
               "network, or pass --llama DIR", file=sys.stderr)
         return 1
     dyn_version = "not run"
-    if "dynalm" in engines:
+    if "dynalm" in engines or "dynalm-disk" in engines:
         v = subprocess.run([a.dynalm, "--version"], capture_output=True, text=True)
         dyn_version = (v.stdout.splitlines() or ["unknown"])[0] if v.returncode == 0 else f"not found ({a.dynalm})"
     rep = {"cpu": cpu_name(), "ram": ram, "disk_free": free, "threads": threads, "os": platform.platform(),
@@ -412,8 +420,8 @@ def main() -> int:
             t = time.monotonic()
             if eng == "llama.cpp":
                 r = run_llama(bench, model, wl, threads, in_ram, log, a.timeout_min * 60)
-            elif eng == "dynalm":
-                r = run_dynalm(a.dynalm, model, wl, threads, log, a.timeout_min * 60)
+            elif eng in ("dynalm", "dynalm-disk"):
+                r = run_dynalm(a.dynalm, model, wl, threads, log, a.timeout_min * 60, eng == "dynalm-disk")
             else:
                 r = {"status": f"unknown engine {eng}"}
             r.update({"model": m[0], "label": m[1], "size": size, "in_ram": in_ram, "engine": eng,

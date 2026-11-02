@@ -37,9 +37,10 @@ ram = 24 * 2**30
 p = mb.plan(ids, ram, 112 * GB, {}, download=True, delete_after=False)
 check([m[0] for m, _ in p] == ["30b", "mixtral", "235b", "671b"], "smallest first")
 check([a for _, a in p][:2] == ["download", "download"], "30b and mixtral fit on 112 GB")
-check(p[2][1].startswith("skip: needs 85.7 GB of disk, 67.0 GB free"), "235b skipped after the first two")
+check(p[2][1].startswith("skip: needs 142.2 GB of disk, 67.0 GB free"), "235b skipped after the first two")
 p = mb.plan(ids, ram, 112 * GB, {}, download=True, delete_after=True)
-check([a for _, a in p][:3] == ["download"] * 3, "--delete-after: 235b fits alone")
+check([a for _, a in p][:2] == ["download"] * 2 and p[2][1].startswith("download if 157 GB"),
+      "--delete-after: 235b decided when reached (142 GB + 15 GB margin > 112 GB free)")
 check(p[3][1] == "download if 201 GB are free by then (112.0 GB free now)", "--delete-after: 671b decided when reached")
 p = mb.plan(ids, ram, 1 * GB, {"235b": True}, download=False, delete_after=False)
 check(dict((m[0], a) for m, a in p) == {"30b": "skip: not downloaded (use --download)",

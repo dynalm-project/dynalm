@@ -21,7 +21,7 @@ The script measures today's speed before any engine change:
   |---|---|---|
   | Qwen3-30B-A3B Q4_K_M | 18.6 GB | qwen3moe |
   | Mixtral-8x7B Q4_K_M | 26.4 GB | llama with experts |
-  | Qwen3-235B-A22B Q2_K | 85.7 GB | qwen3moe |
+  | Qwen3-235B-A22B Q4_K_M | 142.2 GB (3 parts) | qwen3moe |
   | DeepSeek-V3-0324 UD-IQ1_S | 186.2 GB | deepseek2; not supported by DynaLM |
 
 - **Safety:** each download is checked against its SHA-256. A model is skipped when its download

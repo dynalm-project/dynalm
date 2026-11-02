@@ -1936,6 +1936,55 @@ void test_eagle3(const std::filesystem::path& dir) {
   CHECK(!bad.ok() && bad.status().message().find("hidden size") != std::string::npos);
 }
 
+// Split models (llama.cpp's gguf-split, NAME-0000k-of-0000N.gguf): the parts
+// load as one model with the same text as the single file, the expert cache
+// reads experts from whichever part holds them, and a missing part or a
+// later part given first is a clear error.
+void test_split_gguf(const std::filesystem::path& dir) {
+  test::TinyModelSpec spec;
+  spec.experts = 8;
+  spec.experts_used = 2;
+  spec.layers = 3;
+  const std::string whole = (dir / "tiny-split-whole.gguf").string();
+  CHECK(test::write_file(whole, test::tiny_model_gguf(spec)));
+  const auto parts = test::tiny_model_writer(spec).split(3);
+  CHECK(parts.size() == 3);
+  std::vector<std::string> paths;
+  for (int i = 0; i < 3; ++i) {
+    char name[64];
+    std::snprintf(name, sizeof(name), "tiny-split-%05d-of-%05d.gguf", i + 1, 3);
+    paths.push_back((dir / name).string());
+    CHECK(test::write_file(paths.back(), parts[static_cast<size_t>(i)]));
+  }
+  auto a = load_model(whole);
+  auto b = load_model(paths[0]);
+  CHECK(a.ok() && b.ok());
+  CHECK((*a)->weight_bytes == (*b)->weight_bytes);
+  auto open = [&](const std::string& p, int64_t cache) {
+    EngineOptions o;
+    o.model_path = p;
+    o.backend = DeviceKind::kCpu;
+    o.threads = 2;
+    o.kv_tokens = 1024;
+    o.expert_cache_bytes = cache;
+    auto e = Engine::create(o);
+    if (!e.ok()) std::fprintf(stderr, "split gguf: %s\n", e.status().to_string().c_str());
+    CHECK(e.ok());
+    return std::move(*e);
+  };
+  auto one = open(whole, 0), split = open(paths[0], 0), split_disk = open(paths[0], int64_t{1} << 30);
+  for (const std::string& p : kPrompts) {
+    const std::string want = gen(*one, p, 12).text;
+    CHECK(gen(*split, p, 12).text == want);
+    CHECK(gen(*split_disk, p, 12).text == want);
+  }
+  auto later = load_model(paths[1]);
+  CHECK(!later.ok() && later.status().message().find("open the first part") != std::string::npos);
+  std::filesystem::remove(paths[2]);
+  auto missing = load_model(paths[0]);
+  CHECK(!missing.ok() && missing.status().message().find("part 3") != std::string::npos);
+}
+
 // Cost-aware draft length (SchedulerConfig::spec_cost_aware).
 void test_choose_draft_length() {
   std::vector<double> none(9, 0.0);
@@ -2042,6 +2091,8 @@ int main() {
   test_prompt_cache_disk(dir);
   test_kv_spill_disk(dir);
   test_eagle3(dir);
+  test_split_gguf(dir);
+  std::printf("split GGUF models: same text as one file, expert cache across parts, missing / wrong part errors\n");
   std::printf("EAGLE-3: same text as plain decoding (alone, 4 streams, shared prefix); wrong-size heads refused\n");
   std::printf("KV spilled to disk: preempted requests resume from saved blocks, same text\n");
   std::printf("prompt cache on disk: restart loads the KV blocks, same text; per-model directories\n");

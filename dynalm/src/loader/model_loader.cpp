@@ -76,7 +76,16 @@ Status finish(LoadedModel& m, TokenizerData tok_data, const std::string& chat_te
 }
 
 Result<std::unique_ptr<LoadedModel>> load_gguf(const std::string& path) {
-  ENGINE_ASSIGN_OR_RETURN(auto file, gguf::GgufFile::open(path));
+  // A split model (gguf-split): every part; the first holds the metadata.
+  ENGINE_ASSIGN_OR_RETURN(auto parts, gguf::open_parts(path));
+  const gguf::GgufFile* file = parts[0].get();
+  std::vector<const gguf::GgufFile*> part_ptrs;
+  uint64_t n_tensors = 0, tensor_bytes = 0;
+  for (const auto& p : parts) {
+    part_ptrs.push_back(p.get());
+    n_tensors += p->tensors().size();
+    tensor_bytes += p->total_tensor_bytes();
+  }
   auto m = std::make_unique<LoadedModel>();
   m->path = path;
   m->format = "gguf";
@@ -87,19 +96,21 @@ Result<std::unique_ptr<LoadedModel>> load_gguf(const std::string& path) {
   // block_count sizes per-layer state before any tensor is checked: bound it
   // by the file (each layer has tensors) and by the config limits (S10).
   ENGINE_RETURN_IF_ERROR(m->config.check_limits());
-  if (static_cast<uint64_t>(m->config.num_layers) > file->tensors().size()) {
+  if (static_cast<uint64_t>(m->config.num_layers) > n_tensors) {
     return Corrupt("GGUF: block_count " + std::to_string(m->config.num_layers) + " exceeds the " +
-                   std::to_string(file->tensors().size()) + " tensors in the file");
+                   std::to_string(n_tensors) + " tensors in the file");
   }
   ENGINE_RETURN_IF_ERROR(find_adapter(*m));
-  ENGINE_ASSIGN_OR_RETURN(auto mapping, gguf::map_tensors(*file, m->config.num_layers));
+  ENGINE_ASSIGN_OR_RETURN(auto mapping, gguf::map_tensors(part_ptrs, m->config.num_layers));
   m->weights = std::move(mapping.registry);
   m->unmapped_tensors = std::move(mapping.unmapped);
-  m->weight_bytes = static_cast<int64_t>(file->total_tensor_bytes());
-  for (const auto& info : file->tensors()) {
-    if (info.dtype && !dequant_supported(*info.dtype)) {
-      return Unsupported("tensor '" + std::string(info.name) + "' has type " + std::string(dtype_name(*info.dtype)) +
-                         ", which has no CPU kernel yet");
+  m->weight_bytes = static_cast<int64_t>(tensor_bytes);
+  for (const gguf::GgufFile* p : part_ptrs) {
+    for (const auto& info : p->tensors()) {
+      if (info.dtype && !dequant_supported(*info.dtype)) {
+        return Unsupported("tensor '" + std::string(info.name) + "' has type " + std::string(dtype_name(*info.dtype)) +
+                           ", which has no CPU kernel yet");
+      }
     }
   }
   ENGINE_ASSIGN_OR_RETURN(TokenizerData tok_data, gguf::read_tokenizer_data(*file));

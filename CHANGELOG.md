@@ -15,6 +15,8 @@
   `AngelSlim/Qwen3-4B_eagle3`). Output is unchanged. CPU only.
 - With `--experts-from-disk`, speculative drafts are sized by their measured cost (more draft rows
   read more experts).
+- Split GGUF models (llama.cpp's `gguf-split`, `NAME-00001-of-0000N.gguf`): give the first part;
+  the other parts are found next to it and loaded as one model. Splitting changes no weight.
 
 ## [0.5.0] - 2026-10-30
 
