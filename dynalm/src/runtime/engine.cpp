@@ -477,6 +477,17 @@ Result<std::unique_ptr<Engine>> Engine::create_on(EngineOptions opts) {
   if (!gpu_device && !segment_device && opts.scheduler.prefix_cache_max_blocks == 0) {
     opts.scheduler.prefix_cache_max_blocks = std::max<int32_t>(1, e->kv_->num_blocks() / kCpuPrefixCacheShare);
   }
+  if (!opts.eagle_path.empty()) {
+    if (!opts.draft_model_path.empty()) return InvalidArgument("--spec-eagle and a draft model: choose one");
+    if (opts.scheduler.spec_k <= 0) opts.scheduler.spec_k = 4;
+    // The head runs on the device itself (not through the recorder): between
+    // target steps, when nothing recorded is pending.
+    ENGINE_ASSIGN_OR_RETURN(e->eagle_, Eagle3Drafter::create(opts.eagle_path, *e->transformer_, *e->backend_,
+                                                             std::min<int64_t>(kv_tokens, c.context_length) + 64,
+                                                             opts.max_batch_tokens));
+    e->transformer_->set_capture_layers(e->eagle_->capture_layers());
+    LOG_INFO("Speculative decoding: EAGLE-3 head {} (up to {} drafts per step)", opts.eagle_path, opts.scheduler.spec_k);
+  }
   if (!opts.scheduler.prompt_cache_dir.empty()) {
     // One directory per model file and KV format: blocks saved for another
     // model or KV layout are never looked at.
@@ -507,6 +518,7 @@ Result<std::unique_ptr<Engine>> Engine::create_on(EngineOptions opts) {
   }
   e->scheduler_ = std::make_unique<Scheduler>(*e->transformer_, *e->kv_, *e->model_->tokenizer, opts.scheduler);
   if (e->drafter_) e->scheduler_->set_draft_model(e->drafter_.get());
+  if (e->eagle_) e->scheduler_->set_eagle(e->eagle_.get());
   e->core_ = std::make_shared<Core>();
   e->core_->sched = e->scheduler_.get();
   e->thread_ = std::thread([eng = e.get()] { eng->loop(); });

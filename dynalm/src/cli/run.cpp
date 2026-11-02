@@ -50,6 +50,8 @@ void usage() {
                "                        the cache (e.g. 8GB; default: what RAM leaves)\n"
                "  --prompt-cache DIR    keep prompt KV blocks on disk and reuse them across runs (CPU);\n"
                "                        --prompt-cache-size SIZE caps the files (oldest deleted first)\n"
+               "  --spec-eagle DIR      speculative decoding with an EAGLE-3 head for this model (config.json +\n"
+               "                        model.safetensors; CPU); --spec-k sets the drafts (default 4)\n"
                "  --int8-decode N       --mode exact on the CPU: int8 activations for matmuls of <= N rows (default 4, 64 on ARM; 0 = off)\n"
                "  --gpu                 use the GPU (the default when it can run the model)\n"
                "  --cpu                 use the CPU\n"
@@ -237,6 +239,7 @@ int cmd_run(std::span<const std::string_view> raw_args) {
     else if (a == "--int8-decode") ok = parse_int(value(), opts.int8_decode_rows) && opts.int8_decode_rows >= 0;
     else if (a == "--experts-from-disk") opts.expert_cache_bytes = opts.expert_cache_bytes > 0 ? opts.expert_cache_bytes : -1;
     else if (a == "--expert-cache") ok = cli::parse_byte_size(value(), opts.expert_cache_bytes);
+    else if (a == "--spec-eagle") ok = !(opts.eagle_path = std::string(value())).empty();
     else if (a == "--prompt-cache") ok = !(opts.scheduler.prompt_cache_dir = std::string(value())).empty();
     else if (a == "--prompt-cache-size") ok = cli::parse_byte_size(value(), opts.scheduler.prompt_cache_max_bytes);
     else if (a == "--chat") chat = true;

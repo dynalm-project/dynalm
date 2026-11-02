@@ -85,6 +85,14 @@ class Transformer {
   Status enable_expert_cache(const ExpertCache::Options& options);
   const ExpertCache* expert_cache() const { return expert_cache_.get(); }
 
+  // EAGLE-3 drafting: the residual stream entering each of `layers` (in
+  // order), for every row of each forward pass, kept on the host as
+  // [rows, layers.size() * hidden] (captured()). Empty = off.
+  void set_capture_layers(std::vector<int32_t> layers) { capture_layers_ = std::move(layers); }
+  std::span<const float> captured() const { return captured_; }
+  // The token embedding table (the EAGLE-3 head embeds with the target's).
+  const TensorView& token_embedding() const { return tok_embd_; }
+
   void set_profiling(bool on) { profiling_ = on; }
   const ForwardProfile& profile() const { return profile_; }
   void reset_profile() { profile_ = ForwardProfile{}; }
@@ -155,6 +163,8 @@ class Transformer {
   // Top-k of one row of router logits (ties: lower id), into route_scratch_.
   void top_k(const float* logits, int32_t ne, int32_t k);
   Status moe_error_;  // the first expert-cache failure of this forward pass
+  std::vector<int32_t> capture_layers_;
+  std::vector<float> captured_, capture_row_;
   Tensor logits_dev_;                // device logits rows (non-host-accessible backends)
   // Per-call batch metadata (reused, capacity max_batch).
   std::vector<TokenId> batch_tokens_;

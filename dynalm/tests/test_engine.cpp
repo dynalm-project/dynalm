@@ -1817,6 +1817,125 @@ void test_kv_spill_disk(const std::filesystem::path& dir) {
   for (int32_t b : m.blocks) pool.release(b);
 }
 
+// A tiny EAGLE-3 head in safetensors (F32 weights, I64 d2t) for the tiny
+// model of `layers` layers: random weights, so its drafts are mostly wrong,
+// which is the point: the output must still equal plain decoding.
+void write_eagle_head(const std::filesystem::path& dir, int64_t H, int64_t vocab, uint32_t seed) {
+  std::filesystem::create_directories(dir);
+  const int64_t heads = 4, kvh = 2, hd = 32, ff = 256, dv = 64;
+  struct T {
+    std::string name, dtype;
+    std::vector<int64_t> shape;
+    std::vector<uint8_t> data;
+  };
+  std::vector<T> ts;
+  uint32_t x = seed;
+  auto rnd = [&]() {
+    x = x * 1664525u + 1013904223u;
+    return (static_cast<float>(x >> 8) / 16777216.0f - 0.5f) * 0.2f;
+  };
+  auto f32 = [&](const std::string& n, std::vector<int64_t> shape, bool ones = false) {
+    int64_t cnt = 1;
+    for (int64_t d : shape) cnt *= d;
+    std::vector<uint8_t> data(static_cast<size_t>(cnt) * 4);
+    for (int64_t i = 0; i < cnt; ++i) {
+      const float v = ones ? 1.0f + rnd() : rnd();
+      std::memcpy(data.data() + i * 4, &v, 4);
+    }
+    ts.push_back({n, "F32", std::move(shape), std::move(data)});
+  };
+  f32("fc.weight", {H, 3 * H});
+  f32("midlayer.self_attn.q_proj.weight", {heads * hd, 2 * H});
+  f32("midlayer.self_attn.k_proj.weight", {kvh * hd, 2 * H});
+  f32("midlayer.self_attn.v_proj.weight", {kvh * hd, 2 * H});
+  f32("midlayer.self_attn.o_proj.weight", {H, heads * hd});
+  f32("midlayer.mlp.gate_proj.weight", {ff, H});
+  f32("midlayer.mlp.up_proj.weight", {ff, H});
+  f32("midlayer.mlp.down_proj.weight", {H, ff});
+  f32("lm_head.weight", {dv, H});
+  f32("midlayer.hidden_norm.weight", {H}, true);
+  f32("midlayer.input_layernorm.weight", {H}, true);
+  f32("midlayer.post_attention_layernorm.weight", {H}, true);
+  f32("norm.weight", {H}, true);
+  std::vector<uint8_t> d2t(static_cast<size_t>(dv) * 8);
+  for (int64_t i = 0; i < dv; ++i) {
+    const int64_t off = (i * 4) % vocab - i;  // draft id i -> target id (4 i) mod vocab
+    std::memcpy(d2t.data() + i * 8, &off, 8);
+  }
+  ts.push_back({"d2t", "I64", {dv}, std::move(d2t)});
+  std::string header = "{";
+  uint64_t at = 0;
+  for (size_t i = 0; i < ts.size(); ++i) {
+    std::string shape;
+    for (int64_t d : ts[i].shape) shape += (shape.empty() ? "" : ",") + std::to_string(d);
+    header += (i ? "," : "") + std::string("\"") + ts[i].name + "\":{\"dtype\":\"" + ts[i].dtype + "\",\"shape\":[" + shape +
+              "],\"data_offsets\":[" + std::to_string(at) + "," + std::to_string(at + ts[i].data.size()) + "]}";
+    at += ts[i].data.size();
+  }
+  header += "}";
+  while (header.size() % 8 != 0) header += ' ';
+  std::vector<uint8_t> file(8);
+  const uint64_t hl = header.size();
+  std::memcpy(file.data(), &hl, 8);
+  file.insert(file.end(), header.begin(), header.end());
+  for (const T& t : ts) file.insert(file.end(), t.data.begin(), t.data.end());
+  CHECK(test::write_file((dir / "model.safetensors").string(), file));
+  const std::string cfg = "{\"hidden_size\": " + std::to_string(H) + ", \"num_attention_heads\": 4, \"num_key_value_heads\": 2, "
+                          "\"head_dim\": 32, \"intermediate_size\": 256, \"num_hidden_layers\": 1, \"rms_norm_eps\": 1e-6, "
+                          "\"rope_theta\": 10000, \"vocab_size\": " + std::to_string(vocab) + ", \"draft_vocab_size\": 64}";
+  CHECK(test::write_file((dir / "config.json").string(), std::vector<uint8_t>(cfg.begin(), cfg.end())));
+}
+
+// EAGLE-3 drafting (--spec-eagle): greedy text equals plain decoding, alone
+// and with 4 concurrent streams and a prefix-cache hit; drafts are scored;
+// a head for another hidden size is refused.
+void test_eagle3(const std::filesystem::path& dir) {
+  test::TinyModelSpec spec;
+  spec.layers = 6;
+  spec.qwen3 = true;
+  const std::string path = (dir / "tiny-eagle-target.gguf").string();
+  CHECK(test::write_file(path, test::tiny_model_gguf(spec)));
+  auto model = load_model(path);
+  CHECK(model.ok());
+  const int64_t vocab = (*model)->config.vocab_size;
+  write_eagle_head(dir / "eagle-head", 128, vocab, 11);
+  auto open = [&](bool eagle) {
+    EngineOptions o;
+    o.model_path = path;
+    o.backend = DeviceKind::kCpu;
+    o.threads = 2;
+    o.kv_tokens = 2048;
+    o.int8_decode_rows = 0;  // outputs independent of how rows are batched (DD-031)
+    if (eagle) {
+      o.eagle_path = (dir / "eagle-head").string();
+      o.scheduler.spec_k = 4;
+    }
+    auto e = Engine::create(o);
+    if (!e.ok()) std::fprintf(stderr, "eagle3 engine: %s\n", e.status().to_string().c_str());
+    CHECK(e.ok());
+    return std::move(*e);
+  };
+  auto ref = open(false), eg = open(true);
+  for (const std::string& p : kPrompts) CHECK(gen(*ref, p, 24).text == gen(*eg, p, 24).text);
+  std::vector<std::shared_ptr<RequestStream>> rs, es;
+  for (const std::string& p : kPrompts) {
+    auto x = ref->generate_text(kShared + p, false, greedy(20));
+    auto y = eg->generate_text(kShared + p, false, greedy(20));
+    CHECK(x.ok() && y.ok());
+    rs.push_back(*x);
+    es.push_back(*y);
+  }
+  for (size_t i = 0; i < rs.size(); ++i) CHECK(drain(rs[i]).text == drain(es[i]).text);
+  CHECK(eg->stats().scheduler.spec_drafted > 0);
+  // A head for another model: refused at load.
+  write_eagle_head(dir / "eagle-head-other", 64, vocab, 12);
+  EngineOptions o;
+  o.model_path = path;
+  o.eagle_path = (dir / "eagle-head-other").string();
+  auto bad = Engine::create(o);
+  CHECK(!bad.ok() && bad.status().message().find("hidden size") != std::string::npos);
+}
+
 // Cost-aware draft length (SchedulerConfig::spec_cost_aware).
 void test_choose_draft_length() {
   std::vector<double> none(9, 0.0);
@@ -1922,6 +2041,8 @@ int main() {
   test_choose_draft_length();
   test_prompt_cache_disk(dir);
   test_kv_spill_disk(dir);
+  test_eagle3(dir);
+  std::printf("EAGLE-3: same text as plain decoding (alone, 4 streams, shared prefix); wrong-size heads refused\n");
   std::printf("KV spilled to disk: preempted requests resume from saved blocks, same text\n");
   std::printf("prompt cache on disk: restart loads the KV blocks, same text; per-model directories\n");
   std::printf("expert cache: bit-identical logits with evictions, same text at 1 and 4 requests, size checks; "

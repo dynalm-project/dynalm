@@ -45,6 +45,7 @@ add_library(dynalm_runtime STATIC
   runtime/engine.cpp
   runtime/generator.cpp
   runtime/speculative.cpp
+  runtime/eagle3.cpp
   runtime/sequence.cpp
   runtime/text_stream.cpp
   sampling/json_constraint.cpp

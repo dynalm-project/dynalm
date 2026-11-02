@@ -39,6 +39,7 @@
 #include "sampling/json_constraint.h"
 #include "sampling/sampler.h"
 #include "prefix_cache/prefix_cache.h"
+#include "runtime/eagle3.h"
 #include "runtime/sequence.h"
 #include "tokenizer/tokenizer.h"
 #include "common/core.h"
@@ -339,6 +340,9 @@ class Scheduler {
   // A draft model for speculative decoding (SchedulerConfig::spec_k > 0);
   // null = prompt lookup. The drafter must outlive the scheduler.
   void set_draft_model(BatchDrafter* drafter) { draft_ = drafter; }
+  // An EAGLE-3 head (runtime/eagle3.h) drafts instead: the model must
+  // capture the head's layers (Transformer::set_capture_layers).
+  void set_eagle(Eagle3Drafter* eagle) { eagle_ = eagle; }
   std::vector<StepTrace> take_step_trace();
   std::vector<RequestTrace> take_request_trace();
 
@@ -373,6 +377,12 @@ class Scheduler {
   // Draft-model drafts of every eligible decoding stream, once per step.
   void draft_with_model(uint64_t step_no);
   BatchDrafter* draft_ = nullptr;
+  Eagle3Drafter* eagle_ = nullptr;
+  std::vector<Eagle3Drafter::Extend> eagle_ext_;
+  // EAGLE-3 drafts of every eligible decoding stream, once per step.
+  void draft_with_eagle(uint64_t step_no);
+  // Queues sequence b's first `kept` rows of this step for the head.
+  void eagle_rows(Entry& e, size_t b, int64_t first_row, int64_t kept);
   std::vector<float> constrained_row_;  // a logits row sampled before the constraint check
 
   void drain_incoming();

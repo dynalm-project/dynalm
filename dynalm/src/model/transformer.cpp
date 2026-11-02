@@ -570,8 +570,26 @@ Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& c
   if (c.embedding_scale != 1.0f) backend_.scale(x, c.embedding_scale);
   mark(ForwardOp::kEmbed);
 
+  const auto n_cap = static_cast<int64_t>(capture_layers_.size());
+  if (n_cap > 0) captured_.assign(static_cast<size_t>(m * n_cap * c.hidden_size), 0.0f);
   for (int l = 0; l < c.num_layers; ++l) {
     const Layer& L = layers_[static_cast<size_t>(l)];
+
+    // EAGLE-3 features: the residual stream entering this layer.
+    for (int64_t j = 0; j < n_cap; ++j) {
+      if (capture_layers_[static_cast<size_t>(j)] != l) continue;
+      const int64_t H = c.hidden_size, w = n_cap * H;
+      if (backend_.host_accessible()) {
+        for (int64_t r = 0; r < m; ++r) {
+          const auto* src = reinterpret_cast<const float*>(static_cast<const std::byte*>(x.data()) + r * x.stride(0));
+          std::copy_n(src, H, captured_.data() + r * w + j * H);
+        }
+      } else {
+        capture_row_.resize(static_cast<size_t>(m * H));
+        backend_.download(x, capture_row_);
+        for (int64_t r = 0; r < m; ++r) std::copy_n(capture_row_.data() + r * H, H, captured_.data() + r * w + j * H);
+      }
+    }
 
     // --- attention ---
     norm(x, L.attn_norm, L.attn_norm_b, xn);

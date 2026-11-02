@@ -54,6 +54,8 @@ void usage() {
                "                          the cache (e.g. 8GB; default: what RAM leaves)\n"
                "  --prompt-cache DIR      keep prompt KV blocks on disk and reuse them across runs (CPU);\n"
                "                          --prompt-cache-size SIZE caps the files (oldest deleted first)\n"
+               "  --spec-eagle DIR        speculative decoding with an EAGLE-3 head for this model (config.json +\n"
+               "                          model.safetensors; CPU); --spec-k sets the drafts (default 4)\n"
                "  --int8-decode N         native CPU: int8 activations for matmuls of <= N rows (default 4, 64 on ARM; 0 = off;\n"
                "                          off makes outputs independent of batching, DD-053)\n"
                "  --policy P              balanced (default) | latency | throughput: first-token wait vs\n"
@@ -136,6 +138,7 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
     else if (a == "--int8-decode") ok = parse_int(value(), eo.int8_decode_rows) && eo.int8_decode_rows >= 0;
     else if (a == "--experts-from-disk") eo.expert_cache_bytes = eo.expert_cache_bytes > 0 ? eo.expert_cache_bytes : -1;
     else if (a == "--expert-cache") ok = cli::parse_byte_size(value(), eo.expert_cache_bytes);
+    else if (a == "--spec-eagle") ok = !(eo.eagle_path = std::string(value())).empty();
     else if (a == "--prompt-cache") ok = !(eo.scheduler.prompt_cache_dir = std::string(value())).empty();
     else if (a == "--prompt-cache-size") ok = cli::parse_byte_size(value(), eo.scheduler.prompt_cache_max_bytes);
     else if (a == "--policy") ok = parse_scheduler_policy(value(), eo.scheduler.policy);

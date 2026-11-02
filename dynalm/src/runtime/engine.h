@@ -79,6 +79,10 @@ struct EngineOptions {
   // small GGUF sharing the target's vocabulary, run on the same device with
   // its own KV cache (BatchDrafter). Empty = prompt lookup when spec_k > 0.
   std::string draft_model_path;
+  // Speculative decoding with an EAGLE-3 head instead (runtime/eagle3.h): a
+  // directory with config.json and model.safetensors trained for this
+  // model. Drafts up to scheduler.spec_k tokens (4 when 0). CPU only.
+  std::string eagle_path;
   DType kv_dtype = DType::kF16;
   // Max tokens per forward pass; 0 = the device default: max(256, both step
   // budgets + 1, the solo-prefill chunk) (256 on the CPU with default budgets).
@@ -357,6 +361,7 @@ class Engine {
   std::unique_ptr<KvBlockPool> draft_kv_;
   std::unique_ptr<Transformer> draft_transformer_;
   std::unique_ptr<BatchDrafter> drafter_;
+  std::unique_ptr<Eagle3Drafter> eagle_;  // EngineOptions::eagle_path
   std::unique_ptr<Scheduler> scheduler_;
   // The vocabulary's bytes for structured output, built on first use.
   std::mutex vocab_bytes_mu_;
