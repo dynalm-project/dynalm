@@ -334,7 +334,9 @@ int cmd_benchmark(std::span<const std::string_view> args) {
         cfg.warmup_requests = warmup_requests;
         cfg.arrival_trace = arrival_trace;
         cfg.arrival_trace_path = trace_file;
+        const auto ex0 = eng != nullptr ? eng->expert_cache_stats() : std::nullopt;
         bench::PointResult r = bench::run_point(*target, *tokenizer, cfg, run_ctx);
+        const auto ex1 = eng != nullptr ? eng->expert_cache_stats() : std::nullopt;
         if (!arrival_trace.empty() && r.arrival_mode != "trace") {
           std::fprintf(stderr, "benchmark: internal error: trace run measured as '%s'\n", r.arrival_mode.c_str());
           return 1;
@@ -372,7 +374,32 @@ int cmd_benchmark(std::span<const std::string_view> args) {
                       d.mean_decode_rows, d.steps ? d.pool_regions / static_cast<double>(d.steps) : 0.0, tail,
                       d.est_decode_bw_gbs, d.peak_bw_gbs, d.cpu_mhz);
         }
-        if (jsonl) jsonl << bench::to_json(r, model, hardware) << "\n";
+        std::string experts_json;
+        if (ex0 && ex1) {
+          // Over this point, warm-up included: the cache's own counters.
+          const int64_t hits = ex1->hits - ex0->hits, misses = ex1->misses - ex0->misses;
+          const double gb = static_cast<double>(ex1->bytes_read - ex0->bytes_read) / 1e9;
+          const int64_t pf = ex1->prefetched - ex0->prefetched, used = ex1->prefetch_used - ex0->prefetch_used;
+          const double wait = ex1->wait_ms - ex0->wait_ms;
+          const double tokens = std::max(1.0, static_cast<double>(r.completed) * r.mean_completion_tokens);
+          const double hit = hits + misses > 0 ? 100.0 * static_cast<double>(hits) / static_cast<double>(hits + misses) : 0;
+          std::printf("     experts: %.1f%% resident when needed (%lld of %lld) | read %.2f GB, %.3f GB per output token | "
+                      "waited %.0f ms | prefetch %lld started, %lld used\n",
+                      hit, static_cast<long long>(hits), static_cast<long long>(hits + misses), gb, gb / tokens, wait,
+                      static_cast<long long>(pf), static_cast<long long>(used));
+          char b[320];
+          std::snprintf(b, sizeof(b),
+                        ", \"experts\": {\"hits\": %lld, \"misses\": %lld, \"gb_read\": %.4f, \"wait_ms\": %.1f, "
+                        "\"prefetched\": %lld, \"prefetch_used\": %lld}",
+                        static_cast<long long>(hits), static_cast<long long>(misses), gb, wait,
+                        static_cast<long long>(pf), static_cast<long long>(used));
+          experts_json = b;
+        }
+        if (jsonl) {
+          std::string j = bench::to_json(r, model, hardware);
+          if (!experts_json.empty() && !j.empty() && j.back() == '}') j.insert(j.size() - 1, experts_json);
+          jsonl << j << "\n";
+        }
       }
     }
   }

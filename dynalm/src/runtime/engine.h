@@ -19,6 +19,7 @@
 #include <deque>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <mutex>
 #include <span>
 #include <string>
@@ -311,6 +312,11 @@ class Engine {
   const KvGeometry& kv_geometry() const { return kv_->geometry(); }
   // Snapshot taken on the scheduler thread after its latest step.
   EngineStats stats() const;
+  // The expert cache's counters (--experts-from-disk); nullopt without it.
+  std::optional<ExpertCache::Stats> expert_cache_stats() const {
+    const ExpertCache* c = transformer_->expert_cache();
+    return c != nullptr ? std::optional<ExpertCache::Stats>(c->stats()) : std::nullopt;
+  }
   // Duration of each scheduler step (batched forward pass), ms.
   const metrics::Histogram& step_ms() const { return step_ms_; }
   // Bytes of the KV pool and of the memory-mapped weights.

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <numeric>
 #include <string>
@@ -73,7 +74,15 @@ Status Transformer::enable_expert_cache(const ExpertCache::Options& options) {
   std::vector<std::vector<ExpertCache::Parts>> experts;
   for (const Layer& L : layers_) experts.push_back(L.experts);
   ENGINE_ASSIGN_OR_RETURN(expert_cache_, ExpertCache::create(experts, options));
+  const char* pf = std::getenv("DYNALM_EXPERT_PREFETCH");
+  expert_prefetch_ = !(pf != nullptr && pf[0] == '0');
   return Status::Ok();
+}
+
+void Transformer::top_k(const float* lg, int32_t ne, int32_t k) {
+  for (int32_t e = 0; e < ne; ++e) route_scratch_[static_cast<size_t>(e)] = {lg[e], e};
+  std::partial_sort(route_scratch_.begin(), route_scratch_.begin() + k, route_scratch_.end(),
+                    [](const auto& a, const auto& b) { return a.first != b.first ? a.first > b.first : a.second < b.second; });
 }
 
 void Transformer::set_kernel_base(const KernelPlan& base) {
@@ -338,6 +347,34 @@ void Transformer::moe_mlp(const Layer& L, const TensorView& xn, const TensorView
       if (moe_error_.ok()) moe_error_ = st;
       backend_.fill(out, 0.0f);
       return;
+    }
+    // Predict the next MoE layer's experts from this layer's FFN input and
+    // start reading them; they arrive while this layer and the next layer's
+    // attention compute. A wrong guess costs a read, never a result.
+    const auto next = static_cast<size_t>(li) + 1;
+    if (expert_prefetch_ && next < layers_.size() && !layers_[next].experts.empty() &&
+        layers_[next].experts.size() == static_cast<size_t>(ne)) {
+      const TensorView nl = rows_of(router_, m);  // this layer's logits are on the host already
+      backend_.matmul(xn, layers_[next].router, nullptr, nl);
+      predict_host_.resize(static_cast<size_t>(m * ne));
+      if (backend_.host_accessible()) {
+        for (int64_t r = 0; r < m; ++r) std::copy_n(row(nl, r), ne, predict_host_.data() + r * ne);
+      } else {
+        backend_.download(nl, predict_host_);
+      }
+      predict_mark_.assign(static_cast<size_t>(ne), 0);
+      predict_ids_.clear();
+      for (int64_t r = 0; r < m; ++r) {
+        top_k(predict_host_.data() + r * ne, ne, k);
+        for (int32_t j = 0; j < k; ++j) {
+          const int32_t e = route_scratch_[static_cast<size_t>(j)].second;
+          if (predict_mark_[static_cast<size_t>(e)] == 0) {
+            predict_mark_[static_cast<size_t>(e)] = 1;
+            predict_ids_.push_back(e);
+          }
+        }
+      }
+      expert_cache_->prefetch(static_cast<int32_t>(next), predict_ids_);
     }
   }
 

@@ -145,6 +145,15 @@ class Transformer {
   std::unique_ptr<ExpertCache> expert_cache_;
   std::vector<int32_t> active_experts_;
   std::vector<const ExpertCache::Parts*> cached_parts_;
+  // Expert prediction (DYNALM_EXPERT_PREFETCH=0 turns it off): the next
+  // layer's router applied to this layer's FFN input picks experts to read
+  // ahead, while this layer computes.
+  bool expert_prefetch_ = true;
+  std::vector<float> predict_host_;
+  std::vector<uint8_t> predict_mark_;
+  std::vector<int32_t> predict_ids_;
+  // Top-k of one row of router logits (ties: lower id), into route_scratch_.
+  void top_k(const float* logits, int32_t ne, int32_t k);
   Status moe_error_;  // the first expert-cache failure of this forward pass
   Tensor logits_dev_;                // device logits rows (non-host-accessible backends)
   // Per-call batch metadata (reused, capacity max_batch).

@@ -1594,6 +1594,7 @@ void test_expert_cache(const std::filesystem::path& dir) {
   }
   const ExpertCache::Stats st = (*cached)->expert_cache()->stats();
   CHECK(st.misses > 0 && st.evictions > 0 && st.bytes_read > 0 && st.hits > 0);
+  CHECK(st.prefetched > 0);  // next-layer prediction ran (DYNALM_EXPERT_PREFETCH unset)
 
   // Engine level: same text with and without the cache, alone and 4 at once.
   auto open = [&](int64_t cache) {
