@@ -281,7 +281,10 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
              sc.solo_prefill_split ? "split across prompts" : "FIFO");
   }
   LOG_INFO("Prefix cache: {}", eo.scheduler.enable_prefix_cache ? "enabled (radix)" : "disabled");
-  if (sc.spec_k > 0) LOG_INFO("Speculative decoding: prompt lookup, up to {} drafts per stream", sc.spec_k);
+  // A draft model or an EAGLE-3 head logs itself at load.
+  if (sc.spec_k > 0 && eo.draft_model_path.empty() && eo.eagle_path.empty()) {
+    LOG_INFO("Speculative decoding: prompt lookup, up to {} drafts per stream", sc.spec_k);
+  }
 
   Server server(e, so);
   if (Status st = server.start(); !st.ok()) {
