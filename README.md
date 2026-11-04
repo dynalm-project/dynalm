@@ -228,6 +228,13 @@ positions (llama.cpp against itself: 94–100 %). Over 19 model shapes, DynaLM's
 throughput 1.5×, with 2.5× less memory; its slowest token gaps (p99) are longer on most small models.
 Results: [docs/perf/cpu-model-sweep.md](docs/perf/cpu-model-sweep.md).
 
+**x86-64 (first, uncontrolled):** on a 4-vCPU AMD Zen 2 cloud VM (AVX2), llama.cpp is faster than
+DynaLM 0.5.0 (DynaLM 0.75–0.91× output tokens/s). Development builds not yet released make
+DynaCore's decode 1.29–1.32× faster (7–17% faster per token than llama.cpp) and add EAGLE-3
+speculative decoding (Qwen3-4B 1.41×, Qwen3-8B 1.34× llama.cpp's time per token in the same
+session); prompt reading is still slower. Results:
+[docs/perf/x86-zen2-2026-11.md](docs/perf/x86-zen2-2026-11.md).
+
 ### Metal (DynaLM 0.2.0)
 
 Measured on one machine (Apple M4 Pro, 24 GB, macOS 26.7, AC power) against llama.cpp's server
