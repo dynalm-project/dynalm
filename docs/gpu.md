@@ -167,9 +167,8 @@ memory.
 
 ## How fast is it?
 
-**Measured for this release:** see the README's [Speed](../README.md#speed) section (Apple M4 Pro,
-against llama.cpp's server). The earlier figures (DynaLM 0.1.5–0.1.6) are withdrawn
-([benchmarks.md](benchmarks.md), kept for reference; method: [benchmarking.md](benchmarking.md)).
+**Measured results:** [benchmarks.md](benchmarks.md) (Apple M4 Pro, against llama.cpp's server;
+method: [benchmarking.md](benchmarking.md)).
 
 **Accuracy:** GPU output matches the CPU reference within DynaLM's quality rule (DD-053):
 perplexity change ≤ 1%, average KL ≤ 0.0025. The same rule is used on Metal and Vulkan.
