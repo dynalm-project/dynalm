@@ -408,6 +408,19 @@ void CpuDevice::int8_rows(const Int8Kernel& ik, const std::byte* wbase, int64_t 
     }
     return;
   }
+  if (ik.dot_n != nullptr) {
+    const ActBlockQ8* xn[kDotRowsNMax];
+    float* yr[kDotRowsNMax];
+    for (int64_t r0 = 0; r0 < m; r0 += kDotRowsNMax) {
+      const int mm = static_cast<int>(std::min<int64_t>(kDotRowsNMax, m - r0));
+      for (int t = 0; t < mm; ++t) {
+        xn[t] = act + (r0 + t) * nb;
+        yr[t] = row_ptr<float>(y, r0 + t) + n0;
+      }
+      ik.dot_n(wbase, w_row_bytes, n0, n1, xn, mm, k, yr, bias);
+    }
+    return;
+  }
   float out[kDotRowsMax];
   for (int64_t r = n0; r < n1; ++r) {
     const float br = bias ? bias[r] : 0.0f;
@@ -466,11 +479,14 @@ CpuDevice::Int8Kernel CpuDevice::int8_from(const MatmulSelection& sel, DType wt,
     case MatmulKernelId::kInt8SubscaledX8: {
       Int8Kernel ik{k_.quantize_act_sx, k_.dot_q8_sx_rows_for(wt), ActFormat::kSubscaled, find_packed(w, n, k)};
       ik.rows8 = sel.id == MatmulKernelId::kInt8SubscaledX8Rows8;
+      ik.dot_n = k_.dot_q8_sx_rows_n_for(wt);  // weights without an interleaved copy
       return ik;
     }
-    case MatmulKernelId::kInt8Subscaled: return {k_.quantize_act_sx, k_.dot_q8_sx_rows_for(wt), ActFormat::kSubscaled};
+    case MatmulKernelId::kInt8Subscaled:
+      return {k_.quantize_act_sx, k_.dot_q8_sx_rows_for(wt), ActFormat::kSubscaled, nullptr, false, k_.dot_q8_sx_rows_n_for(wt)};
     case MatmulKernelId::kInt8Superblock: return {k_.quantize_act_sb, k_.dot_q8_sb_rows_for(wt), ActFormat::kSuperblock};
-    case MatmulKernelId::kInt8Per32: return {k_.quantize_act, k_.dot_q8_rows_for(wt), ActFormat::kPer32};
+    case MatmulKernelId::kInt8Per32:
+      return {k_.quantize_act, k_.dot_q8_rows_for(wt), ActFormat::kPer32, nullptr, false, k_.dot_q8_rows_n_for(wt)};
     default: return {};
   }
 }
@@ -1062,6 +1078,22 @@ void CpuDevice::run_matmul(const MatmulSelection& sel, int ext, const TensorView
       act_q16_.resize(static_cast<size_t>(m * nb));
       for (int64_t r = 0; r < m; ++r) k_.quantize_act16(row_ptr<const float>(x, r), act_q16_.data() + r * nb, k);
       const ActBlockQ16* act = act_q16_.data();
+      if (const DotQ16RowsNFn dot16n = k_.dot_q16_rows_n_for(wt)) {
+        pool_.parallel_for(static_cast<size_t>(n), grain_for(static_cast<size_t>(n), pool_.size(), 4, plan_.matmul_chunks_per_thread),
+                           [&](size_t begin, size_t end) {
+          const ActBlockQ16* xr[kDotRowsNMax];
+          float* yr[kDotRowsNMax];
+          for (int64_t r0 = 0; r0 < m; r0 += kDotRowsNMax) {
+            const int mm = static_cast<int>(std::min<int64_t>(kDotRowsNMax, m - r0));
+            for (int t = 0; t < mm; ++t) {
+              xr[t] = act + (r0 + t) * nb;
+              yr[t] = row_ptr<float>(y, r0 + t) + static_cast<int64_t>(begin);
+            }
+            dot16n(wbase, w_row_bytes, static_cast<int64_t>(begin), static_cast<int64_t>(end), xr, mm, k, yr, b);
+          }
+        });
+        return;
+      }
       pool_.parallel_for(static_cast<size_t>(n), grain_for(static_cast<size_t>(n), pool_.size(), 4, plan_.matmul_chunks_per_thread),
                          [&](size_t begin, size_t end) {
         float out[kDotRowsMax];
@@ -1991,6 +2023,33 @@ void CpuDevice::matmul_gated(Activation act, const TensorView& x, const TensorVi
             float* o = row_ptr<float>(out, r0 + t) + 8 * static_cast<int64_t>(gi);
             for (int i = 0; i < 8; ++i) o[i] = apply_act(act, g[8 * t + i]) * u[8 * t + i];
           }
+        }
+      }
+    });
+    return;
+  }
+  if (ig.dot_n != nullptr && iu.dot_n != nullptr) {
+    // Multi-row kernels: each chunk's gate and up rows into scratch, then combined.
+    pool_.parallel_for(static_cast<size_t>(n), grain_for(static_cast<size_t>(n), pool_.size(), 4, plan_.matmul_chunks_per_thread),
+                       [&](size_t begin, size_t end) {
+      const auto j0 = static_cast<int64_t>(begin), len = static_cast<int64_t>(end - begin);
+      thread_local std::vector<float> tmp;
+      tmp.resize(static_cast<size_t>(2 * kDotRowsNMax * len));
+      const ActBlockQ8* xr[kDotRowsNMax];
+      float* gy[kDotRowsNMax];
+      float* uy[kDotRowsNMax];
+      for (int64_t r0 = 0; r0 < m; r0 += kDotRowsNMax) {
+        const int mm = static_cast<int>(std::min<int64_t>(kDotRowsNMax, m - r0));
+        for (int t = 0; t < mm; ++t) {
+          xr[t] = actq + (r0 + t) * nb;
+          gy[t] = tmp.data() + t * len;
+          uy[t] = tmp.data() + (kDotRowsNMax + t) * len;
+        }
+        ig.dot_n(gbase, g_row, j0, j0 + len, xr, mm, k, gy, nullptr);
+        iu.dot_n(ubase, u_row, j0, j0 + len, xr, mm, k, uy, nullptr);
+        for (int t = 0; t < mm; ++t) {
+          float* o = row_ptr<float>(out, r0 + t) + j0;
+          for (int64_t j = 0; j < len; ++j) o[j] = apply_act(act, gy[t][j]) * uy[t][j];
         }
       }
     });

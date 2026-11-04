@@ -540,8 +540,12 @@ Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& c
   // The down projection may run without int8 activations (outlier channels).
   KernelPlan down_kernels = kernels_;
   if (!kernels_.int8_ffn_down) {
-    // int16 activations instead, while int8 decode is on (DD-076).
-    if (kernels_.int16_ffn_down) down_kernels.int16_decode_max_rows = kernels_.int8_decode_max_rows;
+    // int16 activations instead, while int8 decode is on (DD-076), for as
+    // many rows as the int8 decode kernels take (a speculative step verifies
+    // k + 1 rows; the int16 kernels compute each row independently).
+    if (kernels_.int16_ffn_down && kernels_.int8_decode_max_rows > 0) {
+      down_kernels.int16_decode_max_rows = std::max(kernels_.int8_decode_max_rows, kernels_.int8_superblock_max_rows);
+    }
     down_kernels.int8_decode_max_rows = 0;
   }
   const bool switch_for_down = !(down_kernels == kernels_);

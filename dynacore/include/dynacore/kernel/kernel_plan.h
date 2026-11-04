@@ -83,10 +83,13 @@ struct KernelPlan {
   // integer multiplier per 32-value block, folded into the integer sub-block
   // scale. For K-quant matmuls of at least this many rows (up to
   // int8_superblock_max_rows); 0 = never. Takes precedence over super-block.
-  // Default 2: within the DD-053 accuracy contract (mean KL 0.0013 on
-  // Qwen2.5-1.5B and Qwen3-4B) and +16% at 4 users; one row stays on the
-  // per-32 path (memory-bound either way, single-stream outputs unchanged).
-  int32_t int8_subscale_min_rows = 2;
+  // Default 1: within the DD-053 accuracy contract (mean KL 0.0013 on
+  // Qwen2.5-1.5B and Qwen3-4B) and +16% at 4 users. One row was on the
+  // per-32 path while decode looked memory-bound, but on a 4-core Zen 2
+  // (2.0 GHz, AVX2) single-row decode is compute-bound and the multi-row
+  // sub-scaled kernels cut the Qwen2.5-1.5B decode step ~7% (42 -> 39 ms),
+  // decode KL vs fp32 0.0011 (per-32: 0.0010).
+  int32_t int8_subscale_min_rows = 1;
   // Q4_K matmuls of at least this many rows use the interleaved 8-row copy
   // made at load (DD-078) when one exists; 0 = never (original layout).
   int32_t q4_repack_min_rows = 2;

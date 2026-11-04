@@ -271,7 +271,7 @@ int cmd_benchmark(std::span<const std::string_view> args) {
     if (decode_budget > 0) o.scheduler.decode_token_budget = decode_budget;
     if (chunk >= 0) o.scheduler.max_prefill_chunk = chunk;
     if (solo_chunk >= 0) o.scheduler.solo_prefill_chunk = solo_chunk;
-    o.scheduler.spec_k = spec_on ? spec_k : 0;
+    o.scheduler.spec_k = spec_on || !eagle_path.empty() ? spec_k : 0;  // --spec-k applies to --spec-eagle too
     o.draft_model_path = draft_path;
     if (solo_split) o.scheduler.solo_prefill_split = true;
     o.scheduler.prefill_order = prefill_order;

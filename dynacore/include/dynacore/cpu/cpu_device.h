@@ -166,6 +166,8 @@ class CpuDevice final : public Device {
     const BlockQ4_Kx8* packed = nullptr;
     // 8-row tiles on the interleaved copy (int8_subscaled_x8_rows8).
     bool rows8 = false;
+    // Multi-row form of `dot` (row layout only), when the tier has one.
+    DotQ8RowsNFn dot_n = nullptr;
   };
   // `w` identifies the weight (its data pointer) for the packed-copy lookup.
   Int8Kernel int8_kernel(DType wt, int64_t m, int64_t k, const void* w = nullptr, int64_t n = 0) const;

@@ -2,13 +2,16 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <vector>
 
 #include "api/json.h"
 #include "dynacore/quantization/dequant.h"
+#include "dynacore/quantization/quant_formats.h"
 #include "loader/safetensors/safetensors.h"
 
 namespace dynalm {
@@ -99,6 +102,9 @@ Result<std::unique_ptr<Eagle3Drafter>> Eagle3Drafter::create(const std::string& 
   d->embed_ = target.token_embedding();
 
   ENGINE_ASSIGN_OR_RETURN(auto file, safetensors::SafeTensorsFile::open(st.string()));
+  // DYNALM_EAGLE_Q8=0 keeps the head's matrices in their file type (A/B switch).
+  const char* q8_env = std::getenv("DYNALM_EAGLE_Q8");
+  const bool q8 = !(q8_env != nullptr && q8_env[0] == '0');
   auto matrix = [&](const char* name, int64_t rows, int64_t cols, TensorView& out) -> Status {
     const safetensors::TensorInfo* info = file->find(name);
     if (info == nullptr) return InvalidArgument(std::string("--spec-eagle: missing tensor ") + name);
@@ -106,6 +112,22 @@ Result<std::unique_ptr<Eagle3Drafter>> Eagle3Drafter::create(const std::string& 
       return InvalidArgument(std::string("--spec-eagle: unexpected shape of ") + name);
     }
     ENGINE_ASSIGN_OR_RETURN(Tensor t, file->load_tensor(*info));
+    if (q8 && cols % 32 == 0) {
+      // Q8_0 copy: half the bytes of bf16 per draft pass and the int8 decode
+      // kernels. Drafts are only proposals (the target verifies them), so
+      // the output is unchanged; only acceptance may differ.
+      ENGINE_ASSIGN_OR_RETURN(Tensor q, Tensor::empty(DType::kQ8_0, {rows, cols}));
+      std::vector<float> row(static_cast<size_t>(cols));
+      const int64_t in_bytes = dtype_row_bytes(t.dtype(), cols), out_bytes = dtype_row_bytes(DType::kQ8_0, cols);
+      for (int64_t r = 0; r < rows; ++r) {
+        if (!dequantize_row(t.dtype(), static_cast<const std::byte*>(t.data()) + r * in_bytes, row.data(), cols)) {
+          return Unsupported(std::string("--spec-eagle: dtype of ") + name);
+        }
+        dynacore::quant::quantize_q8_0(row.data(), reinterpret_cast<dynacore::quant::BlockQ8_0*>(static_cast<std::byte*>(q.data()) + r * out_bytes),
+                             cols / 32);
+      }
+      t = std::move(q);
+    }
     ENGINE_ASSIGN_OR_RETURN(out, d->weight(t));
     return Status::Ok();
   };

@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 
 #include "dynacore/tensor/fp16.h"
 #include "dynacore/quantization/quant_formats.h"
@@ -662,13 +663,13 @@ inline void accumulate_signed(__m256i wq, const ActBlockQ8* const* x, int64_t bl
 template <int M>
 void dot_rows_q8_0_m(const void* w, const ActBlockQ8* const* x, int64_t n, float* out) {
   const auto* b = static_cast<const BlockQ8_0*>(w);
-  __m256 acc[M];
-  for (int r = 0; r < M; ++r) acc[r] = _mm256_setzero_ps();
+  __m256 acc[2][M];
+  for (int r = 0; r < M; ++r) acc[0][r] = acc[1][r] = _mm256_setzero_ps();
   for (int64_t i = 0; i < n / kQK; ++i) {
     const __m256i wq = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(b[i].qs));
-    accumulate_signed<M>(wq, x, i, _mm256_set1_ps(fp16_to_fp32(b[i].d)), acc);
+    accumulate_signed<M>(wq, x, i, _mm256_set1_ps(fp16_to_fp32(b[i].d)), acc[i & 1]);
   }
-  for (int r = 0; r < M; ++r) out[r] = hsum(acc[r]);
+  for (int r = 0; r < M; ++r) out[r] = hsum(_mm256_add_ps(acc[0][r], acc[1][r]));
 }
 
 template <int M>
@@ -676,54 +677,75 @@ void dot_rows_q4_0_m(const void* w, const ActBlockQ8* const* x, int64_t n, float
   const auto* b = static_cast<const BlockQ4_0*>(w);
   const __m128i low4 = _mm_set1_epi8(0x0F);
   const __m256i eight = _mm256_set1_epi8(8);
-  __m256 acc[M];
-  for (int r = 0; r < M; ++r) acc[r] = _mm256_setzero_ps();
+  __m256 acc[2][M];
+  for (int r = 0; r < M; ++r) acc[0][r] = acc[1][r] = _mm256_setzero_ps();
   for (int64_t i = 0; i < n / kQK; ++i) {
     const __m128i bytes = _mm_loadu_si128(reinterpret_cast<const __m128i*>(b[i].qs));
     const __m256i wq = _mm256_sub_epi8(
         _mm256_set_m128i(_mm_and_si128(_mm_srli_epi16(bytes, 4), low4), _mm_and_si128(bytes, low4)), eight);
-    accumulate_signed<M>(wq, x, i, _mm256_set1_ps(fp16_to_fp32(b[i].d)), acc);
+    accumulate_signed<M>(wq, x, i, _mm256_set1_ps(fp16_to_fp32(b[i].d)), acc[i & 1]);
   }
-  for (int r = 0; r < M; ++r) out[r] = hsum(acc[r]);
+  for (int r = 0; r < M; ++r) out[r] = hsum(_mm256_add_ps(acc[0][r], acc[1][r]));
 }
 
 template <int M>
 void dot_rows_q5_0_m(const void* w, const ActBlockQ8* const* x, int64_t n, float* out) {
   const auto* b = static_cast<const BlockQ5_0*>(w);
   const __m128i low4 = _mm_set1_epi8(0x0F);
-  __m256 acc[M];
-  for (int r = 0; r < M; ++r) acc[r] = _mm256_setzero_ps();
+  __m256 acc[2][M];
+  for (int r = 0; r < M; ++r) acc[0][r] = acc[1][r] = _mm256_setzero_ps();
   for (int64_t i = 0; i < n / kQK; ++i) {
     uint32_t qh;
     std::memcpy(&qh, b[i].qh, 4);
     const __m128i bytes = _mm_loadu_si128(reinterpret_cast<const __m128i*>(b[i].qs));
     __m256i v = _mm256_set_m128i(_mm_and_si128(_mm_srli_epi16(bytes, 4), low4), _mm_and_si128(bytes, low4));
     v = _mm256_or_si256(v, _mm256_and_si256(bytes_from_bits_32(qh), _mm256_set1_epi8(0x10)));
-    accumulate_signed<M>(_mm256_sub_epi8(v, _mm256_set1_epi8(16)), x, i, _mm256_set1_ps(fp16_to_fp32(b[i].d)), acc);
+    accumulate_signed<M>(_mm256_sub_epi8(v, _mm256_set1_epi8(16)), x, i, _mm256_set1_ps(fp16_to_fp32(b[i].d)), acc[i & 1]);
   }
-  for (int r = 0; r < M; ++r) out[r] = hsum(acc[r]);
+  for (int r = 0; r < M; ++r) out[r] = hsum(_mm256_add_ps(acc[0][r], acc[1][r]));
+}
+
+// The 8 6-bit scales (sc) and minimums (mn) of a Q4_K / Q5_K super-block
+// (get_scale_min_k4 for j = 0..7) with word operations instead of a per-j loop.
+inline void k4_scales_mins(const uint8_t* scales, uint8_t sc[8], uint8_t mn[8]) {
+  uint32_t u[3];
+  std::memcpy(u, scales, 12);
+  constexpr uint32_t km1 = 0x3f3f3f3f, km2 = 0x0f0f0f0f, km3 = 0x03030303;
+  const uint32_t sc_lo = u[0] & km1, mn_lo = u[1] & km1;
+  const uint32_t sc_hi = (u[2] & km2) | (((u[0] >> 6) & km3) << 4);
+  const uint32_t mn_hi = ((u[2] >> 4) & km2) | (((u[1] >> 6) & km3) << 4);
+  std::memcpy(sc, &sc_lo, 4);
+  std::memcpy(sc + 4, &sc_hi, 4);
+  std::memcpy(mn, &mn_lo, 4);
+  std::memcpy(mn + 4, &mn_hi, 4);
+}
+
+// 8 unsigned bytes times f, as 8 floats.
+inline __m256 scaled_u8x8(const uint8_t* v, float f) {
+  return _mm256_mul_ps(_mm256_set1_ps(f),
+                       _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(v)))));
 }
 
 // Q4_K: unsigned codes 0..15 per 32-value sub-block, value = d*sc*q - dmin*m.
+// Even and odd sub-blocks accumulate separately (two independent FMA and
+// correction chains per row): with one chain the dependent FMAs, not the
+// arithmetic, bounded single-row decode.
 template <int M>
 void dot_rows_q4_K_m(const void* w, const ActBlockQ8* const* x, int64_t n, float* out) {
   const auto* b = static_cast<const BlockQ4_K*>(w);
   const __m256i low4 = _mm256_set1_epi8(0x0F);
-  __m256 acc[M];
-  float corr[M];
+  __m256 acc0[M], acc1[M];
+  float corr0[M], corr1[M];
   for (int r = 0; r < M; ++r) {
-    acc[r] = _mm256_setzero_ps();
-    corr[r] = 0;
+    acc0[r] = acc1[r] = _mm256_setzero_ps();
+    corr0[r] = corr1[r] = 0;
   }
   for (int64_t i = 0; i < n / kQK_K; ++i) {
-    const float d = fp16_to_fp32(b[i].d), dmin = fp16_to_fp32(b[i].dmin);
-    float sc[8], mn[8];
-    for (int j = 0; j < 8; ++j) {
-      uint8_t s, m;
-      get_scale_min_k4(j, b[i].scales, s, m);
-      sc[j] = d * s;
-      mn[j] = dmin * m;
-    }
+    uint8_t s8[8], m8[8];
+    k4_scales_mins(b[i].scales, s8, m8);
+    alignas(32) float sc[8], mn[8];
+    _mm256_store_ps(sc, scaled_u8x8(s8, fp16_to_fp32(b[i].d)));
+    _mm256_store_ps(mn, scaled_u8x8(m8, fp16_to_fp32(b[i].dmin)));
     for (int jp = 0; jp < 4; ++jp) {
       const __m256i bytes = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(b[i].qs + 32 * jp));
       const __m256i lo = _mm256_and_si256(bytes, low4);
@@ -734,13 +756,181 @@ void dot_rows_q4_K_m(const void* w, const ActBlockQ8* const* x, int64_t n, float
         const ActBlockQ8& a1 = x[r][blk + 1];
         const __m256i p0 = mul_sum_u8_s8(lo, _mm256_loadu_si256(reinterpret_cast<const __m256i*>(a0.q)));
         const __m256i p1 = mul_sum_u8_s8(hi, _mm256_loadu_si256(reinterpret_cast<const __m256i*>(a1.q)));
-        acc[r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(p0), _mm256_set1_ps(sc[2 * jp] * a0.d), acc[r]);
-        acc[r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(p1), _mm256_set1_ps(sc[2 * jp + 1] * a1.d), acc[r]);
-        corr[r] += mn[2 * jp] * a0.d * static_cast<float>(a0.sum) + mn[2 * jp + 1] * a1.d * static_cast<float>(a1.sum);
+        acc0[r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(p0), _mm256_set1_ps(sc[2 * jp] * a0.d), acc0[r]);
+        acc1[r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(p1), _mm256_set1_ps(sc[2 * jp + 1] * a1.d), acc1[r]);
+        corr0[r] += mn[2 * jp] * a0.d * static_cast<float>(a0.sum);
+        corr1[r] += mn[2 * jp + 1] * a1.d * static_cast<float>(a1.sum);
       }
     }
   }
-  for (int r = 0; r < M; ++r) out[r] = hsum(acc[r]) - corr[r];
+  for (int r = 0; r < M; ++r) out[r] = hsum(_mm256_add_ps(acc0[r], acc1[r])) - (corr0[r] + corr1[r]);
+}
+
+// Activation-only terms of M rows of nb blocks (ActBlockQ8 or ActBlockQ16),
+// for the multi-row kernels: ad[r][b] = d, ads[r][b] = d * sum (per thread,
+// valid until the next call on this thread).
+template <int M, typename Act>
+void act_terms(const Act* const* x, int64_t nb, const float** ad, const float** ads) {
+  thread_local std::vector<float> terms;
+  terms.resize(static_cast<size_t>(2 * M * nb));
+  for (int r = 0; r < M; ++r) {
+    float* d = terms.data() + 2 * r * nb;
+    float* ds = d + nb;
+    for (int64_t b = 0; b < nb; ++b) {
+      d[b] = x[r][b].d;
+      ds[b] = x[r][b].d * static_cast<float>(x[r][b].sum);
+    }
+    ad[r] = d;
+    ads[r] = ds;
+  }
+}
+
+// Multi-row Q4_K (DotQ8RowsNFn): the per-32 arithmetic of dot_rows_q4_K with
+// the activation-only terms (block scales d and d * sum) gathered once per
+// call, so each super-block takes one vector multiply for its 8 scale
+// products and one FMA for the minimum correction instead of 8 + 16 scalar
+// operations per row.
+template <int M>
+void dot_rows_n_q4_K_m(const std::byte* w, int64_t w_row_bytes, int64_t n0, int64_t n1, const ActBlockQ8* const* x,
+                       int64_t k, float* const* y, const float* bias) {
+  const int64_t nsb = k / kQK_K;
+  const float* ad[M];
+  const float* ads[M];
+  act_terms<M>(x, k / kActQ8Block, ad, ads);
+  const __m256i low4 = _mm256_set1_epi8(0x0F);
+  for (int64_t row = n0; row < n1; ++row) {
+    const auto* b = reinterpret_cast<const BlockQ4_K*>(w + row * w_row_bytes);
+    __m256 acc0[M], acc1[M], cor[M];
+    for (int r = 0; r < M; ++r) acc0[r] = acc1[r] = cor[r] = _mm256_setzero_ps();
+    for (int64_t i = 0; i < nsb; ++i) {
+      uint8_t s8[8], m8[8];
+      k4_scales_mins(b[i].scales, s8, m8);
+      const __m256 scv = scaled_u8x8(s8, fp16_to_fp32(b[i].d)), mnv = scaled_u8x8(m8, fp16_to_fp32(b[i].dmin));
+      alignas(32) float f[M][8];
+      for (int r = 0; r < M; ++r) {
+        _mm256_store_ps(f[r], _mm256_mul_ps(scv, _mm256_loadu_ps(ad[r] + 8 * i)));
+        cor[r] = _mm256_fmadd_ps(mnv, _mm256_loadu_ps(ads[r] + 8 * i), cor[r]);
+      }
+      for (int jp = 0; jp < 4; ++jp) {
+        const __m256i bytes = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(b[i].qs + 32 * jp));
+        const __m256i lo = _mm256_and_si256(bytes, low4);
+        const __m256i hi = _mm256_and_si256(_mm256_srli_epi16(bytes, 4), low4);
+        const int64_t blk = i * 8 + 2 * jp;
+        for (int r = 0; r < M; ++r) {
+          const __m256i p0 = mul_sum_u8_s8(lo, _mm256_loadu_si256(reinterpret_cast<const __m256i*>(x[r][blk].q)));
+          const __m256i p1 = mul_sum_u8_s8(hi, _mm256_loadu_si256(reinterpret_cast<const __m256i*>(x[r][blk + 1].q)));
+          acc0[r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(p0), _mm256_broadcast_ss(&f[r][2 * jp]), acc0[r]);
+          acc1[r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(p1), _mm256_broadcast_ss(&f[r][2 * jp + 1]), acc1[r]);
+        }
+      }
+    }
+    const float br = bias ? bias[row] : 0.0f;
+    for (int r = 0; r < M; ++r) y[r][row - n0] = hsum(_mm256_add_ps(acc0[r], acc1[r])) - hsum(cor[r]) + br;
+  }
+}
+
+void dot_rows_n_q4_K(const void* w, int64_t w_row_bytes, int64_t n0, int64_t n1, const ActBlockQ8* const* x, int m,
+                     int64_t k, float* const* y, const float* bias) {
+  const auto* wb = static_cast<const std::byte*>(w);
+  switch (m) {
+    case 1: dot_rows_n_q4_K_m<1>(wb, w_row_bytes, n0, n1, x, k, y, bias); break;
+    case 2: dot_rows_n_q4_K_m<2>(wb, w_row_bytes, n0, n1, x, k, y, bias); break;
+    case 3: dot_rows_n_q4_K_m<3>(wb, w_row_bytes, n0, n1, x, k, y, bias); break;
+    case 4: dot_rows_n_q4_K_m<4>(wb, w_row_bytes, n0, n1, x, k, y, bias); break;
+    case 5: dot_rows_n_q4_K_m<5>(wb, w_row_bytes, n0, n1, x, k, y, bias); break;
+    case 6: dot_rows_n_q4_K_m<6>(wb, w_row_bytes, n0, n1, x, k, y, bias); break;
+    case 7: dot_rows_n_q4_K_m<7>(wb, w_row_bytes, n0, n1, x, k, y, bias); break;
+    default: dot_rows_n_q4_K_m<8>(wb, w_row_bytes, n0, n1, x, k, y, bias); break;
+  }
+}
+
+// Multi-row Q8_0 (DotQ8RowsNFn): dot_rows_q8_0's arithmetic (signed codes,
+// one fp16 scale per 32 values) with the activation scales gathered once per
+// call; even and odd blocks in two chains. EAGLE-3 heads load as Q8_0.
+template <int M>
+void dot_rows_n_q8_0_m(const std::byte* w, int64_t w_row_bytes, int64_t n0, int64_t n1, const ActBlockQ8* const* x,
+                       int64_t k, float* const* y, const float* bias) {
+  const int64_t nb = k / kQK;
+  const float* ad[M];
+  const float* ads[M];
+  act_terms<M>(x, nb, ad, ads);
+  for (int64_t row = n0; row < n1; ++row) {
+    const auto* b = reinterpret_cast<const BlockQ8_0*>(w + row * w_row_bytes);
+    __m256 acc[2][M];
+    for (int r = 0; r < M; ++r) acc[0][r] = acc[1][r] = _mm256_setzero_ps();
+    for (int64_t i = 0; i < nb; ++i) {
+      const __m256i wq = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(b[i].qs));
+      const __m256i aw = _mm256_sign_epi8(wq, wq);
+      const float d = fp16_to_fp32(b[i].d);
+      for (int r = 0; r < M; ++r) {
+        const __m256i xq = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(x[r][i].q));
+        const __m256i p = mul_sum_u8_s8(aw, _mm256_sign_epi8(xq, wq));
+        acc[i & 1][r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(p), _mm256_set1_ps(d * ad[r][i]), acc[i & 1][r]);
+      }
+    }
+    const float br = bias ? bias[row] : 0.0f;
+    for (int r = 0; r < M; ++r) y[r][row - n0] = hsum(_mm256_add_ps(acc[0][r], acc[1][r])) + br;
+  }
+}
+
+// Multi-row Q6_K (DotQ8RowsNFn): dot_rows_q6_K's arithmetic, with each
+// 32-value block's two scale products (d * sc * activation d) formed by two
+// vector multiplies per super-block instead of per block and row.
+template <int M>
+void dot_rows_n_q6_K_m(const std::byte* w, int64_t w_row_bytes, int64_t n0, int64_t n1, const ActBlockQ8* const* x,
+                       int64_t k, float* const* y, const float* bias) {
+  const int64_t nb = k / kActQ8Block, nsb = k / kQK_K;
+  const float* ad[M];
+  const float* ads[M];
+  act_terms<M>(x, nb, ad, ads);
+  // Each block's d twice (its two 16-value scales).
+  thread_local std::vector<float> dup;
+  dup.resize(static_cast<size_t>(2 * M * nb));
+  for (int r = 0; r < M; ++r) {
+    for (int64_t b = 0; b < nb; ++b) dup[static_cast<size_t>(2 * (r * nb + b))] = dup[static_cast<size_t>(2 * (r * nb + b) + 1)] = ad[r][b];
+  }
+  const __m256i low4 = _mm256_set1_epi8(0x0F), low2 = _mm256_set1_epi8(0x03), k32 = _mm256_set1_epi8(32);
+  for (int64_t row = n0; row < n1; ++row) {
+    const auto* b = reinterpret_cast<const BlockQ6_K*>(w + row * w_row_bytes);
+    __m256 acc[2][M];
+    for (int r = 0; r < M; ++r) acc[0][r] = acc[1][r] = _mm256_setzero_ps();
+    for (int64_t i = 0; i < nsb; ++i) {
+      const __m256 dv = _mm256_set1_ps(fp16_to_fp32(b[i].d));
+      const __m128i sc8 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(b[i].scales));
+      const __m256 s0 = _mm256_mul_ps(dv, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(sc8)));
+      const __m256 s1 = _mm256_mul_ps(dv, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(sc8, 8))));
+      alignas(32) float f[M][16];
+      for (int r = 0; r < M; ++r) {
+        const float* dd = dup.data() + 2 * (r * nb + 8 * i);
+        _mm256_store_ps(f[r], _mm256_mul_ps(s0, _mm256_loadu_ps(dd)));
+        _mm256_store_ps(f[r] + 8, _mm256_mul_ps(s1, _mm256_loadu_ps(dd + 8)));
+      }
+      for (int part = 0; part < 2; ++part) {
+        const uint8_t* ql = b[i].ql + 64 * part;
+        const __m256i l0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ql));
+        const __m256i l1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ql + 32));
+        const __m256i h = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(b[i].qh + 32 * part));
+        auto hbits = [&](int shift) { return _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(h, shift), low2), 4); };
+        const __m256i q[4] = {
+            _mm256_sub_epi8(_mm256_or_si256(_mm256_and_si256(l0, low4), hbits(0)), k32),
+            _mm256_sub_epi8(_mm256_or_si256(_mm256_and_si256(l1, low4), hbits(2)), k32),
+            _mm256_sub_epi8(_mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(l0, 4), low4), hbits(4)), k32),
+            _mm256_sub_epi8(_mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(l1, 4), low4), hbits(6)), k32)};
+        for (int g = 0; g < 4; ++g) {
+          const int blk = 4 * part + g;
+          const __m256i aw = _mm256_sign_epi8(q[g], q[g]);
+          for (int r = 0; r < M; ++r) {
+            const __m256i xq = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(x[r][i * 8 + blk].q));
+            const __m256i p = mul_sum_u8_s8(aw, _mm256_sign_epi8(xq, q[g]));
+            const __m256 sw = _mm256_set_m128(_mm_broadcast_ss(&f[r][2 * blk + 1]), _mm_broadcast_ss(&f[r][2 * blk]));
+            acc[g & 1][r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(p), sw, acc[g & 1][r]);
+          }
+        }
+      }
+    }
+    const float br = bias ? bias[row] : 0.0f;
+    for (int r = 0; r < M; ++r) y[r][row - n0] = hsum(_mm256_add_ps(acc[0][r], acc[1][r])) + br;
+  }
 }
 
 // Q6_K: signed codes -32..31; each 32-value activation block spans two
@@ -749,8 +939,8 @@ template <int M>
 void dot_rows_q6_K_m(const void* w, const ActBlockQ8* const* x, int64_t n, float* out) {
   const auto* b = static_cast<const BlockQ6_K*>(w);
   const __m256i low4 = _mm256_set1_epi8(0x0F), low2 = _mm256_set1_epi8(0x03), k32 = _mm256_set1_epi8(32);
-  __m256 acc[M];
-  for (int r = 0; r < M; ++r) acc[r] = _mm256_setzero_ps();
+  __m256 acc[2][M];
+  for (int r = 0; r < M; ++r) acc[0][r] = acc[1][r] = _mm256_setzero_ps();
   for (int64_t i = 0; i < n / kQK_K; ++i) {
     const float d = fp16_to_fp32(b[i].d);
     for (int part = 0; part < 2; ++part) {
@@ -767,11 +957,11 @@ void dot_rows_q6_K_m(const void* w, const ActBlockQ8* const* x, int64_t n, float
       const int8_t* sc = b[i].scales + 8 * part;
       for (int g = 0; g < 4; ++g) {
         const __m256 scale_w = _mm256_set_m128(_mm_set1_ps(d * sc[2 * g + 1]), _mm_set1_ps(d * sc[2 * g]));
-        accumulate_signed<M>(q[g], x, i * 8 + 4 * part + g, scale_w, acc);
+        accumulate_signed<M>(q[g], x, i * 8 + 4 * part + g, scale_w, acc[g & 1]);
       }
     }
   }
-  for (int r = 0; r < M; ++r) out[r] = hsum(acc[r]);
+  for (int r = 0; r < M; ++r) out[r] = hsum(_mm256_add_ps(acc[0][r], acc[1][r]));
 }
 
 // --- Super-block activations (DD-075) ---------------------------------------
@@ -1023,6 +1213,126 @@ void dot_rows_sx_q6_K_m(const void* w, const ActBlockQ8* const* xin, int64_t n, 
   }
   for (int r = 0; r < M; ++r) out[r] = hsum(acc[r]);
 }
+
+// Multi-row sub-scaled kernels (DotQ8RowsNFn, activations from
+// quantize_act_sx): the arithmetic of dot_rows_sx_q4_K / dot_rows_sx_q6_K
+// with the weight scales decoded by word operations and the minimum
+// correction in its own accumulator, for weight rows [n0, n1) per call.
+template <int M>
+void dot_rows_n_sx_q4_K_m(const std::byte* w, int64_t w_row_bytes, int64_t n0, int64_t n1, const ActBlockQ8* const* xin,
+                          int64_t k, float* const* y, const float* bias) {
+  const ActSuperQ8* x[M];
+  for (int r = 0; r < M; ++r) x[r] = reinterpret_cast<const ActSuperQ8*>(xin[r]);
+  const int64_t nsb = k / kQK_K;
+  const __m256i low4 = _mm256_set1_epi8(0x0F);
+  for (int64_t row = n0; row < n1; ++row) {
+    const auto* b = reinterpret_cast<const BlockQ4_K*>(w + row * w_row_bytes);
+    __m256 acc[M], cor[M];
+    for (int r = 0; r < M; ++r) acc[r] = cor[r] = _mm256_setzero_ps();
+    for (int64_t i = 0; i < nsb; ++i) {
+      uint8_t s8[8], m8[8];
+      k4_scales_mins(b[i].scales, s8, m8);
+      const __m128i sc16 = _mm_cvtepu8_epi16(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(s8)));
+      const __m256 mnf = scaled_u8x8(m8, fp16_to_fp32(b[i].dmin));
+      const float d = fp16_to_fp32(b[i].d);
+      __m256i scm[M], sumi[M];
+      for (int r = 0; r < M; ++r) {
+        const ActSuperQ8& a = x[r][i];
+        scm[r] = _mm256_broadcastsi128_si256(_mm_mullo_epi16(sc16, _mm_loadu_si128(reinterpret_cast<const __m128i*>(a.m))));
+        sumi[r] = _mm256_setzero_si256();
+        cor[r] = _mm256_fmadd_ps(mnf, _mm256_loadu_ps(a.ms), cor[r]);
+      }
+      for (int jp = 0; jp < 4; ++jp) {
+        const __m256i bytes = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(b[i].qs + 32 * jp));
+        const __m256i lo = _mm256_and_si256(bytes, low4);
+        const __m256i hi = _mm256_and_si256(_mm256_srli_epi16(bytes, 4), low4);
+        const __m256i m0 = mask(kBcast16[2 * jp]), m1 = mask(kBcast16[2 * jp + 1]);
+        for (int r = 0; r < M; ++r) {
+          const int8_t* q = x[r][i].q + 64 * jp;
+          const __m256i x0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(q));
+          const __m256i x1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(q + 32));
+          const __m256i p0 = _mm256_madd_epi16(_mm256_maddubs_epi16(lo, x0), _mm256_shuffle_epi8(scm[r], m0));
+          const __m256i p1 = _mm256_madd_epi16(_mm256_maddubs_epi16(hi, x1), _mm256_shuffle_epi8(scm[r], m1));
+          sumi[r] = _mm256_add_epi32(sumi[r], _mm256_add_epi32(p0, p1));
+        }
+      }
+      for (int r = 0; r < M; ++r) acc[r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(sumi[r]), _mm256_set1_ps(d * x[r][i].u), acc[r]);
+    }
+    const float br = bias ? bias[row] : 0.0f;
+    for (int r = 0; r < M; ++r) y[r][row - n0] = hsum(acc[r]) - hsum(cor[r]) + br;
+  }
+}
+
+template <int M>
+void dot_rows_n_sx_q6_K_m(const std::byte* w, int64_t w_row_bytes, int64_t n0, int64_t n1, const ActBlockQ8* const* xin,
+                          int64_t k, float* const* y, const float* bias) {
+  const ActSuperQ8* x[M];
+  for (int r = 0; r < M; ++r) x[r] = reinterpret_cast<const ActSuperQ8*>(xin[r]);
+  const int64_t nsb = k / kQK_K;
+  const __m256i low4 = _mm256_set1_epi8(0x0F), low2 = _mm256_set1_epi8(0x03), k32 = _mm256_set1_epi8(32);
+  for (int64_t row = n0; row < n1; ++row) {
+    const auto* b = reinterpret_cast<const BlockQ6_K*>(w + row * w_row_bytes);
+    __m256 acc[M];
+    for (int r = 0; r < M; ++r) acc[r] = _mm256_setzero_ps();
+    for (int64_t i = 0; i < nsb; ++i) {
+      const __m256i sc16 = _mm256_cvtepi8_epi16(_mm_loadu_si128(reinterpret_cast<const __m128i*>(b[i].scales)));
+      __m256i scm[M], sumi[M];
+      for (int r = 0; r < M; ++r) {
+        const __m128i m8 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(x[r][i].m));
+        scm[r] = _mm256_mullo_epi16(sc16, _mm256_set_m128i(_mm_unpackhi_epi16(m8, m8), _mm_unpacklo_epi16(m8, m8)));
+        sumi[r] = _mm256_setzero_si256();
+      }
+      for (int part = 0; part < 2; ++part) {
+        const uint8_t* ql = b[i].ql + 64 * part;
+        const __m256i l0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ql));
+        const __m256i l1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ql + 32));
+        const __m256i h = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(b[i].qh + 32 * part));
+        auto hbits = [&](int shift) { return _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(h, shift), low2), 4); };
+        const __m256i q[4] = {
+            _mm256_sub_epi8(_mm256_or_si256(_mm256_and_si256(l0, low4), hbits(0)), k32),
+            _mm256_sub_epi8(_mm256_or_si256(_mm256_and_si256(l1, low4), hbits(2)), k32),
+            _mm256_sub_epi8(_mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(l0, 4), low4), hbits(4)), k32),
+            _mm256_sub_epi8(_mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(l1, 4), low4), hbits(6)), k32)};
+        __m256i half[M];
+        for (int r = 0; r < M; ++r) {
+          half[r] = part == 0 ? _mm256_permute2x128_si256(scm[r], scm[r], 0x00) : _mm256_permute2x128_si256(scm[r], scm[r], 0x11);
+        }
+        for (int g = 0; g < 4; ++g) {
+          const __m256i aw = _mm256_sign_epi8(q[g], q[g]);
+          const __m256i pm = mask(kPair16[g]);
+          for (int r = 0; r < M; ++r) {
+            const __m256i xq = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(x[r][i].q + 128 * part + 32 * g));
+            const __m256i p = _mm256_madd_epi16(_mm256_maddubs_epi16(aw, _mm256_sign_epi8(xq, q[g])), _mm256_shuffle_epi8(half[r], pm));
+            sumi[r] = _mm256_add_epi32(sumi[r], p);
+          }
+        }
+      }
+      const float d = fp16_to_fp32(b[i].d);
+      for (int r = 0; r < M; ++r) acc[r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(sumi[r]), _mm256_set1_ps(d * x[r][i].u), acc[r]);
+    }
+    const float br = bias ? bias[row] : 0.0f;
+    for (int r = 0; r < M; ++r) y[r][row - n0] = hsum(acc[r]) + br;
+  }
+}
+
+#define DYNACORE_DOT_ROWS_N_SX(name)                                                                                \
+  void name(const void* w, int64_t w_row_bytes, int64_t n0, int64_t n1, const ActBlockQ8* const* x, int m, int64_t k,\
+            float* const* y, const float* bias) {                                                                  \
+    const auto* wb = static_cast<const std::byte*>(w);                                                             \
+    switch (m) {                                                                                                   \
+      case 1: name##_m<1>(wb, w_row_bytes, n0, n1, x, k, y, bias); break;                                          \
+      case 2: name##_m<2>(wb, w_row_bytes, n0, n1, x, k, y, bias); break;                                          \
+      case 3: name##_m<3>(wb, w_row_bytes, n0, n1, x, k, y, bias); break;                                          \
+      case 4: name##_m<4>(wb, w_row_bytes, n0, n1, x, k, y, bias); break;                                          \
+      case 5: name##_m<5>(wb, w_row_bytes, n0, n1, x, k, y, bias); break;                                          \
+      case 6: name##_m<6>(wb, w_row_bytes, n0, n1, x, k, y, bias); break;                                          \
+      case 7: name##_m<7>(wb, w_row_bytes, n0, n1, x, k, y, bias); break;                                          \
+      default: name##_m<8>(wb, w_row_bytes, n0, n1, x, k, y, bias); break;                                         \
+    }                                                                                                              \
+  }
+DYNACORE_DOT_ROWS_N_SX(dot_rows_n_sx_q4_K)
+DYNACORE_DOT_ROWS_N_SX(dot_rows_n_sx_q6_K)
+#undef DYNACORE_DOT_ROWS_N_SX
 
 // --- Interleaved Q4_K x 8 rows (DD-078) --------------------------------------
 // One 32-byte maddubs covers 4 values of 8 weight rows against a broadcast of
@@ -1351,8 +1661,8 @@ inline __m256i madd16_block(__m256i w0, __m256i w1, const ActBlockQ16& a) {
 template <int M>
 void dot_rows16_q8_0_m(const void* w, const ActBlockQ16* const* x, int64_t n, float* out) {
   const auto* b = static_cast<const BlockQ8_0*>(w);
-  __m256 acc[M];
-  for (int r = 0; r < M; ++r) acc[r] = _mm256_setzero_ps();
+  __m256 acc[2][M];
+  for (int r = 0; r < M; ++r) acc[0][r] = acc[1][r] = _mm256_setzero_ps();
   for (int64_t i = 0; i < n / kQK; ++i) {
     const __m256i wq = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(b[i].qs));
     const __m256i w0 = _mm256_cvtepi8_epi16(_mm256_castsi256_si128(wq));
@@ -1360,26 +1670,26 @@ void dot_rows16_q8_0_m(const void* w, const ActBlockQ16* const* x, int64_t n, fl
     const float d = fp16_to_fp32(b[i].d);
     for (int r = 0; r < M; ++r) {
       const ActBlockQ16& a = x[r][i];
-      acc[r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(madd16_block(w0, w1, a)), _mm256_set1_ps(d * a.d), acc[r]);
+      acc[i & 1][r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(madd16_block(w0, w1, a)), _mm256_set1_ps(d * a.d), acc[i & 1][r]);
     }
   }
-  for (int r = 0; r < M; ++r) out[r] = hsum(acc[r]);
+  for (int r = 0; r < M; ++r) out[r] = hsum(_mm256_add_ps(acc[0][r], acc[1][r]));
 }
 
 template <int M>
 void dot_rows16_q4_K_m(const void* w, const ActBlockQ16* const* x, int64_t n, float* out) {
   const auto* b = static_cast<const BlockQ4_K*>(w);
   const __m256i low4 = _mm256_set1_epi8(0x0F);
-  __m256 acc[M];
-  float corr[M];
+  __m256 acc0[M], acc1[M];
+  float corr0[M], corr1[M];
   for (int r = 0; r < M; ++r) {
-    acc[r] = _mm256_setzero_ps();
-    corr[r] = 0;
+    acc0[r] = acc1[r] = _mm256_setzero_ps();
+    corr0[r] = corr1[r] = 0;
   }
   for (int64_t i = 0; i < n / kQK_K; ++i) {
     const float d = fp16_to_fp32(b[i].d), dmin = fp16_to_fp32(b[i].dmin);
     uint8_t sc[8], mn[8];
-    for (int j = 0; j < 8; ++j) get_scale_min_k4(j, b[i].scales, sc[j], mn[j]);
+    k4_scales_mins(b[i].scales, sc, mn);
     for (int jp = 0; jp < 4; ++jp) {
       const __m256i bytes = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(b[i].qs + 32 * jp));
       const __m256i lo = _mm256_and_si256(bytes, low4);
@@ -1393,22 +1703,22 @@ void dot_rows16_q4_K_m(const void* w, const ActBlockQ16* const* x, int64_t n, fl
       for (int r = 0; r < M; ++r) {
         const ActBlockQ16& a0 = x[r][blk];
         const ActBlockQ16& a1 = x[r][blk + 1];
-        acc[r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(madd16_block(l0, l1, a0)), _mm256_set1_ps(d * a0.d), acc[r]);
-        acc[r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(madd16_block(h0, h1, a1)), _mm256_set1_ps(d * a1.d), acc[r]);
-        corr[r] += dmin * (mn[2 * jp] * a0.d * static_cast<float>(a0.sum) +
-                           mn[2 * jp + 1] * a1.d * static_cast<float>(a1.sum));
+        acc0[r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(madd16_block(l0, l1, a0)), _mm256_set1_ps(d * a0.d), acc0[r]);
+        acc1[r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(madd16_block(h0, h1, a1)), _mm256_set1_ps(d * a1.d), acc1[r]);
+        corr0[r] += dmin * (mn[2 * jp] * a0.d * static_cast<float>(a0.sum));
+        corr1[r] += dmin * (mn[2 * jp + 1] * a1.d * static_cast<float>(a1.sum));
       }
     }
   }
-  for (int r = 0; r < M; ++r) out[r] = hsum(acc[r]) - corr[r];
+  for (int r = 0; r < M; ++r) out[r] = hsum(_mm256_add_ps(acc0[r], acc1[r])) - (corr0[r] + corr1[r]);
 }
 
 template <int M>
 void dot_rows16_q6_K_m(const void* w, const ActBlockQ16* const* x, int64_t n, float* out) {
   const auto* b = static_cast<const BlockQ6_K*>(w);
   const __m256i low4 = _mm256_set1_epi8(0x0F), low2 = _mm256_set1_epi8(0x03), k32 = _mm256_set1_epi8(32);
-  __m256 acc[M];
-  for (int r = 0; r < M; ++r) acc[r] = _mm256_setzero_ps();
+  __m256 acc[2][M];
+  for (int r = 0; r < M; ++r) acc[0][r] = acc[1][r] = _mm256_setzero_ps();
   for (int64_t i = 0; i < n / kQK_K; ++i) {
     const float d = fp16_to_fp32(b[i].d);
     for (int part = 0; part < 2; ++part) {
@@ -1431,13 +1741,128 @@ void dot_rows16_q6_K_m(const void* w, const ActBlockQ16* const* x, int64_t n, fl
         const int64_t blk = i * 8 + 4 * part + g;
         for (int r = 0; r < M; ++r) {
           const ActBlockQ16& a = x[r][blk];
-          acc[r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(madd16_block(w0, w1, a)), _mm256_set1_ps(d * a.d), acc[r]);
+          acc[g & 1][r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(madd16_block(w0, w1, a)), _mm256_set1_ps(d * a.d), acc[g & 1][r]);
         }
       }
     }
   }
-  for (int r = 0; r < M; ++r) out[r] = hsum(acc[r]);
+  for (int r = 0; r < M; ++r) out[r] = hsum(_mm256_add_ps(acc[0][r], acc[1][r]));
 }
+
+// Multi-row int16 Q4_K (DotQ16RowsNFn): dot_rows16_q4_K's arithmetic with
+// the activation terms prepared once per call (see dot_rows_n_q4_K_m).
+template <int M>
+void dot_rows16_n_q4_K_m(const std::byte* w, int64_t w_row_bytes, int64_t n0, int64_t n1, const ActBlockQ16* const* x,
+                         int64_t k, float* const* y, const float* bias) {
+  const int64_t nsb = k / kQK_K;
+  const float* ad[M];
+  const float* ads[M];
+  act_terms<M>(x, k / kActQ8Block, ad, ads);
+  const __m256i low4 = _mm256_set1_epi8(0x0F);
+  for (int64_t row = n0; row < n1; ++row) {
+    const auto* b = reinterpret_cast<const BlockQ4_K*>(w + row * w_row_bytes);
+    __m256 acc0[M], acc1[M], cor[M];
+    for (int r = 0; r < M; ++r) acc0[r] = acc1[r] = cor[r] = _mm256_setzero_ps();
+    for (int64_t i = 0; i < nsb; ++i) {
+      uint8_t sc[8], mn[8];
+      k4_scales_mins(b[i].scales, sc, mn);
+      const __m256 dv = _mm256_set1_ps(fp16_to_fp32(b[i].d));
+      const __m256 mnv = scaled_u8x8(mn, fp16_to_fp32(b[i].dmin));
+      alignas(32) float f[M][8];
+      for (int r = 0; r < M; ++r) {
+        _mm256_store_ps(f[r], _mm256_mul_ps(dv, _mm256_loadu_ps(ad[r] + 8 * i)));
+        cor[r] = _mm256_fmadd_ps(mnv, _mm256_loadu_ps(ads[r] + 8 * i), cor[r]);
+      }
+      for (int jp = 0; jp < 4; ++jp) {
+        const __m256i bytes = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(b[i].qs + 32 * jp));
+        const __m256i lo = _mm256_and_si256(bytes, low4);
+        const __m256i hi = _mm256_and_si256(_mm256_srli_epi16(bytes, 4), low4);
+        const __m256i s0 = _mm256_set1_epi16(sc[2 * jp]), s1 = _mm256_set1_epi16(sc[2 * jp + 1]);
+        const __m256i l0 = _mm256_mullo_epi16(_mm256_cvtepu8_epi16(_mm256_castsi256_si128(lo)), s0);
+        const __m256i l1 = _mm256_mullo_epi16(_mm256_cvtepu8_epi16(_mm256_extracti128_si256(lo, 1)), s0);
+        const __m256i h0 = _mm256_mullo_epi16(_mm256_cvtepu8_epi16(_mm256_castsi256_si128(hi)), s1);
+        const __m256i h1 = _mm256_mullo_epi16(_mm256_cvtepu8_epi16(_mm256_extracti128_si256(hi, 1)), s1);
+        const int64_t blk = i * 8 + 2 * jp;
+        for (int r = 0; r < M; ++r) {
+          acc0[r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(madd16_block(l0, l1, x[r][blk])), _mm256_broadcast_ss(&f[r][2 * jp]), acc0[r]);
+          acc1[r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(madd16_block(h0, h1, x[r][blk + 1])), _mm256_broadcast_ss(&f[r][2 * jp + 1]),
+                                    acc1[r]);
+        }
+      }
+    }
+    const float br = bias ? bias[row] : 0.0f;
+    for (int r = 0; r < M; ++r) y[r][row - n0] = hsum(_mm256_add_ps(acc0[r], acc1[r])) - hsum(cor[r]) + br;
+  }
+}
+
+// Multi-row int16 Q6_K (DotQ16RowsNFn): dot_rows16_q6_K's arithmetic, d times
+// the activation scales formed once per super-block and row.
+template <int M>
+void dot_rows16_n_q6_K_m(const std::byte* w, int64_t w_row_bytes, int64_t n0, int64_t n1, const ActBlockQ16* const* x,
+                         int64_t k, float* const* y, const float* bias) {
+  const int64_t nsb = k / kQK_K;
+  const float* ad[M];
+  const float* ads[M];
+  act_terms<M>(x, k / kActQ8Block, ad, ads);
+  const __m256i low4 = _mm256_set1_epi8(0x0F), low2 = _mm256_set1_epi8(0x03), k32 = _mm256_set1_epi8(32);
+  for (int64_t row = n0; row < n1; ++row) {
+    const auto* b = reinterpret_cast<const BlockQ6_K*>(w + row * w_row_bytes);
+    __m256 acc[2][M];
+    for (int r = 0; r < M; ++r) acc[0][r] = acc[1][r] = _mm256_setzero_ps();
+    for (int64_t i = 0; i < nsb; ++i) {
+      const __m256 dv = _mm256_set1_ps(fp16_to_fp32(b[i].d));
+      alignas(32) float f[M][8];
+      for (int r = 0; r < M; ++r) _mm256_store_ps(f[r], _mm256_mul_ps(dv, _mm256_loadu_ps(ad[r] + 8 * i)));
+      for (int part = 0; part < 2; ++part) {
+        const uint8_t* ql = b[i].ql + 64 * part;
+        const __m256i l0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ql));
+        const __m256i l1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ql + 32));
+        const __m256i h = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(b[i].qh + 32 * part));
+        auto hbits = [&](int shift) { return _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(h, shift), low2), 4); };
+        const __m256i q[4] = {
+            _mm256_sub_epi8(_mm256_or_si256(_mm256_and_si256(l0, low4), hbits(0)), k32),
+            _mm256_sub_epi8(_mm256_or_si256(_mm256_and_si256(l1, low4), hbits(2)), k32),
+            _mm256_sub_epi8(_mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(l0, 4), low4), hbits(4)), k32),
+            _mm256_sub_epi8(_mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(l1, 4), low4), hbits(6)), k32)};
+        const int8_t* sc = b[i].scales + 8 * part;
+        for (int g = 0; g < 4; ++g) {
+          const __m256i w0 =
+              _mm256_mullo_epi16(_mm256_cvtepi8_epi16(_mm256_castsi256_si128(q[g])), _mm256_set1_epi16(sc[2 * g]));
+          const __m256i w1 =
+              _mm256_mullo_epi16(_mm256_cvtepi8_epi16(_mm256_extracti128_si256(q[g], 1)), _mm256_set1_epi16(sc[2 * g + 1]));
+          const int blk = 4 * part + g;
+          for (int r = 0; r < M; ++r) {
+            acc[g & 1][r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(madd16_block(w0, w1, x[r][i * 8 + blk])),
+                                            _mm256_broadcast_ss(&f[r][blk]), acc[g & 1][r]);
+          }
+        }
+      }
+    }
+    const float br = bias ? bias[row] : 0.0f;
+    for (int r = 0; r < M; ++r) y[r][row - n0] = hsum(_mm256_add_ps(acc[0][r], acc[1][r])) + br;
+  }
+}
+
+#define DYNACORE_DOT_ROWS_N(name, Act)                                                                              \
+  void name(const void* w, int64_t w_row_bytes, int64_t n0, int64_t n1, const Act* const* x, int m, int64_t k,     \
+            float* const* y, const float* bias) {                                                                  \
+    const auto* wb = static_cast<const std::byte*>(w);                                                             \
+    switch (m) {                                                                                                   \
+      case 1: name##_m<1>(wb, w_row_bytes, n0, n1, x, k, y, bias); break;                                          \
+      case 2: name##_m<2>(wb, w_row_bytes, n0, n1, x, k, y, bias); break;                                          \
+      case 3: name##_m<3>(wb, w_row_bytes, n0, n1, x, k, y, bias); break;                                          \
+      case 4: name##_m<4>(wb, w_row_bytes, n0, n1, x, k, y, bias); break;                                          \
+      case 5: name##_m<5>(wb, w_row_bytes, n0, n1, x, k, y, bias); break;                                          \
+      case 6: name##_m<6>(wb, w_row_bytes, n0, n1, x, k, y, bias); break;                                          \
+      case 7: name##_m<7>(wb, w_row_bytes, n0, n1, x, k, y, bias); break;                                          \
+      default: name##_m<8>(wb, w_row_bytes, n0, n1, x, k, y, bias); break;                                         \
+    }                                                                                                              \
+  }
+DYNACORE_DOT_ROWS_N(dot_rows_n_q6_K, ActBlockQ8)
+DYNACORE_DOT_ROWS_N(dot_rows_n_q8_0, ActBlockQ8)
+DYNACORE_DOT_ROWS_N(dot_rows16_n_q4_K, ActBlockQ16)
+DYNACORE_DOT_ROWS_N(dot_rows16_n_q6_K, ActBlockQ16)
+#undef DYNACORE_DOT_ROWS_N
 
 #define DYNACORE_DOT_ROWS16(name)                                                                     \
   void name(const void* w, const ActBlockQ16* const* x, int m, int64_t n, float* out) {            \
@@ -1511,13 +1936,18 @@ bool register_avx2_kernels(CpuKernels& k) {
   k.dot_q8_rows[static_cast<size_t>(DType::kQ4_0)] = dot_rows_q4_0;
   k.dot_q8_rows[static_cast<size_t>(DType::kQ5_0)] = dot_rows_q5_0;
   k.dot_q8_rows[static_cast<size_t>(DType::kQ4_K)] = dot_rows_q4_K;
+  k.dot_q8_rows_n[static_cast<size_t>(DType::kQ4_K)] = dot_rows_n_q4_K;
   k.dot_q8_rows[static_cast<size_t>(DType::kQ6_K)] = dot_rows_q6_K;
+  k.dot_q8_rows_n[static_cast<size_t>(DType::kQ6_K)] = dot_rows_n_q6_K;
+  k.dot_q8_rows_n[static_cast<size_t>(DType::kQ8_0)] = dot_rows_n_q8_0;
   k.quantize_act_sb = quantize_act_sb;
   k.dot_q8_sb_rows[static_cast<size_t>(DType::kQ4_K)] = dot_rows_sb_q4_K;
   k.dot_q8_sb_rows[static_cast<size_t>(DType::kQ6_K)] = dot_rows_sb_q6_K;
   k.quantize_act_sx = quantize_act_sx;
   k.dot_q8_sx_rows[static_cast<size_t>(DType::kQ4_K)] = dot_rows_sx_q4_K;
   k.dot_q8_sx_rows[static_cast<size_t>(DType::kQ6_K)] = dot_rows_sx_q6_K;
+  k.dot_q8_sx_rows_n[static_cast<size_t>(DType::kQ4_K)] = dot_rows_n_sx_q4_K;
+  k.dot_q8_sx_rows_n[static_cast<size_t>(DType::kQ6_K)] = dot_rows_n_sx_q6_K;
   k.dot_q8_sx_x8_q4_K = dot_x8_sx_q4_K;
   k.dot_q8_sx_x8_q4_K_rows8 = dot_x8_sx_q4_K_rows8;  // used only with KernelPlan::packed_int8_8rows
   k.dot_q16_x8_q4_K = dot_x8_q16_q4_K;
@@ -1528,6 +1958,8 @@ bool register_avx2_kernels(CpuKernels& k) {
   k.dot_q16_rows[static_cast<size_t>(DType::kQ8_0)] = dot_rows16_q8_0;
   k.dot_q16_rows[static_cast<size_t>(DType::kQ4_K)] = dot_rows16_q4_K;
   k.dot_q16_rows[static_cast<size_t>(DType::kQ6_K)] = dot_rows16_q6_K;
+  k.dot_q16_rows_n[static_cast<size_t>(DType::kQ4_K)] = dot_rows16_n_q4_K;
+  k.dot_q16_rows_n[static_cast<size_t>(DType::kQ6_K)] = dot_rows16_n_q6_K;
   return true;
 }
 

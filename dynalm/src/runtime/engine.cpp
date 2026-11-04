@@ -480,6 +480,11 @@ Result<std::unique_ptr<Engine>> Engine::create_on(EngineOptions opts) {
   if (!opts.eagle_path.empty()) {
     if (!opts.draft_model_path.empty()) return InvalidArgument("--spec-eagle and a draft model: choose one");
     if (opts.scheduler.spec_k <= 0) opts.scheduler.spec_k = 4;
+    // Draft length from measured step costs: on a compute-bound CPU every
+    // verified row costs, and the acceptance-pause rule alone left a
+    // 69%-acceptance head (Qwen3-8B) drafting in few steps (-15% time per
+    // token with it on a 4-core Zen 2; Qwen3-4B unchanged).
+    opts.scheduler.spec_cost_aware = true;
     // The head runs on the device itself (not through the recorder): between
     // target steps, when nothing recorded is pending.
     ENGINE_ASSIGN_OR_RETURN(e->eagle_, Eagle3Drafter::create(opts.eagle_path, *e->transformer_, *e->backend_,

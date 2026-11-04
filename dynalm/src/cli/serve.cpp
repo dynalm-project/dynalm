@@ -248,6 +248,7 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
     eo.draft_model_path = *draft;
     eo.scheduler.spec_k = spec_k;
   }
+  if (!eo.eagle_path.empty()) eo.scheduler.spec_k = spec_k;  // --spec-k applies to --spec-eagle too
   eo.kv_tokens = ctx;
   eo.max_batch_tokens = batch;  // 0 = the device default (Engine)
   so.http_threads = http_threads;
