@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Documentation
+- `docs/perf/x86-zen2-2026-11.md`: first x86-64 measurements (AMD Zen 2, AVX2, uncontrolled):
+  DynaLM 0.5.0's `dynalm cpu-report`, and development builds with faster AVX2 decode kernels and
+  EAGLE-3 speculative decoding on the CPU. Raw data in `docs/perf/data/x86-zen2-2026-11-03/`.
+
 ## [0.5.0] - 2026-10-30
 
 `dynalm cpu-report`: one command that measures DynaLM against llama.cpp on any CPU and writes a
