@@ -1956,31 +1956,35 @@ void test_split_gguf(const std::filesystem::path& dir) {
     paths.push_back((dir / name).string());
     CHECK(test::write_file(paths.back(), parts[static_cast<size_t>(i)]));
   }
-  auto a = load_model(whole);
-  auto b = load_model(paths[0]);
-  CHECK(a.ok() && b.ok());
-  CHECK((*a)->weight_bytes == (*b)->weight_bytes);
-  auto open = [&](const std::string& p, int64_t cache) {
-    EngineOptions o;
-    o.model_path = p;
-    o.backend = DeviceKind::kCpu;
-    o.threads = 2;
-    o.kv_tokens = 1024;
-    o.expert_cache_bytes = cache;
-    auto e = Engine::create(o);
-    if (!e.ok()) std::fprintf(stderr, "split gguf: %s\n", e.status().to_string().c_str());
-    CHECK(e.ok());
-    return std::move(*e);
-  };
-  auto one = open(whole, 0), split = open(paths[0], 0), split_disk = open(paths[0], int64_t{1} << 30);
-  for (const std::string& p : kPrompts) {
-    const std::string want = gen(*one, p, 12).text;
-    CHECK(gen(*split, p, 12).text == want);
-    CHECK(gen(*split_disk, p, 12).text == want);
-  }
+  {
+    auto a = load_model(whole);
+    auto b = load_model(paths[0]);
+    CHECK(a.ok() && b.ok());
+    CHECK((*a)->weight_bytes == (*b)->weight_bytes);
+    auto open = [&](const std::string& p, int64_t cache) {
+      EngineOptions o;
+      o.model_path = p;
+      o.backend = DeviceKind::kCpu;
+      o.threads = 2;
+      o.kv_tokens = 1024;
+      o.expert_cache_bytes = cache;
+      auto e = Engine::create(o);
+      if (!e.ok()) std::fprintf(stderr, "split gguf: %s\n", e.status().to_string().c_str());
+      CHECK(e.ok());
+      return std::move(*e);
+    };
+    auto one = open(whole, 0), split = open(paths[0], 0), split_disk = open(paths[0], int64_t{1} << 30);
+    for (const std::string& p : kPrompts) {
+      const std::string want = gen(*one, p, 12).text;
+      CHECK(gen(*split, p, 12).text == want);
+      CHECK(gen(*split_disk, p, 12).text == want);
+    }
+  }  // the models and engines unmap the parts here: Windows cannot delete a mapped file
   auto later = load_model(paths[1]);
   CHECK(!later.ok() && later.status().message().find("open the first part") != std::string::npos);
-  std::filesystem::remove(paths[2]);
+  std::error_code ec;
+  std::filesystem::remove(paths[2], ec);
+  CHECK(!ec);
   auto missing = load_model(paths[0]);
   CHECK(!missing.ok() && missing.status().message().find("part 3") != std::string::npos);
 }
