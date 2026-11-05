@@ -1,6 +1,8 @@
 #include "loader/gguf/gguf_model.h"
 
 #include <charconv>
+#include <cstdio>
+#include <cstring>
 #include <string>
 #include "common/core.h"
 
@@ -261,22 +263,70 @@ bool parse_tensor_name(std::string_view name, TensorRole& role, int& layer) {
 }
 
 Result<TensorMapping> map_tensors(const GgufFile& f, int num_layers) {
+  const GgufFile* one[] = {&f};
+  return map_tensors(one, num_layers);
+}
+
+Result<TensorMapping> map_tensors(std::span<const GgufFile* const> parts, int num_layers) {
   TensorMapping m{TensorRegistry(num_layers), {}};
-  for (const TensorInfo& info : f.tensors()) {
-    TensorRole role;
-    int layer;
-    if (!parse_tensor_name(info.name, role, layer)) {
-      m.unmapped.emplace_back(info.name);
-      continue;
+  for (const GgufFile* f : parts) {
+    for (const TensorInfo& info : f->tensors()) {
+      TensorRole role;
+      int layer;
+      if (!parse_tensor_name(info.name, role, layer)) {
+        m.unmapped.emplace_back(info.name);
+        continue;
+      }
+      if (layer >= num_layers) {
+        return Corrupt("tensor '" + std::string(info.name) + "' refers to layer " + std::to_string(layer) +
+                       " but the model has " + std::to_string(num_layers));
+      }
+      ENGINE_ASSIGN_OR_RETURN(Tensor t, f->load_tensor(info));
+      ENGINE_RETURN_IF_ERROR(m.registry.add(role, layer, std::move(t)));
     }
-    if (layer >= num_layers) {
-      return Corrupt("tensor '" + std::string(info.name) + "' refers to layer " + std::to_string(layer) +
-                     " but the model has " + std::to_string(num_layers));
-    }
-    ENGINE_ASSIGN_OR_RETURN(Tensor t, f.load_tensor(info));
-    ENGINE_RETURN_IF_ERROR(m.registry.add(role, layer, std::move(t)));
   }
   return m;
+}
+
+Result<std::vector<std::unique_ptr<GgufFile>>> open_parts(const std::string& path) {
+  std::vector<std::unique_ptr<GgufFile>> parts;
+  ENGINE_ASSIGN_OR_RETURN(auto first, GgufFile::open(path));
+  const auto count = first->get_uint("split.count");
+  if (!count.ok() || *count <= 1) {
+    parts.push_back(std::move(first));
+    return parts;
+  }
+  if (*count > 512) return Corrupt("GGUF: split.count " + std::to_string(*count) + " is out of range");
+  if (auto no = first->get_uint("split.no"); !no.ok() || *no != 0) {
+    return InvalidArgument("'" + path + "' is part " + std::to_string(no.ok() ? *no + 1 : 0) + " of a split model; open "
+                           "the first part (...-00001-of-" + std::to_string(*count) + ".gguf)");
+  }
+  // NAME-00001-of-0000N.gguf -> NAME-0000k-of-0000N.gguf (llama.cpp's naming).
+  char tail[32];
+  std::snprintf(tail, sizeof(tail), "-%05d-of-%05d.gguf", 1, static_cast<int>(*count));
+  if (path.size() < std::strlen(tail) || path.compare(path.size() - std::strlen(tail), std::string::npos, tail) != 0) {
+    return InvalidArgument("split model '" + path + "': expected a name ending in " + tail);
+  }
+  const std::string prefix = path.substr(0, path.size() - std::strlen(tail));
+  uint64_t tensors = first->tensors().size();
+  parts.push_back(std::move(first));
+  for (uint64_t i = 1; i < *count; ++i) {
+    std::snprintf(tail, sizeof(tail), "-%05d-of-%05d.gguf", static_cast<int>(i + 1), static_cast<int>(*count));
+    const std::string p = prefix + tail;
+    auto part = GgufFile::open(p);
+    if (!part.ok()) return Status(part.status().code(), "split model: part " + std::to_string(i + 1) + ": " + part.status().message());
+    const auto no = (*part)->get_uint("split.no"), n = (*part)->get_uint("split.count");
+    if (!no.ok() || *no != i || !n.ok() || *n != *count) {
+      return Corrupt("split model: '" + p + "' is not part " + std::to_string(i + 1) + " of " + std::to_string(*count));
+    }
+    tensors += (*part)->tensors().size();
+    parts.push_back(std::move(*part));
+  }
+  if (auto want = parts[0]->get_uint("split.tensors.count"); want.ok() && *want != tensors) {
+    return Corrupt("split model: the parts hold " + std::to_string(tensors) + " tensors, the first part lists " +
+                   std::to_string(*want));
+  }
+  return parts;
 }
 
 }  // namespace dynalm::gguf

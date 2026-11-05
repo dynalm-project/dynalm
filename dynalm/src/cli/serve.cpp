@@ -12,6 +12,7 @@
 
 #include "dynacore/device/device_registry.h"
 #include "cli/commands.h"
+#include "cli/size_arg.h"
 #include "config/config.h"
 #include "registry/model_registry.h"
 #include "logging/log.h"
@@ -34,7 +35,8 @@ constexpr OptionSpec kServeOptions[] = {
     {"max-active"},   {"request-timeout"}, {"temperature"}, {"backend"}, {"cpu", false}, {"gpu", false}, {"execution"}, {"shutdown-timeout"}, {"disable-admin", false}, {"int8-decode"}, {"policy"},
     {"api-key-file"}, {"api-keys-file"}, {"allow-unauthenticated", false}, {"disable-metrics", false},
     {"solo-prefill-chunk"}, {"solo-prefill-split", false}, {"prefill-order"}, {"prefill-aging-ms"},
-    {"spec"}, {"spec-k"}, {"mode"},
+    {"spec"}, {"spec-k"}, {"mode"}, {"experts-from-disk", false}, {"expert-cache"}, {"prompt-cache"},
+    {"prompt-cache-size"}, {"spec-eagle"},
 };
 
 void usage() {
@@ -48,6 +50,13 @@ void usage() {
                "  -c, --ctx N|auto        KV cache capacity in tokens (auto: from free RAM)\n"
                "  --batch N|auto          max tokens per forward pass (auto: 256)\n"
                "  --kv f16|f32|q8_0       KV cache dtype (default f16; q8_0 halves its memory)\n"
+               "  --experts-from-disk     MoE models larger than RAM: read the experts from the model file into a\n"
+               "                          RAM cache (CPU, DynaCore kernels; same outputs). --expert-cache SIZE sets\n"
+               "                          the cache (e.g. 8GB; default: what RAM leaves)\n"
+               "  --prompt-cache DIR      keep prompt KV blocks on disk and reuse them across runs (CPU);\n"
+               "                          --prompt-cache-size SIZE caps the files (oldest deleted first)\n"
+               "  --spec-eagle DIR        speculative decoding with an EAGLE-3 head for this model (config.json +\n"
+               "                          model.safetensors; CPU); --spec-k sets the drafts (default 4)\n"
                "  --int8-decode N         native CPU: int8 activations for matmuls of <= N rows (default 4, 64 on ARM; 0 = off;\n"
                "                          off makes outputs independent of batching, DD-053)\n"
                "  --policy P              balanced (default) | latency | throughput: first-token wait vs\n"
@@ -128,6 +137,11 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
     else if (a == "-c" || a == "--ctx") ok = parse_int_or_auto(value(), ctx);
     else if (a == "--batch") ok = parse_int_or_auto(value(), batch);
     else if (a == "--int8-decode") ok = parse_int(value(), eo.int8_decode_rows) && eo.int8_decode_rows >= 0;
+    else if (a == "--experts-from-disk") eo.expert_cache_bytes = eo.expert_cache_bytes > 0 ? eo.expert_cache_bytes : -1;
+    else if (a == "--expert-cache") ok = cli::parse_byte_size(value(), eo.expert_cache_bytes);
+    else if (a == "--spec-eagle") ok = !(eo.eagle_path = std::string(value())).empty();
+    else if (a == "--prompt-cache") ok = !(eo.scheduler.prompt_cache_dir = std::string(value())).empty();
+    else if (a == "--prompt-cache-size") ok = cli::parse_byte_size(value(), eo.scheduler.prompt_cache_max_bytes);
     else if (a == "--policy") ok = parse_scheduler_policy(value(), eo.scheduler.policy);
     else if (a == "--solo-prefill-chunk") ok = parse_int(value(), eo.scheduler.solo_prefill_chunk) && eo.scheduler.solo_prefill_chunk >= 0;
     else if (a == "--solo-prefill-split") eo.scheduler.solo_prefill_split = true;
@@ -234,6 +248,7 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
     eo.draft_model_path = *draft;
     eo.scheduler.spec_k = spec_k;
   }
+  if (!eo.eagle_path.empty()) eo.scheduler.spec_k = spec_k;  // --spec-k applies to --spec-eagle too
   eo.kv_tokens = ctx;
   eo.max_batch_tokens = batch;  // 0 = the device default (Engine)
   so.http_threads = http_threads;
@@ -267,7 +282,10 @@ int cmd_serve(std::span<const std::string_view> raw_args) {
              sc.solo_prefill_split ? "split across prompts" : "FIFO");
   }
   LOG_INFO("Prefix cache: {}", eo.scheduler.enable_prefix_cache ? "enabled (radix)" : "disabled");
-  if (sc.spec_k > 0) LOG_INFO("Speculative decoding: prompt lookup, up to {} drafts per stream", sc.spec_k);
+  // A draft model or an EAGLE-3 head logs itself at load.
+  if (sc.spec_k > 0 && eo.draft_model_path.empty() && eo.eagle_path.empty()) {
+    LOG_INFO("Speculative decoding: prompt lookup, up to {} drafts per stream", sc.spec_k);
+  }
 
   Server server(e, so);
   if (Status st = server.start(); !st.ok()) {

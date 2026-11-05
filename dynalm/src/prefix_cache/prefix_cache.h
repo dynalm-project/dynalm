@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <list>
 #include <memory>
+#include <string>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -41,6 +42,7 @@ struct PrefixCacheStats {
   uint64_t inserted_blocks = 0;
   uint64_t evicted_blocks = 0;
   int64_t cached_blocks = 0;
+  uint64_t disk_loaded_blocks = 0;  // prompt cache on disk: blocks read from files (their tokens count as hits)
   double hit_rate() const { return lookup_tokens ? static_cast<double>(hit_tokens) / lookup_tokens : 0.0; }
 };
 
@@ -66,6 +68,14 @@ class PrefixCache {
                       int32_t num_full_blocks) = 0;
   // Frees up to `n` blocks that only the cache references. Returns the count.
   virtual int32_t evict(int32_t n) = 0;
+  // A sequence is preempted (KV pressure): make sure its first `num_full`
+  // blocks survive the KV release if this cache can keep them outside the
+  // KV pool (the prompt cache on disk writes them now). Default: nothing.
+  virtual void spill(std::span<const TokenId> tokens, std::span<const int32_t> blocks, int32_t num_full) {
+    (void)tokens;
+    (void)blocks;
+    (void)num_full;
+  }
   virtual const PrefixCacheStats& stats() const = 0;
 };
 
@@ -73,5 +83,15 @@ class PrefixCache {
 std::unique_ptr<PrefixCache> make_hash_prefix_cache(KvBlockPool& pool, int32_t max_blocks = 0);
 // Radix tree of blocks with token-granular partial-block reuse (DD-030).
 std::unique_ptr<PrefixCache> make_radix_prefix_cache(KvBlockPool& pool, int32_t max_blocks = 0);
+// The prompt cache on disk (--prompt-cache): `inner` plus full KV blocks
+// kept as files in `dir` (one directory per model and KV format), loaded
+// when a prompt's prefix is on disk but not in memory. At most `max_bytes`
+// of files (0 = unbounded), oldest deleted first. Needs host-memory KV
+// (KvBlockPool::host_kv).
+std::unique_ptr<PrefixCache> make_disk_prefix_cache(std::unique_ptr<PrefixCache> inner, KvBlockPool& pool,
+                                                    const std::string& dir, int64_t max_bytes);
+// Waits until blocks queued for writing are on disk (tests); no-op for
+// other caches.
+void flush_disk_prefix_cache(PrefixCache& cache);
 
 }  // namespace dynalm

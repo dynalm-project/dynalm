@@ -44,6 +44,12 @@
 #include "dynacore/gpu/ggml_device.h"
 #include "dynacore/hardware/process_stats.h"
 #include "loader/model_loader.h"
+#include "dynacore/device/device_registry.h"
+#include "kv_cache/kv_cache.h"
+#include "model/expert_cache.h"
+#include "prefix_cache/prefix_cache.h"
+#include "model/transformer.h"
+#include "runtime/sequence.h"
 #include "model/architecture.h"
 #include "loader/model_source.h"
 #include "loader/gguf/gguf_tokenizer.h"
@@ -1515,6 +1521,489 @@ void test_child_process(const std::filesystem::path& dir) {
 
 // dynalm cpu-report: the measurement plan per CPU, model choice, the pinned
 // llama.cpp asset, the agreement verdict and the report.
+// The expert cache (--experts-from-disk) changes where expert weights are
+// read from, never what is computed: logits are bit-identical to the mapped
+// weights, with a cache so small that every step evicts, through prefill
+// chunks and decode steps; text through the engine at 1 and 4 concurrent
+// requests is identical too; a cache below one layer's experts is refused.
+void test_expert_cache(const std::filesystem::path& dir) {
+  test::TinyModelSpec spec;
+  spec.experts = 16;
+  spec.experts_used = 4;
+  spec.layers = 3;
+  const std::string path = (dir / "tiny-moe.gguf").string();
+  CHECK(test::write_file(path, test::tiny_model_gguf(spec)));
+
+  // Transformer level: the same tokens through two instances, one with the cache.
+  auto model = load_model(path);
+  CHECK(model.ok());
+  const ModelConfig& c = (*model)->config;
+  CHECK(c.moe.num_experts == 16 && c.moe.experts_per_token == 4);
+  ThreadPool pool(2);
+  auto dev = create_device(DeviceKind::kCpu, pool);
+  CHECK(dev.ok());
+  auto plain = Transformer::create(c, (*model)->weights, **dev, 64, 512);
+  auto cached = Transformer::create(c, (*model)->weights, **dev, 64, 512);
+  CHECK(plain.ok() && cached.ok());
+  ExpertCache::Options eo;
+  eo.budget_bytes = 1;  // too small: refused with the minimum
+  Status small = (*cached)->enable_expert_cache(eo);
+  CHECK(!small.ok() && small.message().find("--expert-cache is too small") != std::string::npos);
+  // One layer's experts plus 2 slots: almost every acquire evicts.
+  eo.budget_bytes = int64_t{1} << 40;
+  CHECK((*cached)->enable_expert_cache(eo).ok());
+  const int64_t slot = (*cached)->expert_cache()->slot_bytes();
+  eo.budget_bytes = slot * (16 + 2);
+  eo.chunk_bytes = 1 << 16;  // several chunks per expert part
+  CHECK((*cached)->enable_expert_cache(eo).ok());
+  CHECK((*cached)->expert_cache()->slots() == 18);
+  CHECK((*cached)->expert_cache()->expert_bytes() > 0);
+
+  auto run = [&](Transformer& t, std::vector<std::vector<float>>& all) {
+    auto kv = KvBlockPool::create(kv_geometry_for(c, DType::kF16, 16, 256), **dev);
+    CHECK(kv.ok());
+    std::vector<int32_t> blocks;
+    for (int i = 0; i < 16; ++i) {
+      auto b = (*kv)->allocate();
+      CHECK(b.ok());
+      blocks.push_back(*b);
+    }
+    std::vector<float> logits(static_cast<size_t>(c.vocab_size));
+    // A 40-token prompt in chunks of 17 / 23, then 12 decode steps.
+    std::vector<TokenId> toks;
+    for (int i = 0; i < 40; ++i) toks.push_back(static_cast<TokenId>((i * 37 + 11) % 256));
+    std::vector<int32_t> pos(40);
+    for (int i = 0; i < 40; ++i) pos[static_cast<size_t>(i)] = i;
+    CHECK(t.forward(std::span(toks).first(17), std::span(pos).first(17), **kv, blocks, logits).ok());
+    all.push_back(logits);
+    CHECK(t.forward(std::span(toks).subspan(17), std::span(pos).subspan(17), **kv, blocks, logits).ok());
+    all.push_back(logits);
+    for (int32_t p = 40; p < 52; ++p) {
+      const auto next = static_cast<TokenId>(std::max_element(logits.begin(), logits.end()) - logits.begin());
+      const TokenId tk[1] = {next};
+      const int32_t ps[1] = {p};
+      CHECK(t.forward(tk, ps, **kv, blocks, logits).ok());
+      all.push_back(logits);
+    }
+  };
+  std::vector<std::vector<float>> a, b;
+  run(**plain, a);
+  run(**cached, b);
+  CHECK(a.size() == b.size());
+  for (size_t i = 0; i < a.size(); ++i) {
+    CHECK(std::memcmp(a[i].data(), b[i].data(), a[i].size() * sizeof(float)) == 0);
+  }
+  const ExpertCache::Stats st = (*cached)->expert_cache()->stats();
+  CHECK(st.misses > 0 && st.evictions > 0 && st.bytes_read > 0 && st.hits > 0);
+  CHECK(st.prefetched > 0);  // next-layer prediction ran (DYNALM_EXPERT_PREFETCH unset)
+
+  // Shared reads across users (#6): one step of 4 sequences reads each
+  // expert of each layer at most once, whatever number of rows use it.
+  {
+    auto t = Transformer::create(c, (*model)->weights, **dev, 64, 512);
+    CHECK(t.ok());
+    ExpertCache::Options big;
+    big.budget_bytes = slot * 16 * c.num_layers;  // every expert fits: no eviction
+    CHECK((*t)->enable_expert_cache(big).ok());
+    auto kv = KvBlockPool::create(kv_geometry_for(c, DType::kF16, 16, 256), **dev);
+    CHECK(kv.ok());
+    std::vector<std::vector<int32_t>> tables(4);
+    std::vector<std::vector<TokenId>> toks(4);
+    std::vector<SeqBatch> seqs;
+    for (int s = 0; s < 4; ++s) {
+      auto blk = (*kv)->allocate();
+      CHECK(blk.ok());
+      tables[static_cast<size_t>(s)] = {*blk};
+      for (int i = 0; i < 6; ++i) toks[static_cast<size_t>(s)].push_back(static_cast<TokenId>((s * 61 + i * 7) % 256));
+    }
+    for (int s = 0; s < 4; ++s) seqs.push_back({toks[static_cast<size_t>(s)], 0, tables[static_cast<size_t>(s)], true, 1});
+    std::vector<float> logits(static_cast<size_t>(4 * c.vocab_size));
+    CHECK((*t)->forward_batch(seqs, **kv, logits).ok());
+    const ExpertCache::Stats one = (*t)->expert_cache()->stats();
+    const int64_t reads = one.misses + one.prefetched;  // every expert read is one of these
+    CHECK(reads > 0 && reads <= 16 * c.num_layers);
+    CHECK(one.bytes_read <= 16 * c.num_layers * slot);
+  }
+
+  // Engine level: same text with and without the cache, alone and 4 at once.
+  auto open = [&](int64_t cache, int32_t spec_k = 0) {
+    EngineOptions o;
+    o.model_path = path;
+    o.backend = DeviceKind::kCpu;
+    o.threads = 2;
+    o.kv_tokens = 1024;
+    o.expert_cache_bytes = cache;
+    o.scheduler.spec_k = spec_k;
+    auto e = Engine::create(o);
+    if (!e.ok()) std::fprintf(stderr, "expert cache engine: %s\n", e.status().to_string().c_str());
+    CHECK(e.ok());
+    return std::move(*e);
+  };
+  auto ref = open(0), ec = open(slot * 17);
+  for (const std::string& p : kPrompts) CHECK(gen(*ref, p, 12).text == gen(*ec, p, 12).text);
+  {
+    // Prompt-lookup drafts sized by cost (spec_cost_aware, on with the cache): same text.
+    auto spec = open(slot * 17, 4);
+    const std::string rep_prompt = "one two three four one two three four one two three";
+    CHECK(gen(*ref, rep_prompt, 24).text == gen(*spec, rep_prompt, 24).text);
+    for (const std::string& p : kPrompts) CHECK(gen(*ref, p, 12).text == gen(*spec, p, 12).text);
+  }
+  std::vector<std::shared_ptr<RequestStream>> rs, es;
+  for (const std::string& p : kPrompts) {
+    auto x = ref->generate_text(p, false, greedy(10));
+    auto y = ec->generate_text(p, false, greedy(10));
+    CHECK(x.ok() && y.ok());
+    rs.push_back(*x);
+    es.push_back(*y);
+  }
+  for (size_t i = 0; i < rs.size(); ++i) CHECK(drain(rs[i]).text == drain(es[i]).text);
+  // Not a MoE model: refused.
+  const std::string dense_path = (dir / "tiny-dense-for-experts.gguf").string();
+  CHECK(test::write_file(dense_path, test::tiny_model_gguf()));
+  EngineOptions dense;
+  dense.model_path = dense_path;
+  dense.expert_cache_bytes = int64_t{1} << 30;
+  auto d = Engine::create(dense);
+  CHECK(!d.ok() && d.status().message().find("not a mixture-of-experts model") != std::string::npos);
+}
+
+// Prompt cache on disk (--prompt-cache): a second engine (a restart) loads
+// the prompt's KV blocks from files and writes the same text as an engine
+// without any cache; files from another model are never used.
+void test_prompt_cache_disk(const std::filesystem::path& dir) {
+  const std::filesystem::path pc = dir / "prompt-cache";
+  std::filesystem::remove_all(pc);
+  const std::string path = (dir / "tiny-pc.gguf").string();
+  CHECK(test::write_file(path, test::tiny_model_gguf()));
+  auto open = [&](bool cache) {
+    EngineOptions o;
+    o.model_path = path;
+    o.backend = DeviceKind::kCpu;
+    o.threads = 2;
+    o.kv_tokens = 2048;
+    o.int8_decode_rows = 0;  // outputs independent of how rows are batched (DD-031)
+    if (cache) o.scheduler.prompt_cache_dir = pc.string();
+    auto e = Engine::create(o);
+    CHECK(e.ok());
+    return std::move(*e);
+  };
+  const std::string prompt = kPrompts[3] + " " + kShared + kPrompts[0];  // several full blocks
+  auto ref = open(false);
+  const std::string want = gen(*ref, prompt, 16).text;
+  {
+    auto first = open(true);
+    CHECK(gen(*first, prompt, 16).text == want);
+    CHECK(first->stats().prefix.disk_loaded_blocks == 0);
+  }  // destroying the engine writes every queued block
+  size_t files = 0;
+  for (const auto& d : std::filesystem::recursive_directory_iterator(pc)) files += d.path().extension() == ".kvb";
+  CHECK(files >= 8);
+  auto second = open(true);
+  CHECK(gen(*second, prompt, 16).text == want);
+  CHECK(second->stats().prefix.disk_loaded_blocks >= 8);
+  // Another model: its own directory, nothing loaded.
+  test::TinyModelSpec other;
+  other.seed = 99;
+  const std::string other_path = (dir / "tiny-pc-other.gguf").string();
+  CHECK(test::write_file(other_path, test::tiny_model_gguf(other)));
+  EngineOptions o;
+  o.model_path = other_path;
+  o.backend = DeviceKind::kCpu;
+  o.threads = 2;
+  o.kv_tokens = 2048;
+  o.scheduler.prompt_cache_dir = pc.string();
+  auto third = Engine::create(o);
+  CHECK(third.ok());
+  (void)gen(**third, prompt, 4);
+  CHECK((*third)->stats().prefix.disk_loaded_blocks == 0);
+}
+
+// KV spilled to disk (#13): with a KV pool too small for 4 concurrent
+// requests, the scheduler preempts; a preempted request's full blocks (prompt
+// and generated) were saved by the prompt cache, so on resuming they come
+// back from disk instead of being recomputed. Text equals a roomy engine's.
+void test_kv_spill_disk(const std::filesystem::path& dir) {
+  const std::filesystem::path pc = dir / "kv-spill";
+  std::filesystem::remove_all(pc);
+  const std::string path = (dir / "tiny-spill.gguf").string();
+  CHECK(test::write_file(path, test::tiny_model_gguf()));
+  auto open = [&](int64_t kv_tokens, bool cache) {
+    EngineOptions o;
+    o.model_path = path;
+    o.backend = DeviceKind::kCpu;
+    o.threads = 2;
+    o.kv_tokens = kv_tokens;
+    o.int8_decode_rows = 0;  // outputs independent of batching (DD-031)
+    if (cache) o.scheduler.prompt_cache_dir = pc.string();
+    auto e = Engine::create(o);
+    CHECK(e.ok());
+    return std::move(*e);
+  };
+  auto roomy = open(4096, false), tight = open(320, true);
+  std::vector<std::string> prompts;
+  for (int i = 0; i < 4; ++i) prompts.push_back(kPrompts[static_cast<size_t>(i)] + " " + kShared.substr(0, 40 + 10 * i));
+  auto run = [&](Engine& e) {
+    std::vector<std::shared_ptr<RequestStream>> ss;
+    for (const std::string& p : prompts) {
+      auto s = e.generate_text(p, false, greedy(48));
+      CHECK(s.ok());
+      ss.push_back(*s);
+    }
+    std::vector<std::string> out;
+    for (auto& s : ss) out.push_back(drain(s).text);
+    return out;
+  };
+  CHECK(run(*roomy) == run(*tight));
+  const EngineStats st = tight->stats();
+  CHECK(st.scheduler.preemptions > 0);
+  // Whether the preempted request had full blocks to save depends on timing
+  // (it may be preempted during its prompt); the spill itself is checked
+  // deterministically below.
+  // Loads happen once per resume, not on every admission retry (a request
+  // holds at most 320 / 16 = 20 blocks).
+  CHECK(st.prefix.disk_loaded_blocks <= st.scheduler.preemptions * 20);
+
+  // Spill itself, deterministically: blocks written at preemption come back
+  // byte-identical from disk after the memory copies are gone and the pool
+  // has been overwritten.
+  auto model = load_model(path);
+  CHECK(model.ok());
+  ThreadPool tp(1);
+  auto dev = create_device(DeviceKind::kCpu, tp);
+  CHECK(dev.ok());
+  auto kv = KvBlockPool::create(kv_geometry_for((*model)->config, DType::kF16, 16, 8 * 16), **dev);
+  CHECK(kv.ok());
+  KvBlockPool& pool = **kv;
+  const std::filesystem::path sd = dir / "spill-unit";
+  std::filesystem::remove_all(sd);
+  auto cache = make_disk_prefix_cache(make_radix_prefix_cache(pool), pool, sd.string(), 0);
+  std::vector<TokenId> toks;
+  for (int i = 0; i < 49; ++i) toks.push_back(static_cast<TokenId>((i * 13 + 5) % 256));
+  std::vector<int32_t> blocks;
+  std::vector<std::vector<std::byte>> want;
+  for (int b = 0; b < 3; ++b) {
+    auto blk = pool.allocate();
+    CHECK(blk.ok());
+    blocks.push_back(*blk);
+    std::vector<std::byte> data(static_cast<size_t>(pool.block_bytes()));
+    for (size_t i = 0; i < data.size(); ++i) data[i] = static_cast<std::byte>((i * 7 + static_cast<size_t>(b) * 31) & 0xff);
+    pool.write_block(*blk, data.data());
+    want.push_back(std::move(data));
+  }
+  cache->insert(toks, blocks, 0, 3);
+  cache->spill(toks, blocks, 3);
+  for (int32_t b : blocks) pool.release(b);
+  CHECK(cache->evict(100) == 3);  // memory copies gone: the pool is all free
+  CHECK(pool.free_blocks() == pool.num_blocks());
+  {
+    std::vector<int32_t> all;
+    std::vector<std::byte> zero(static_cast<size_t>(pool.block_bytes()));
+    for (int i = 0; i < pool.num_blocks(); ++i) {
+      auto b = pool.allocate();
+      CHECK(b.ok());
+      pool.write_block(*b, zero.data());
+      all.push_back(*b);
+    }
+    for (int32_t b : all) pool.release(b);
+  }
+  const PrefixCache::Match m = cache->lookup(toks, 48);
+  CHECK(m.tokens == 48 && m.blocks.size() == 3);
+  std::vector<std::byte> got(static_cast<size_t>(pool.block_bytes()));
+  for (size_t b = 0; b < m.blocks.size(); ++b) {
+    pool.read_block(m.blocks[b], got.data());
+    CHECK(got == want[b]);
+  }
+  CHECK(cache->stats().disk_loaded_blocks == 3);
+  for (int32_t b : m.blocks) pool.release(b);
+}
+
+// A tiny EAGLE-3 head in safetensors (F32 weights, I64 d2t) for the tiny
+// model of `layers` layers: random weights, so its drafts are mostly wrong,
+// which is the point: the output must still equal plain decoding.
+void write_eagle_head(const std::filesystem::path& dir, int64_t H, int64_t vocab, uint32_t seed) {
+  std::filesystem::create_directories(dir);
+  const int64_t heads = 4, kvh = 2, hd = 32, ff = 256, dv = 64;
+  struct T {
+    std::string name, dtype;
+    std::vector<int64_t> shape;
+    std::vector<uint8_t> data;
+  };
+  std::vector<T> ts;
+  uint32_t x = seed;
+  auto rnd = [&]() {
+    x = x * 1664525u + 1013904223u;
+    return (static_cast<float>(x >> 8) / 16777216.0f - 0.5f) * 0.2f;
+  };
+  auto f32 = [&](const std::string& n, std::vector<int64_t> shape, bool ones = false) {
+    int64_t cnt = 1;
+    for (int64_t d : shape) cnt *= d;
+    std::vector<uint8_t> data(static_cast<size_t>(cnt) * 4);
+    for (int64_t i = 0; i < cnt; ++i) {
+      const float v = ones ? 1.0f + rnd() : rnd();
+      std::memcpy(data.data() + i * 4, &v, 4);
+    }
+    ts.push_back({n, "F32", std::move(shape), std::move(data)});
+  };
+  f32("fc.weight", {H, 3 * H});
+  f32("midlayer.self_attn.q_proj.weight", {heads * hd, 2 * H});
+  f32("midlayer.self_attn.k_proj.weight", {kvh * hd, 2 * H});
+  f32("midlayer.self_attn.v_proj.weight", {kvh * hd, 2 * H});
+  f32("midlayer.self_attn.o_proj.weight", {H, heads * hd});
+  f32("midlayer.mlp.gate_proj.weight", {ff, H});
+  f32("midlayer.mlp.up_proj.weight", {ff, H});
+  f32("midlayer.mlp.down_proj.weight", {H, ff});
+  f32("lm_head.weight", {dv, H});
+  f32("midlayer.hidden_norm.weight", {H}, true);
+  f32("midlayer.input_layernorm.weight", {H}, true);
+  f32("midlayer.post_attention_layernorm.weight", {H}, true);
+  f32("norm.weight", {H}, true);
+  std::vector<uint8_t> d2t(static_cast<size_t>(dv) * 8);
+  for (int64_t i = 0; i < dv; ++i) {
+    const int64_t off = (i * 4) % vocab - i;  // draft id i -> target id (4 i) mod vocab
+    std::memcpy(d2t.data() + i * 8, &off, 8);
+  }
+  ts.push_back({"d2t", "I64", {dv}, std::move(d2t)});
+  std::string header = "{";
+  uint64_t at = 0;
+  for (size_t i = 0; i < ts.size(); ++i) {
+    std::string shape;
+    for (int64_t d : ts[i].shape) shape += (shape.empty() ? "" : ",") + std::to_string(d);
+    header += (i ? "," : "") + std::string("\"") + ts[i].name + "\":{\"dtype\":\"" + ts[i].dtype + "\",\"shape\":[" + shape +
+              "],\"data_offsets\":[" + std::to_string(at) + "," + std::to_string(at + ts[i].data.size()) + "]}";
+    at += ts[i].data.size();
+  }
+  header += "}";
+  while (header.size() % 8 != 0) header += ' ';
+  std::vector<uint8_t> file(8);
+  const uint64_t hl = header.size();
+  std::memcpy(file.data(), &hl, 8);
+  file.insert(file.end(), header.begin(), header.end());
+  for (const T& t : ts) file.insert(file.end(), t.data.begin(), t.data.end());
+  CHECK(test::write_file((dir / "model.safetensors").string(), file));
+  const std::string cfg = "{\"hidden_size\": " + std::to_string(H) + ", \"num_attention_heads\": 4, \"num_key_value_heads\": 2, "
+                          "\"head_dim\": 32, \"intermediate_size\": 256, \"num_hidden_layers\": 1, \"rms_norm_eps\": 1e-6, "
+                          "\"rope_theta\": 10000, \"vocab_size\": " + std::to_string(vocab) + ", \"draft_vocab_size\": 64}";
+  CHECK(test::write_file((dir / "config.json").string(), std::vector<uint8_t>(cfg.begin(), cfg.end())));
+}
+
+// EAGLE-3 drafting (--spec-eagle): greedy text equals plain decoding, alone
+// and with 4 concurrent streams and a prefix-cache hit; drafts are scored;
+// a head for another hidden size is refused.
+void test_eagle3(const std::filesystem::path& dir) {
+  test::TinyModelSpec spec;
+  spec.layers = 6;
+  spec.qwen3 = true;
+  const std::string path = (dir / "tiny-eagle-target.gguf").string();
+  CHECK(test::write_file(path, test::tiny_model_gguf(spec)));
+  auto model = load_model(path);
+  CHECK(model.ok());
+  const int64_t vocab = (*model)->config.vocab_size;
+  write_eagle_head(dir / "eagle-head", 128, vocab, 11);
+  auto open = [&](bool eagle) {
+    EngineOptions o;
+    o.model_path = path;
+    o.backend = DeviceKind::kCpu;
+    o.threads = 2;
+    o.kv_tokens = 2048;
+    o.int8_decode_rows = 0;  // outputs independent of how rows are batched (DD-031)
+    if (eagle) {
+      o.eagle_path = (dir / "eagle-head").string();
+      o.scheduler.spec_k = 4;
+    }
+    auto e = Engine::create(o);
+    if (!e.ok()) std::fprintf(stderr, "eagle3 engine: %s\n", e.status().to_string().c_str());
+    CHECK(e.ok());
+    return std::move(*e);
+  };
+  auto ref = open(false), eg = open(true);
+  for (const std::string& p : kPrompts) CHECK(gen(*ref, p, 24).text == gen(*eg, p, 24).text);
+  std::vector<std::shared_ptr<RequestStream>> rs, es;
+  for (const std::string& p : kPrompts) {
+    auto x = ref->generate_text(kShared + p, false, greedy(20));
+    auto y = eg->generate_text(kShared + p, false, greedy(20));
+    CHECK(x.ok() && y.ok());
+    rs.push_back(*x);
+    es.push_back(*y);
+  }
+  for (size_t i = 0; i < rs.size(); ++i) CHECK(drain(rs[i]).text == drain(es[i]).text);
+  CHECK(eg->stats().scheduler.spec_drafted > 0);
+  // A head for another model: refused at load.
+  write_eagle_head(dir / "eagle-head-other", 64, vocab, 12);
+  EngineOptions o;
+  o.model_path = path;
+  o.eagle_path = (dir / "eagle-head-other").string();
+  auto bad = Engine::create(o);
+  CHECK(!bad.ok() && bad.status().message().find("hidden size") != std::string::npos);
+}
+
+// Split models (llama.cpp's gguf-split, NAME-0000k-of-0000N.gguf): the parts
+// load as one model with the same text as the single file, the expert cache
+// reads experts from whichever part holds them, and a missing part or a
+// later part given first is a clear error.
+void test_split_gguf(const std::filesystem::path& dir) {
+  test::TinyModelSpec spec;
+  spec.experts = 8;
+  spec.experts_used = 2;
+  spec.layers = 3;
+  const std::string whole = (dir / "tiny-split-whole.gguf").string();
+  CHECK(test::write_file(whole, test::tiny_model_gguf(spec)));
+  const auto parts = test::tiny_model_writer(spec).split(3);
+  CHECK(parts.size() == 3);
+  std::vector<std::string> paths;
+  for (int i = 0; i < 3; ++i) {
+    char name[64];
+    std::snprintf(name, sizeof(name), "tiny-split-%05d-of-%05d.gguf", i + 1, 3);
+    paths.push_back((dir / name).string());
+    CHECK(test::write_file(paths.back(), parts[static_cast<size_t>(i)]));
+  }
+  {
+    auto a = load_model(whole);
+    auto b = load_model(paths[0]);
+    CHECK(a.ok() && b.ok());
+    CHECK((*a)->weight_bytes == (*b)->weight_bytes);
+    auto open = [&](const std::string& p, int64_t cache) {
+      EngineOptions o;
+      o.model_path = p;
+      o.backend = DeviceKind::kCpu;
+      o.threads = 2;
+      o.kv_tokens = 1024;
+      o.expert_cache_bytes = cache;
+      auto e = Engine::create(o);
+      if (!e.ok()) std::fprintf(stderr, "split gguf: %s\n", e.status().to_string().c_str());
+      CHECK(e.ok());
+      return std::move(*e);
+    };
+    auto one = open(whole, 0), split = open(paths[0], 0), split_disk = open(paths[0], int64_t{1} << 30);
+    for (const std::string& p : kPrompts) {
+      const std::string want = gen(*one, p, 12).text;
+      CHECK(gen(*split, p, 12).text == want);
+      CHECK(gen(*split_disk, p, 12).text == want);
+    }
+  }  // the models and engines unmap the parts here: Windows cannot delete a mapped file
+  auto later = load_model(paths[1]);
+  CHECK(!later.ok() && later.status().message().find("open the first part") != std::string::npos);
+  std::error_code ec;
+  std::filesystem::remove(paths[2], ec);
+  CHECK(!ec);
+  auto missing = load_model(paths[0]);
+  CHECK(!missing.ok() && missing.status().message().find("part 3") != std::string::npos);
+}
+
+// Cost-aware draft length (SchedulerConfig::spec_cost_aware).
+void test_choose_draft_length() {
+  std::vector<double> none(9, 0.0);
+  CHECK(choose_draft_length(0.8, 6, none, 0) == 6);  // nothing measured: k_max
+  std::vector<double> flat = {0, 50, 50, 50};
+  CHECK(choose_draft_length(0.8, 6, flat, 0) == 6);  // extra rows free: draft all
+  std::vector<double> steep = {0, 10, 20, 30};
+  CHECK(choose_draft_length(0.5, 6, steep, 0) == 0);  // each row costs a full step: no drafts
+  std::vector<double> mild = {0, 100, 110};  // +10 ms per row, extrapolated
+  CHECK(choose_draft_length(0.7, 8, mild, 0) == 4);  // 2.773 tokens / 140 ms is the best rate
+  CHECK(choose_draft_length(0.0, 8, mild, 0) == 0);  // nothing accepted: drafts only cost
+  CHECK(choose_draft_length(0.7, 2, mild, 0) == 2);  // capped by k_max
+  CHECK(choose_draft_length(0.7, 0, mild, 0) == 0);
+}
+
 void test_cpu_report() {
   namespace cr = cpu_report;
   auto ids = [](const std::vector<cr::Path>& p) {
@@ -1601,6 +2090,18 @@ int main() {
   int rc = 0;
   test_json_constraint();
   test_cpu_report();
+  test_expert_cache(dir);
+  test_choose_draft_length();
+  test_prompt_cache_disk(dir);
+  test_kv_spill_disk(dir);
+  test_eagle3(dir);
+  test_split_gguf(dir);
+  std::printf("split GGUF models: same text as one file, expert cache across parts, missing / wrong part errors\n");
+  std::printf("EAGLE-3: same text as plain decoding (alone, 4 streams, shared prefix); wrong-size heads refused\n");
+  std::printf("KV spilled to disk: preempted requests resume from saved blocks, same text\n");
+  std::printf("prompt cache on disk: restart loads the KV blocks, same text; per-model directories\n");
+  std::printf("expert cache: bit-identical logits with evictions, same text at 1 and 4 requests, size checks; "
+              "cost-aware draft length\n");
   test_child_process(dir);
   std::printf("child processes: environment, log, exit code, stop\n");
   std::printf("cpu-report: plans for M4 / M3 / i7-class CPUs, models, llama.cpp assets, verdict, JSON and Markdown\n");

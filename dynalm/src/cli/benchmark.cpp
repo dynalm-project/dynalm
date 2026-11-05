@@ -13,6 +13,7 @@
 
 #include "bench/loadgen.h"
 #include "cli/commands.h"
+#include "cli/size_arg.h"
 #include "common/version.h"
 #include "loader/model_loader.h"
 #include "logging/log.h"
@@ -50,6 +51,11 @@ void usage() {
                "  -t, --threads N       compute threads (in-process)\n"
                "  -c, --ctx N           KV capacity in tokens (in-process, default 32768)\n"
                "  --int8-decode N       int8 activations for matmuls of <= N rows (in-process; 0 = off)\n"
+               "  --experts-from-disk   MoE models larger than RAM: experts read from the file into a RAM cache\n"
+               "                        (in-process, CPU; same outputs). --expert-cache SIZE sets it (e.g. 8GB)\n"
+               "  --prompt-cache DIR    keep prompt KV blocks on disk and reuse them across runs (in-process, CPU)\n"
+               "  --spec-eagle DIR      speculative decoding with an EAGLE-3 head for this model (config.json +\n"
+               "                        model.safetensors; in-process, CPU); --spec-k sets the drafts (default 4)\n"
                "  --prefill-budget N    prompt tokens per scheduler step (in-process, default 64; Metal 256)\n"
                "  --decode-budget N     decode rows per scheduler step (in-process, default 64)\n"
                "  --chunk N             max prompt tokens per sequence per step (0 = budget; default 32; Metal 128)\n"
@@ -97,6 +103,9 @@ int cmd_benchmark(std::span<const std::string_view> args) {
   std::vector<int32_t> conc = {1, 4}, prompts = {128, 512}, outputs = {128}, prompt_mix;
   bool diag = true;
   int requests = 0, threads = 0, ctx = 32768, int8_rows = -1;
+  int64_t expert_cache = 0;  // --experts-from-disk / --expert-cache: -1 auto, > 0 bytes
+  std::string prompt_cache;  // --prompt-cache DIR
+  std::string eagle_path;    // --spec-eagle DIR
   int prefill_budget = -1, decode_budget = -1, chunk = -1, batch = -1, solo_chunk = -1;
   bool spec_on = false;  // --spec ngram|DRAFT.gguf
   std::string draft_path;
@@ -138,6 +147,10 @@ int cmd_benchmark(std::span<const std::string_view> args) {
     else if (a == "-t" || a == "--threads") ok = parse_int(value(), threads);
     else if (a == "-c" || a == "--ctx") ok = parse_int(value(), ctx);
     else if (a == "--int8-decode") ok = parse_int(value(), int8_rows) && int8_rows >= 0;
+    else if (a == "--experts-from-disk") expert_cache = expert_cache > 0 ? expert_cache : -1;
+    else if (a == "--expert-cache") ok = cli::parse_byte_size(value(), expert_cache);
+    else if (a == "--prompt-cache") ok = !(prompt_cache = std::string(value())).empty();
+    else if (a == "--spec-eagle") ok = !(eagle_path = std::string(value())).empty();
     else if (a == "--prefill-budget") ok = parse_int(value(), prefill_budget) && prefill_budget > 0;
     else if (a == "--decode-budget") ok = parse_int(value(), decode_budget) && decode_budget > 0;
     else if (a == "--chunk") ok = parse_int(value(), chunk) && chunk >= 0;
@@ -244,6 +257,9 @@ int cmd_benchmark(std::span<const std::string_view> args) {
     o.threads = threads;
     o.kv_tokens = ctx;
     o.int8_decode_rows = int8_rows;
+    o.expert_cache_bytes = expert_cache;
+    o.scheduler.prompt_cache_dir = prompt_cache;
+    o.eagle_path = eagle_path;
     if (Status st = apply_tune_mode(mode, o); !st.ok()) {
       std::fprintf(stderr, "benchmark: %s\n", st.message().c_str());
       return 1;
@@ -255,7 +271,7 @@ int cmd_benchmark(std::span<const std::string_view> args) {
     if (decode_budget > 0) o.scheduler.decode_token_budget = decode_budget;
     if (chunk >= 0) o.scheduler.max_prefill_chunk = chunk;
     if (solo_chunk >= 0) o.scheduler.solo_prefill_chunk = solo_chunk;
-    o.scheduler.spec_k = spec_on ? spec_k : 0;
+    o.scheduler.spec_k = spec_on || !eagle_path.empty() ? spec_k : 0;  // --spec-k applies to --spec-eagle too
     o.draft_model_path = draft_path;
     if (solo_split) o.scheduler.solo_prefill_split = true;
     o.scheduler.prefill_order = prefill_order;
@@ -327,7 +343,9 @@ int cmd_benchmark(std::span<const std::string_view> args) {
         cfg.warmup_requests = warmup_requests;
         cfg.arrival_trace = arrival_trace;
         cfg.arrival_trace_path = trace_file;
+        const auto ex0 = eng != nullptr ? eng->expert_cache_stats() : std::nullopt;
         bench::PointResult r = bench::run_point(*target, *tokenizer, cfg, run_ctx);
+        const auto ex1 = eng != nullptr ? eng->expert_cache_stats() : std::nullopt;
         if (!arrival_trace.empty() && r.arrival_mode != "trace") {
           std::fprintf(stderr, "benchmark: internal error: trace run measured as '%s'\n", r.arrival_mode.c_str());
           return 1;
@@ -365,7 +383,32 @@ int cmd_benchmark(std::span<const std::string_view> args) {
                       d.mean_decode_rows, d.steps ? d.pool_regions / static_cast<double>(d.steps) : 0.0, tail,
                       d.est_decode_bw_gbs, d.peak_bw_gbs, d.cpu_mhz);
         }
-        if (jsonl) jsonl << bench::to_json(r, model, hardware) << "\n";
+        std::string experts_json;
+        if (ex0 && ex1) {
+          // Over this point, warm-up included: the cache's own counters.
+          const int64_t hits = ex1->hits - ex0->hits, misses = ex1->misses - ex0->misses;
+          const double gb = static_cast<double>(ex1->bytes_read - ex0->bytes_read) / 1e9;
+          const int64_t pf = ex1->prefetched - ex0->prefetched, used = ex1->prefetch_used - ex0->prefetch_used;
+          const double wait = ex1->wait_ms - ex0->wait_ms;
+          const double tokens = std::max(1.0, static_cast<double>(r.completed) * r.mean_completion_tokens);
+          const double hit = hits + misses > 0 ? 100.0 * static_cast<double>(hits) / static_cast<double>(hits + misses) : 0;
+          std::printf("     experts: %.1f%% resident when needed (%lld of %lld) | read %.2f GB, %.3f GB per output token | "
+                      "waited %.0f ms | prefetch %lld started, %lld used\n",
+                      hit, static_cast<long long>(hits), static_cast<long long>(hits + misses), gb, gb / tokens, wait,
+                      static_cast<long long>(pf), static_cast<long long>(used));
+          char b[320];
+          std::snprintf(b, sizeof(b),
+                        ", \"experts\": {\"hits\": %lld, \"misses\": %lld, \"gb_read\": %.4f, \"wait_ms\": %.1f, "
+                        "\"prefetched\": %lld, \"prefetch_used\": %lld}",
+                        static_cast<long long>(hits), static_cast<long long>(misses), gb, wait,
+                        static_cast<long long>(pf), static_cast<long long>(used));
+          experts_json = b;
+        }
+        if (jsonl) {
+          std::string j = bench::to_json(r, model, hardware);
+          if (!experts_json.empty() && !j.empty() && j.back() == '}') j.insert(j.size() - 1, experts_json);
+          jsonl << j << "\n";
+        }
       }
     }
   }

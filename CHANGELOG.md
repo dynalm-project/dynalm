@@ -2,6 +2,51 @@
 
 ## [Unreleased]
 
+### Added
+- `--experts-from-disk` (`run`, `serve`, `benchmark`): mixture-of-experts models larger than RAM
+  run on the CPU. The routed experts are read from the model file into a RAM cache
+  (`--expert-cache SIZE`) when the router picks them, bypassing the OS file cache; the next
+  layer's experts are predicted and read ahead. Output is bit-identical to the model held in RAM.
+  `dynalm benchmark` reports how many experts were resident when needed and the GB read per token.
+- `--prompt-cache DIR`: the KV cache of prompts is kept as files and reused for prompts that start
+  the same way, also after a restart. A request preempted for lack of KV memory writes its blocks
+  there and resumes from them instead of recomputing. CPU only.
+- `--spec-eagle DIR`: speculative decoding with an EAGLE-3 head trained for the model (for example
+  `AngelSlim/Qwen3-4B_eagle3`). Output is unchanged. CPU only.
+- With `--experts-from-disk`, speculative drafts are sized by their measured cost (more draft rows
+  read more experts).
+- Split GGUF models (llama.cpp's `gguf-split`, `NAME-00001-of-0000N.gguf`): give the first part;
+  the other parts are found next to it and loaded as one model. Splitting changes no weight.
+
+### Changed
+- DynaCore CPU decode on AVX2 (`--mode exact`) is 22-24% faster per token. Measured on a 4-core
+  AMD Zen 2 VM (2.0 GHz, AVX2 only), one user, 512-token prompt: Qwen2.5-1.5B 51.6 -> 39.2 ms, Qwen3-4B 123.4 -> 93.7 ms, Qwen3-8B 207.0 -> 160.5 ms
+  per token. Prefill and 4-user throughput are unchanged.
+  - The int8 and int16 decode kernels split their accumulators into two independent chains and
+    decode Q4_K scales with word operations.
+  - New multi-row kernels (`dot_q8_rows_n`, `dot_q16_rows_n`, `dot_q8_sx_rows_n`) prepare the
+    activation-only terms once per call instead of once per weight row.
+  - Single-row K-quant matmuls now use sub-scaled int8 activations (DD-077,
+    `int8_subscale_min_rows` 2 -> 1; `DYNACORE_INT8_SUBSCALE=2` restores the per-32 path).
+    Decode accuracy against the fp32 reference, one token per batch: Qwen2.5-1.5B perplexity
+    +0.20%, mean KL 0.0011 (before: +0.26%, 0.0010); Qwen3-4B +0.01%, 0.00047 (before: +0.16%,
+    0.00047).
+- `--spec-eagle` on the CPU: the head's matrices load as Q8_0 (half the bytes of bf16 per draft;
+  acceptance unchanged on Qwen3-4B and Qwen3-8B; `DYNALM_EAGLE_Q8=0` keeps the file type), and
+  the draft length is chosen from measured step costs. On the 4-core Zen 2 VM, Qwen3-4B and
+  Qwen3-8B with AngelSlim EAGLE-3 heads at `--spec-k 3` generate tokens 1.6-1.75x and 1.48x
+  faster than llama.cpp's `llama-server` (time per output token, one user; output unchanged).
+- The int8, int16 and sub-scaled multi-row kernels take up to 8 activation rows in one pass, and
+  the FFN down projection keeps int16 activations up to 8 rows (it fell back to fp32 above 4), so
+  a speculative step verifying k + 1 rows reads the weights once.
+
+### Fixed
+- `--spec-k` was ignored with `--spec-eagle` in `benchmark` and `serve` (always 4 drafts).
+
+### Tests
+- `test_int_kernels` checks the multi-row kernels (1-8 rows) and the sub-scaled row kernels
+  against the double-precision dot.
+
 ### Documentation
 - `docs/perf/x86-zen2-2026-11.md`: first x86-64 measurements (AMD Zen 2, AVX2, uncontrolled):
   DynaLM 0.5.0's `dynalm cpu-report`, and development builds with faster AVX2 decode kernels and

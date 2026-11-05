@@ -52,6 +52,14 @@ class KvBlockPool {
   // KV may live in device memory, DD-045).
   void copy_block(int32_t dst, int32_t src);
 
+  // Raw K/V of one block, every layer (K then V per layer): for saving
+  // blocks to disk (the prompt cache). Only where the KV lives in host
+  // memory (host_kv()); both synchronize the backend first.
+  bool host_kv() const;
+  int64_t block_bytes() const { return geom_.num_layers * (geom_.k_block_bytes() + geom_.v_block_bytes()); }
+  void read_block(int32_t block, std::byte* dst) const;
+  void write_block(int32_t block, const std::byte* src);
+
   KvLayerView layer_view(int32_t layer, std::span<const int32_t> block_table) const {
     return KvLayerView{k_[static_cast<size_t>(layer)]->data(), v_[static_cast<size_t>(layer)]->data(), &geom_,
                        block_table};

@@ -20,6 +20,7 @@
 #include "dynacore/base/status.h"
 #include "execution/batch_planner.h"
 #include "kv_cache/kv_cache.h"
+#include "model/expert_cache.h"
 #include "model_ir/model_config.h"
 #include "model/seq_batch.h"
 #include "model_ir/tensor_registry.h"
@@ -78,6 +79,20 @@ class Transformer {
   // Replaces the planner's base kernel settings (before serving starts).
   void set_kernel_base(const KernelPlan& base);
 
+  // MoE models: read the routed experts from the model file into a RAM cache
+  // (ExpertCache) instead of through the mapping. Needs a device that routes
+  // on the host (DynaCore's CPU device); outputs are unchanged.
+  Status enable_expert_cache(const ExpertCache::Options& options);
+  const ExpertCache* expert_cache() const { return expert_cache_.get(); }
+
+  // EAGLE-3 drafting: the residual stream entering each of `layers` (in
+  // order), for every row of each forward pass, kept on the host as
+  // [rows, layers.size() * hidden] (captured()). Empty = off.
+  void set_capture_layers(std::vector<int32_t> layers) { capture_layers_ = std::move(layers); }
+  std::span<const float> captured() const { return captured_; }
+  // The token embedding table (the EAGLE-3 head embeds with the target's).
+  const TensorView& token_embedding() const { return tok_embd_; }
+
   void set_profiling(bool on) { profiling_ = on; }
   const ForwardProfile& profile() const { return profile_; }
   void reset_profile() { profile_ = ForwardProfile{}; }
@@ -134,6 +149,23 @@ class Transformer {
   std::vector<Device::MatmulJob> up_jobs_, down_jobs_;
   std::vector<int32_t> gather_idx_;  // host-side row indices for gather/scatter ops
   std::vector<float> scatter_w_, router_host_;
+  // Expert cache (enable_expert_cache): the experts of the current layer.
+  std::unique_ptr<ExpertCache> expert_cache_;
+  std::vector<int32_t> active_experts_;
+  std::vector<const ExpertCache::Parts*> cached_parts_;
+  std::vector<const ExpertCache::Parts*> cached_by_expert_;  // [expert] -> its cached views this step
+  // Expert prediction (DYNALM_EXPERT_PREFETCH=0 turns it off): the next
+  // layer's router applied to this layer's FFN input picks experts to read
+  // ahead, while this layer computes.
+  bool expert_prefetch_ = true;
+  std::vector<float> predict_host_;
+  std::vector<uint8_t> predict_mark_;
+  std::vector<int32_t> predict_ids_;
+  // Top-k of one row of router logits (ties: lower id), into route_scratch_.
+  void top_k(const float* logits, int32_t ne, int32_t k);
+  Status moe_error_;  // the first expert-cache failure of this forward pass
+  std::vector<int32_t> capture_layers_;
+  std::vector<float> captured_, capture_row_;
   Tensor logits_dev_;                // device logits rows (non-host-accessible backends)
   // Per-call batch metadata (reused, capacity max_batch).
   std::vector<TokenId> batch_tokens_;

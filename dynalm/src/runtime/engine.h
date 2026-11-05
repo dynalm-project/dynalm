@@ -19,6 +19,7 @@
 #include <deque>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <mutex>
 #include <span>
 #include <string>
@@ -78,6 +79,10 @@ struct EngineOptions {
   // small GGUF sharing the target's vocabulary, run on the same device with
   // its own KV cache (BatchDrafter). Empty = prompt lookup when spec_k > 0.
   std::string draft_model_path;
+  // Speculative decoding with an EAGLE-3 head instead (runtime/eagle3.h): a
+  // directory with config.json and model.safetensors trained for this
+  // model. Drafts up to scheduler.spec_k tokens (4 when 0). CPU only.
+  std::string eagle_path;
   DType kv_dtype = DType::kF16;
   // Max tokens per forward pass; 0 = the device default: max(256, both step
   // budgets + 1, the solo-prefill chunk) (256 on the CPU with default budgets).
@@ -86,6 +91,12 @@ struct EngineOptions {
   // (KernelPlan, 4; kNeonInt8Rows on ARM64), 0 = never. 0 makes outputs independent of how requests
   // are batched (DD-031); the int8 path is faster for 1-4 concurrent rows.
   int32_t int8_decode_rows = -1;
+  // MoE models larger than RAM (--experts-from-disk, docs/perf/moe-ssd-plan.md):
+  // > 0 = the routed experts are read from the model file into a RAM cache of
+  // this many bytes (ExpertCache) instead of being mapped; runs on DynaCore's
+  // CPU kernels. Only the other weights, the cache and the KV cache must fit.
+  int64_t expert_cache_bytes = 0;
+  int expert_io_threads = 8;
   SchedulerConfig scheduler;
   // Apply the device's scheduling profile to the balanced policy (GPU: see
   // kGpuMixedPrefillBudget). False when the caller set step budgets itself.
@@ -305,6 +316,11 @@ class Engine {
   const KvGeometry& kv_geometry() const { return kv_->geometry(); }
   // Snapshot taken on the scheduler thread after its latest step.
   EngineStats stats() const;
+  // The expert cache's counters (--experts-from-disk); nullopt without it.
+  std::optional<ExpertCache::Stats> expert_cache_stats() const {
+    const ExpertCache* c = transformer_->expert_cache();
+    return c != nullptr ? std::optional<ExpertCache::Stats>(c->stats()) : std::nullopt;
+  }
   // Duration of each scheduler step (batched forward pass), ms.
   const metrics::Histogram& step_ms() const { return step_ms_; }
   // Bytes of the KV pool and of the memory-mapped weights.
@@ -345,6 +361,7 @@ class Engine {
   std::unique_ptr<KvBlockPool> draft_kv_;
   std::unique_ptr<Transformer> draft_transformer_;
   std::unique_ptr<BatchDrafter> drafter_;
+  std::unique_ptr<Eagle3Drafter> eagle_;  // EngineOptions::eagle_path
   std::unique_ptr<Scheduler> scheduler_;
   // The vocabulary's bytes for structured output, built on first use.
   std::mutex vocab_bytes_mu_;

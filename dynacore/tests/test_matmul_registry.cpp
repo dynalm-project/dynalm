@@ -613,7 +613,7 @@ void test_diagnostics() {
   auto st = CpuDevice::matmul_stats();
   const MatmulKernelStats& e = st[static_cast<size_t>(Id::kF32ExpandGemm)];
   CHECK(e.calls == 1 && e.rows == 32 && e.macs == static_cast<uint64_t>(32 * n * k) && e.ns == 0);
-  CHECK(st[static_cast<size_t>(Id::kInt8Per32)].calls == 1);
+  CHECK(st[static_cast<size_t>(Id::kInt8Subscaled)].calls == 1);  // one row: sub-scaled by default
   CHECK(CpuDevice::matmul_shape_stats().empty());  // nothing recorded while timing is off
   CpuDevice::set_matmul_timing(true);
   CHECK(CpuDevice::matmul_timing());

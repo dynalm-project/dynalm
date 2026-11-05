@@ -41,6 +41,41 @@ bool parse_scheduler_policy(std::string_view s, SchedulerPolicy& out) {
   return true;
 }
 
+int32_t choose_draft_length(double accept, int32_t k_max, std::span<const double> step_ms, int32_t base_rows) {
+  if (k_max <= 0) return 0;
+  // Known points (rows, ms).
+  std::vector<std::pair<double, double>> known;
+  for (size_t r = 1; r < step_ms.size(); ++r) {
+    if (step_ms[r] > 0) known.emplace_back(static_cast<double>(r), step_ms[r]);
+  }
+  if (known.size() < 2) return k_max;
+  auto cost = [&](int32_t rows) {
+    const auto r = static_cast<size_t>(rows);
+    if (r < step_ms.size() && step_ms[r] > 0) return step_ms[r];
+    // The two known points around `rows` (or the nearest two at an end).
+    size_t hi = 0;
+    while (hi < known.size() && known[hi].first < rows) ++hi;
+    if (hi == 0) hi = 1;
+    if (hi == known.size()) hi = known.size() - 1;
+    const auto& [x0, y0] = known[hi - 1];
+    const auto& [x1, y1] = known[hi];
+    return std::max(1e-3, y0 + (y1 - y0) * (rows - x0) / (x1 - x0));
+  };
+  const double a = std::clamp(accept, 0.0, 1.0);
+  int32_t best = 0;
+  double best_rate = -1, tokens = 0, term = 1;
+  for (int32_t k = 0; k <= k_max; ++k) {
+    tokens += term;  // expected tokens with k drafts: 1 + a + ... + a^k
+    term *= a;
+    const double rate = tokens / cost(base_rows + 1 + k);
+    if (rate > best_rate * (1 + 1e-9)) {
+      best_rate = rate;
+      best = k;
+    }
+  }
+  return best;
+}
+
 int32_t predict_mixed_prefill_budget(double decode_ms, double row_ms, double target, int32_t min_rows,
                                      int32_t max_rows) {
   min_rows = std::max(1, std::min(min_rows, max_rows));
@@ -116,6 +151,14 @@ Scheduler::Scheduler(Transformer& model, KvBlockPool& kv, const Tokenizer& token
     prefix_cache_ = config_.prefix_cache_kind == PrefixCacheKind::kRadix
                          ? make_radix_prefix_cache(kv_, config_.prefix_cache_max_blocks)
                          : make_hash_prefix_cache(kv_, config_.prefix_cache_max_blocks);
+    if (!config_.prompt_cache_dir.empty()) {
+      if (kv_.host_kv()) {
+        prefix_cache_ = make_disk_prefix_cache(std::move(prefix_cache_), kv_, config_.prompt_cache_dir,
+                                               config_.prompt_cache_max_bytes);
+      } else {
+        LOG_WARN("--prompt-cache: the KV cache is in GPU memory; the prompt cache on disk needs the CPU (ignored)");
+      }
+    }
   }
 }
 
@@ -168,6 +211,7 @@ void Scheduler::emit_final(Entry& e) {
 
 void Scheduler::retire(Entry& e) {
   if (draft_ != nullptr) draft_->release(e.id);
+  if (eagle_ != nullptr) eagle_->release(e.id);
   switch (e.seq->status()) {
     case SequenceStatus::kFinished: ++stats_.completed; break;
     case SequenceStatus::kCancelled: ++stats_.cancelled; break;
@@ -317,6 +361,13 @@ bool Scheduler::preempt_one(const Entry* keep) {
     if (!victim || e.admit_order > victim->admit_order) victim = &e;
   }
   if (!victim) return false;
+  // Its computed full blocks: kept outside the KV pool where the prefix
+  // cache can (the prompt cache on disk writes them now), so resuming loads
+  // them instead of recomputing.
+  if (prefix_cache_) {
+    const int32_t full = std::min(victim->seq->num_computed() / kv_.geometry().block_size, victim->cached_blocks);
+    if (full > 0) prefix_cache_->spill(victim->seq->tokens(), victim->seq->block_table(), full);
+  }
   victim->seq->reset_for_recompute();
   victim->cached_blocks = 0;
   ++stats_.preemptions;
@@ -370,6 +421,7 @@ bool Scheduler::step() {
   bool solo = false, solo_skipped = false, srpt = false;
   int32_t traced_budget = 0, traced_chunk = 0, traced_prefilling = 0;
   if (draft_ != nullptr && config_.spec_k > 0) draft_with_model(step_no);
+  if (eagle_ != nullptr && config_.spec_k > 0) draft_with_eagle(step_no);
   for (int attempt = 0;; ++attempt) {
     batch_.clear();
     batch_owner_.clear();
@@ -447,7 +499,7 @@ bool Scheduler::step() {
       if (!decode && prefill_chunk > 0) n = std::min(n, prefill_chunk);
       if (n <= 0) continue;
       e->spec_drafts = 0;
-      if (decode && config_.spec_k > 0) n += plan_drafts(*e, budget - used - 1, step_no);
+      if (decode && config_.spec_k > 0) n += plan_drafts(*e, budget - used - 1, step_no, used);
       const int64_t t_kv = now_ns();
       const Status st = e->seq->reserve_kv(n);
       stats_.kv_reserve_ms += static_cast<double>(now_ns() - t_kv) * 1e-6;
@@ -547,6 +599,12 @@ bool Scheduler::step() {
     ++stats_.steps_decode_only;
     stats_.forward_decode_only_ms += fwd_ms;
     decode_step_ema_ms_ = decode_step_ema_ms_ == 0 ? fwd_ms : 0.8 * decode_step_ema_ms_ + 0.2 * fwd_ms;
+    if (config_.spec_cost_aware) {
+      const auto r = static_cast<size_t>(stats_.last_decode_rows);
+      if (decode_ms_by_rows_.size() <= r) decode_ms_by_rows_.resize(r + 1, 0.0);
+      double& m = decode_ms_by_rows_[r];
+      m = m == 0 ? fwd_ms : 0.8 * m + 0.2 * fwd_ms;
+    }
     if (config_.decode_protect_predictive && prefill_row_ema_ms_ > 0) {
       mixed_prefill_budget_ =
           predict_mixed_prefill_budget(decode_step_ema_ms_, prefill_row_ema_ms_, config_.decode_latency_target,
@@ -595,8 +653,13 @@ bool Scheduler::step() {
 
   int64_t insert_ns = 0, emit_ns = 0;
   size_t li = 0;
+  int64_t row0 = 0;  // first batch row of sequence b (EAGLE-3 features)
+  eagle_ext_.clear();
   for (size_t b = 0; b < batch_.size(); ++b) {
     Entry& e = *batch_owner_[b];
+    const int64_t rows_b = static_cast<int64_t>(batch_[b].tokens.size());
+    const int64_t first_row = row0;
+    row0 += rows_b;
     if (!st.ok()) {
       e.seq->fail(st);  // a model error fails this batch's sequences only
       continue;
@@ -617,10 +680,16 @@ bool Scheduler::step() {
         e.cached_blocks = full;
       }
     }
-    if (!batch_[b].want_logits) continue;
+    if (!batch_[b].want_logits) {
+      if (eagle_ != nullptr && st.ok()) eagle_rows(e, b, first_row, rows_b);
+      continue;
+    }
     const size_t li0 = li;
     li += static_cast<size_t>(batch_[b].logits_last);
-    if (e.seq->pending() != 0 || e.seq->status() != SequenceStatus::kDecode) continue;
+    if (e.seq->pending() != 0 || e.seq->status() != SequenceStatus::kDecode) {
+      if (eagle_ != nullptr && st.ok()) eagle_rows(e, b, first_row, rows_b);
+      continue;
+    }
     auto emit = [&](TokenId next) {
       e.seq->append_token(next, tokenizer_);
       if (config_.trace && e.trace.first_token_ns == 0) e.trace.first_token_ns = now_ns();
@@ -684,6 +753,15 @@ bool Scheduler::step() {
       if (e.seq->status() == SequenceStatus::kDecode) e.seq->rollback_kv();  // drop rejected drafts' blocks
       e.spec_drafts = 0;
     }
+    if (eagle_ != nullptr && st.ok()) eagle_rows(e, b, first_row, drafts > 0 ? accepted + 1 : rows_b);
+  }
+  if (eagle_ != nullptr && !eagle_ext_.empty()) {
+    // The rows the target kept, with the token after each: the head's KV
+    // catches up and its first draft is ready for the next step.
+    if (Status es = eagle_->extend(eagle_ext_); !es.ok()) {
+      LOG_WARN("EAGLE-3 drafting stopped: {}", es.message());
+      eagle_ = nullptr;
+    }
   }
   // Post-forward time = sampling + stop checks + cache inserts + callbacks.
   const int64_t post_ns = now_ns() - t_post;
@@ -699,16 +777,20 @@ bool Scheduler::step() {
   return true;
 }
 
-int32_t Scheduler::plan_drafts(Entry& e, int32_t room, uint64_t step_no) {
+int32_t Scheduler::plan_drafts(Entry& e, int32_t room, uint64_t step_no, int32_t base_rows) {
   const SequenceState& q = *e.seq;
   // Up to the tokens this request may still generate after the next one.
   const int32_t left = q.stop().max_new_tokens - q.generated() - 1;
-  const int32_t k = std::min({config_.spec_k, room, left});
+  int32_t k = std::min({config_.spec_k, room, left});
   if (k <= 0 || step_no < e.spec_resume_step || e.constraint) return 0;
   if (e.spec_accept_ema < 0.25) e.spec_accept_ema = 0.5;  // probing again after a pause
+  if (config_.spec_cost_aware) {
+    k = choose_draft_length(e.spec_accept_ema, k, decode_ms_by_rows_, base_rows);
+    if (k <= 0) return 0;
+  }
   e.spec_feed.assign(1, q.tokens().back());
   std::vector<TokenId> drafts;
-  if (draft_ != nullptr) {
+  if (draft_ != nullptr || eagle_ != nullptr) {
     drafts.assign(e.spec_model_drafts.begin(),
                   e.spec_model_drafts.begin() + std::min<ptrdiff_t>(k, static_cast<ptrdiff_t>(e.spec_model_drafts.size())));
   } else {
@@ -718,6 +800,43 @@ int32_t Scheduler::plan_drafts(Entry& e, int32_t room, uint64_t step_no) {
   e.spec_feed.insert(e.spec_feed.end(), drafts.begin(), drafts.end());
   e.spec_drafts = static_cast<int32_t>(drafts.size());
   return e.spec_drafts;
+}
+
+void Scheduler::eagle_rows(Entry& e, size_t b, int64_t first_row, int64_t kept) {
+  if (is_terminal(e.seq->status())) return;
+  const std::span<const float> cap = model_.captured();
+  const auto toks = e.seq->tokens();
+  const int32_t start = batch_[b].start_pos;
+  // Row r pairs with the token at position start + r + 1 (known for every
+  // kept row once this step's tokens are appended).
+  kept = std::min<int64_t>(kept, static_cast<int64_t>(toks.size()) - start - 1);
+  if (kept <= 0 || cap.empty()) return;
+  const int64_t w = static_cast<int64_t>(cap.size()) / std::max<int64_t>(1, stats_.last_batch_rows);
+  Eagle3Drafter::Extend x;
+  x.id = e.id;
+  x.start_pos = start;
+  x.features = cap.subspan(static_cast<size_t>(first_row * w), static_cast<size_t>(kept * w));
+  x.next_tokens = toks.subspan(static_cast<size_t>(start) + 1, static_cast<size_t>(kept));
+  eagle_ext_.push_back(x);
+}
+
+void Scheduler::draft_with_eagle(uint64_t step_no) {
+  std::vector<Eagle3Drafter::Request> reqs;
+  for (Entry& e : running_) {
+    e.spec_model_drafts.clear();
+    if (is_terminal(e.seq->status()) || e.seq->status() != SequenceStatus::kDecode || e.seq->pending() != 1) continue;
+    if (step_no < e.spec_resume_step || e.constraint) continue;
+    const int32_t left = e.seq->stop().max_new_tokens - e.seq->generated() - 1;
+    const int32_t k = std::min(config_.spec_k, left);
+    if (k <= 0) continue;
+    reqs.push_back({e.id, k, &e.spec_model_drafts});
+  }
+  if (reqs.empty()) return;
+  if (Status st = eagle_->draft(reqs); !st.ok()) {
+    LOG_WARN("EAGLE-3 drafting stopped: {}", st.message());
+    eagle_ = nullptr;
+    for (Entry& e : running_) e.spec_model_drafts.clear();
+  }
 }
 
 void Scheduler::draft_with_model(uint64_t step_no) {

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <numeric>
 #include <string>
@@ -63,6 +64,25 @@ Result<std::unique_ptr<Transformer>> Transformer::create(const ModelConfig& conf
   if (t->lm_head_.data() != nullptr) backend.prepack_weight(t->lm_head_);
   t->planner_ = std::make_unique<BatchPlanner>(config, HardwareProfile::detect(backend.parallelism(), backend.name()));
   return t;
+}
+
+Status Transformer::enable_expert_cache(const ExpertCache::Options& options) {
+  if (backend_.supports_moe_ffn()) {
+    return Unsupported("the expert cache needs DynaCore's CPU kernels (--backend cpu --mode exact), not " +
+                       std::string(backend_.name()));
+  }
+  std::vector<std::vector<ExpertCache::Parts>> experts;
+  for (const Layer& L : layers_) experts.push_back(L.experts);
+  ENGINE_ASSIGN_OR_RETURN(expert_cache_, ExpertCache::create(experts, options));
+  const char* pf = std::getenv("DYNALM_EXPERT_PREFETCH");
+  expert_prefetch_ = !(pf != nullptr && pf[0] == '0');
+  return Status::Ok();
+}
+
+void Transformer::top_k(const float* lg, int32_t ne, int32_t k) {
+  for (int32_t e = 0; e < ne; ++e) route_scratch_[static_cast<size_t>(e)] = {lg[e], e};
+  std::partial_sort(route_scratch_.begin(), route_scratch_.begin() + k, route_scratch_.end(),
+                    [](const auto& a, const auto& b) { return a.first != b.first ? a.first > b.first : a.second < b.second; });
 }
 
 void Transformer::set_kernel_base(const KernelPlan& base) {
@@ -315,6 +335,53 @@ void Transformer::moe_mlp(const Layer& L, const TensorView& xn, const TensorView
   }
   mark(ForwardOp::kMoeRoute);
 
+  // Expert cache: make this step's experts resident (read from the file on a
+  // miss); their views replace the mapped ones below, same bytes and layout.
+  if (expert_cache_ != nullptr) {
+    active_experts_.clear();
+    for (int32_t e = 0; e < ne; ++e) {
+      if (!expert_rows_[static_cast<size_t>(e)].empty()) active_experts_.push_back(e);
+    }
+    const auto li = static_cast<int32_t>(&L - layers_.data());
+    if (Status st = expert_cache_->acquire(li, active_experts_, cached_parts_); !st.ok()) {
+      if (moe_error_.ok()) moe_error_ = st;
+      backend_.fill(out, 0.0f);
+      return;
+    }
+    cached_by_expert_.assign(static_cast<size_t>(ne), nullptr);
+    for (size_t i = 0; i < active_experts_.size(); ++i) {
+      cached_by_expert_[static_cast<size_t>(active_experts_[i])] = cached_parts_[i];
+    }
+    // Predict the next MoE layer's experts from this layer's FFN input and
+    // start reading them; they arrive while this layer and the next layer's
+    // attention compute. A wrong guess costs a read, never a result.
+    const auto next = static_cast<size_t>(li) + 1;
+    if (expert_prefetch_ && next < layers_.size() && !layers_[next].experts.empty() &&
+        layers_[next].experts.size() == static_cast<size_t>(ne)) {
+      const TensorView nl = rows_of(router_, m);  // this layer's logits are on the host already
+      backend_.matmul(xn, layers_[next].router, nullptr, nl);
+      predict_host_.resize(static_cast<size_t>(m * ne));
+      if (backend_.host_accessible()) {
+        for (int64_t r = 0; r < m; ++r) std::copy_n(row(nl, r), ne, predict_host_.data() + r * ne);
+      } else {
+        backend_.download(nl, predict_host_);
+      }
+      predict_mark_.assign(static_cast<size_t>(ne), 0);
+      predict_ids_.clear();
+      for (int64_t r = 0; r < m; ++r) {
+        top_k(predict_host_.data() + r * ne, ne, k);
+        for (int32_t j = 0; j < k; ++j) {
+          const int32_t e = route_scratch_[static_cast<size_t>(j)].second;
+          if (predict_mark_[static_cast<size_t>(e)] == 0) {
+            predict_mark_[static_cast<size_t>(e)] = 1;
+            predict_ids_.push_back(e);
+          }
+        }
+      }
+      expert_cache_->prefetch(static_cast<int32_t>(next), predict_ids_);
+    }
+  }
+
   // 2. Pack the routed rows by expert into one buffer ([sum of counts, d]),
   //    run every active expert's gate+up as one batch of matmuls, one
   //    activation over all packed rows, every down projection as one batch,
@@ -342,7 +409,7 @@ void Transformer::moe_mlp(const Layer& L, const TensorView& xn, const TensorView
       gather_idx_.push_back(r);
       scatter_w_.push_back(wgt);
     }
-    const auto& W = L.experts[static_cast<size_t>(e)];
+    const auto& W = expert_cache_ != nullptr ? *cached_by_expert_[static_cast<size_t>(e)] : L.experts[static_cast<size_t>(e)];
     const TensorView xe = slice(xp, off, cnt), ae = slice(ap, off, cnt), be = slice(bp, off, cnt);
     up_jobs_.push_back({xe, W[0], cols_of(ae, 0, fe)});
     up_jobs_.push_back({xe, W[1], cols_of(ae, fe, fe)});
@@ -473,8 +540,12 @@ Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& c
   // The down projection may run without int8 activations (outlier channels).
   KernelPlan down_kernels = kernels_;
   if (!kernels_.int8_ffn_down) {
-    // int16 activations instead, while int8 decode is on (DD-076).
-    if (kernels_.int16_ffn_down) down_kernels.int16_decode_max_rows = kernels_.int8_decode_max_rows;
+    // int16 activations instead, while int8 decode is on (DD-076), for as
+    // many rows as the int8 decode kernels take (a speculative step verifies
+    // k + 1 rows; the int16 kernels compute each row independently).
+    if (kernels_.int16_ffn_down && kernels_.int8_decode_max_rows > 0) {
+      down_kernels.int16_decode_max_rows = std::max(kernels_.int8_decode_max_rows, kernels_.int8_superblock_max_rows);
+    }
     down_kernels.int8_decode_max_rows = 0;
   }
   const bool switch_for_down = !(down_kernels == kernels_);
@@ -506,8 +577,26 @@ Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& c
   if (c.embedding_scale != 1.0f) backend_.scale(x, c.embedding_scale);
   mark(ForwardOp::kEmbed);
 
+  const auto n_cap = static_cast<int64_t>(capture_layers_.size());
+  if (n_cap > 0) captured_.assign(static_cast<size_t>(m * n_cap * c.hidden_size), 0.0f);
   for (int l = 0; l < c.num_layers; ++l) {
     const Layer& L = layers_[static_cast<size_t>(l)];
+
+    // EAGLE-3 features: the residual stream entering this layer.
+    for (int64_t j = 0; j < n_cap; ++j) {
+      if (capture_layers_[static_cast<size_t>(j)] != l) continue;
+      const int64_t H = c.hidden_size, w = n_cap * H;
+      if (backend_.host_accessible()) {
+        for (int64_t r = 0; r < m; ++r) {
+          const auto* src = reinterpret_cast<const float*>(static_cast<const std::byte*>(x.data()) + r * x.stride(0));
+          std::copy_n(src, H, captured_.data() + r * w + j * H);
+        }
+      } else {
+        capture_row_.resize(static_cast<size_t>(m * H));
+        backend_.download(x, capture_row_);
+        for (int64_t r = 0; r < m; ++r) std::copy_n(capture_row_.data() + r * H, H, captured_.data() + r * w + j * H);
+      }
+    }
 
     // --- attention ---
     norm(x, L.attn_norm, L.attn_norm_b, xn);
@@ -634,6 +723,12 @@ Status Transformer::forward_batch(std::span<const SeqBatch> seqs, KvBlockPool& c
   }
   // Devices that execute deferred (compiled steps, GPU) report a failed step
   // here: its logits must not be used.
+  if (!moe_error_.ok()) {
+    Status st = moe_error_;
+    moe_error_ = Status::Ok();
+    (void)backend_.take_error();
+    return st;
+  }
   return backend_.take_error();
 }
 

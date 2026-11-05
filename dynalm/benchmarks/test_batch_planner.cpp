@@ -88,7 +88,7 @@ int main() {
     // What runs: above 8 rows the default falls back to fp32; wide keeps the int8 interleaved kernel.
     const MatmulKernelId ka = ffn_kernel(a.kernels, rows), kb = ffn_kernel(b.kernels, rows);
     if (rows == 1) {
-      CHECK(ka == MatmulKernelId::kInt8Per32 && kb == MatmulKernelId::kInt8Per32);
+      CHECK(ka == MatmulKernelId::kInt8Subscaled && kb == MatmulKernelId::kInt8Subscaled);  // one row: sub-scaled
     } else if (rows <= 8) {
       CHECK(ka == MatmulKernelId::kInt8SubscaledX8 && kb == ka);  // wide changes nothing at <= 8 rows
     } else if (rows <= 16) {

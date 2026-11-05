@@ -42,7 +42,16 @@ using QuantizeActFn = void (*)(const float* x, ActBlockQ8* out, int64_t n);
 inline constexpr int kDotRowsMax = 4;
 // Row limit of the experimental 8-row packed Q4_K kernel (dot_q8_sx_x8_q4_K_rows8).
 inline constexpr int kPackedRowsMax = 8;
+// Activation rows per call of the multi-row kernels (DotQ8RowsNFn, DotQ16RowsNFn): a
+// speculative-decoding step verifies up to k + 1 rows in one pass over the weights.
+inline constexpr int kDotRowsNMax = 8;
 using DotQ8RowsFn = void (*)(const void* w, const ActBlockQ8* const* x, int m, int64_t n, float* out);
+// The same for weight rows [n0, n1) (row stride w_row_bytes) in one call:
+// y[r][i - n0] = dot(weight row i, x[r]) + (bias ? bias[i] : 0) for r < m
+// (1 <= m <= kDotRowsNMax), with k values per row. Terms that depend only on
+// the activations are prepared once per call instead of once per weight row.
+using DotQ8RowsNFn = void (*)(const void* w, int64_t w_row_bytes, int64_t n0, int64_t n1, const ActBlockQ8* const* x,
+                              int m, int64_t k, float* const* y, const float* bias);
 
 // --- Sub-scaled int8 activations (DD-077) ---
 // 256 values: x[i] ~= u * m[i / 32] * q[i], with u = amax / (127 * 128) and
@@ -84,6 +93,9 @@ struct ActBlockQ16S {
 static_assert(sizeof(ActBlockQ16S) == 72);
 using QuantizeAct16Fn = void (*)(const float* x, ActBlockQ16* out, int64_t n);
 using DotQ16RowsFn = void (*)(const void* w, const ActBlockQ16* const* x, int m, int64_t n, float* out);
+// Multi-row form, as DotQ8RowsNFn (weight rows [n0, n1), y[r][i - n0]).
+using DotQ16RowsNFn = void (*)(const void* w, int64_t w_row_bytes, int64_t n0, int64_t n1, const ActBlockQ16* const* x,
+                               int m, int64_t k, float* const* y, const float* bias);
 
 struct CpuKernels {
   CpuIsa isa = CpuIsa::kGeneric;
@@ -137,6 +149,8 @@ struct CpuKernels {
   // (the backend then uses vec_dot / dequant).
   QuantizeActFn quantize_act = nullptr;
   std::array<DotQ8RowsFn, static_cast<size_t>(DType::kCount)> dot_q8_rows{};
+  // Optional multi-row form of dot_q8_rows (same activations); null where absent.
+  std::array<DotQ8RowsNFn, static_cast<size_t>(DType::kCount)> dot_q8_rows_n{};
   // Super-block variant for K-quants (DD-075): quantize_act_sb gives the 8
   // blocks of every 256 values one shared scale (n must be a multiple of 256),
   // so dot_q8_sb_rows can sum the integer sub-block scales into one int32
@@ -152,6 +166,8 @@ struct CpuKernels {
   // ActBlockQ8 pointers it receives are reinterpreted as ActSuperQ8.
   QuantizeActFn quantize_act_sx = nullptr;
   std::array<DotQ8RowsFn, static_cast<size_t>(DType::kCount)> dot_q8_sx_rows{};
+  // Optional multi-row form of dot_q8_sx_rows (DotQ8RowsNFn; same activations); null where absent.
+  std::array<DotQ8RowsNFn, static_cast<size_t>(DType::kCount)> dot_q8_sx_rows_n{};
   // Interleaved Q4_K (DD-078): out[r * 8 + i] = dot(packed row i, x[r]) for
   // the 8 rows of a BlockQ4_Kx8 group (w: k / 256 consecutive groups) and
   // r < m (1 <= m <= 4), with sub-scaled activations from quantize_act_sx.
@@ -185,13 +201,18 @@ struct CpuKernels {
   // int16 activations (DD-076); null where no tier has a kernel.
   QuantizeAct16Fn quantize_act16 = nullptr;
   std::array<DotQ16RowsFn, static_cast<size_t>(DType::kCount)> dot_q16_rows{};
+  // Optional multi-row form of dot_q16_rows; null where absent.
+  std::array<DotQ16RowsNFn, static_cast<size_t>(DType::kCount)> dot_q16_rows_n{};
 
   VecDotFn vec_dot_for(DType t) const { return vec_dot[static_cast<size_t>(t)]; }
   DequantFn dequant_for(DType t) const { return dequant[static_cast<size_t>(t)]; }
   DotQ8RowsFn dot_q8_rows_for(DType t) const { return dot_q8_rows[static_cast<size_t>(t)]; }
+  DotQ8RowsNFn dot_q8_rows_n_for(DType t) const { return dot_q8_rows_n[static_cast<size_t>(t)]; }
   DotQ8RowsFn dot_q8_sb_rows_for(DType t) const { return dot_q8_sb_rows[static_cast<size_t>(t)]; }
   DotQ16RowsFn dot_q16_rows_for(DType t) const { return dot_q16_rows[static_cast<size_t>(t)]; }
+  DotQ16RowsNFn dot_q16_rows_n_for(DType t) const { return dot_q16_rows_n[static_cast<size_t>(t)]; }
   DotQ8RowsFn dot_q8_sx_rows_for(DType t) const { return dot_q8_sx_rows[static_cast<size_t>(t)]; }
+  DotQ8RowsNFn dot_q8_sx_rows_n_for(DType t) const { return dot_q8_sx_rows_n[static_cast<size_t>(t)]; }
 };
 
 // Fills every entry with the portable implementation.
