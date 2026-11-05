@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-04
+
+Faster CPU generation on x86-64: new AVX2 kernels, and speculative decoding with EAGLE-3 draft
+heads (1.34-1.41x llama.cpp's speed per token on an AMD EPYC). Mixture-of-experts models larger
+than RAM run from disk.
+
 ### Added
 - `--experts-from-disk` (`run`, `serve`, `benchmark`): mixture-of-experts models larger than RAM
   run on the CPU. The routed experts are read from the model file into a RAM cache
@@ -19,9 +25,10 @@
   the other parts are found next to it and loaded as one model. Splitting changes no weight.
 
 ### Changed
-- DynaCore CPU decode on AVX2 (`--mode exact`) is 22-24% faster per token. Measured on a 4-core
-  AMD Zen 2 VM (2.0 GHz, AVX2 only), one user, 512-token prompt: Qwen2.5-1.5B 51.6 -> 39.2 ms, Qwen3-4B 123.4 -> 93.7 ms, Qwen3-8B 207.0 -> 160.5 ms
-  per token. Prefill and 4-user throughput are unchanged.
+- DynaCore CPU decode on AVX2 (`--mode exact`) takes 22-24% less time per token (1.29-1.32x
+  faster). Measured on a 4-core AMD EPYC (Zen 2, 2.0 GHz, AVX2), one user, 512-token prompt:
+  Qwen2.5-1.5B 51.6 -> 39.2 ms, Qwen3-4B 123.4 -> 93.7 ms, Qwen3-8B 207.0 -> 160.5 ms per token,
+  1.07-1.17x faster than llama.cpp's `llama-server` in the same session.
   - The int8 and int16 decode kernels split their accumulators into two independent chains and
     decode Q4_K scales with word operations.
   - New multi-row kernels (`dot_q8_rows_n`, `dot_q16_rows_n`, `dot_q8_sx_rows_n`) prepare the
@@ -33,9 +40,10 @@
     0.00047).
 - `--spec-eagle` on the CPU: the head's matrices load as Q8_0 (half the bytes of bf16 per draft;
   acceptance unchanged on Qwen3-4B and Qwen3-8B; `DYNALM_EAGLE_Q8=0` keeps the file type), and
-  the draft length is chosen from measured step costs. On the 4-core Zen 2 VM, Qwen3-4B and
-  Qwen3-8B with AngelSlim EAGLE-3 heads at `--spec-k 3` generate tokens 1.6-1.75x and 1.48x
-  faster than llama.cpp's `llama-server` (time per output token, one user; output unchanged).
+  the draft length is chosen from measured step costs. On the 4-core AMD EPYC, Qwen3-4B and
+  Qwen3-8B with AngelSlim EAGLE-3 heads at `--spec-k 3` generate tokens 1.41x and 1.34x faster
+  than llama.cpp's `llama-server` (time per output token, one user, same session; output
+  unchanged).
 - The int8, int16 and sub-scaled multi-row kernels take up to 8 activation rows in one pass, and
   the FFN down projection keeps int16 activations up to 8 rows (it fell back to fp32 above 4), so
   a speculative step verifying k + 1 rows reads the weights once.
@@ -48,9 +56,10 @@
   against the double-precision dot.
 
 ### Documentation
-- `docs/perf/x86-zen2-2026-11.md`: first x86-64 measurements (AMD Zen 2, AVX2, uncontrolled):
-  DynaLM 0.5.0's `dynalm cpu-report`, and development builds with faster AVX2 decode kernels and
-  EAGLE-3 speculative decoding on the CPU. Raw data in `docs/perf/data/x86-zen2-2026-11-03/`.
+- `docs/perf/x86-zen2-2026-11.md`: x86-64 results on an AMD EPYC (Zen 2, AVX2), with raw data
+  in `docs/perf/data/x86-zen2-2026-11-03/`.
+- `docs/benchmarks.md` lists the current results (Apple M4 Pro CPU and Metal, AMD EPYC CPU); the
+  README's Speed section summarizes them.
 
 ## [0.5.0] - 2026-10-30
 
